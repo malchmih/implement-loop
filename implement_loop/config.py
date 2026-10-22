@@ -1,4 +1,4 @@
-"""Command-line configuration for the Copilot-only first runner slice."""
+"""Command-line configuration for the ticket runner."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ class Options:
 
     spec_number: int
     max_iterations: int
+    harness: str
 
 
 def _positive_integer(value: str) -> int:
@@ -29,24 +30,29 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
 
     parser = argparse.ArgumentParser(
         prog="implement-loop",
-        description=(
-            "Implement eligible, prepared direct child issues of a GitHub spec through Copilot."
-        ),
+        description=("Implement eligible, prepared direct child issues of a GitHub spec."),
         epilog=(
-            "Each Copilot invocation is one attempt. The loop stops successfully "
+            "Each selected-harness invocation is one attempt. The loop stops successfully "
             "when no eligible child remains."
         ),
     )
     parser.add_argument("spec_number", metavar="SPEC_NUMBER", type=_positive_integer)
     parser.add_argument(
+        "--harness",
+        choices=("opencode", "copilot"),
+        default="opencode",
+        help="agent CLI to run (default: opencode)",
+    )
+    parser.add_argument(
         "--max-iterations",
         metavar="N",
         type=_positive_integer,
         default=5,
-        help="maximum Copilot invocations (default: 5)",
+        help="maximum selected-harness invocations (default: 5)",
     )
     parsed = parser.parse_args(argv)
     return Options(
         spec_number=parsed.spec_number,
         max_iterations=parsed.max_iterations,
+        harness=parsed.harness,
     )

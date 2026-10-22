@@ -24,7 +24,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         print(
             "Interrupted. Checkout changes and issue assignments were preserved. "
-            "Verify Copilot, delegated agents, and background work have stopped "
+            "Verify the selected harness, delegated agents, and background work have stopped "
             "before rerunning; releasing the local lock does not confirm shutdown.",
             file=sys.stderr,
         )
@@ -33,7 +33,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Error: {error}", file=sys.stderr)
         print(
             "Loop stopped; checkout changes, commits, and assignments were preserved. "
-            "If Copilot, delegated agents, or background work may still be running, "
+            "If the selected harness, delegated agents, or background work may still be running, "
             "verify they have stopped before rerunning.",
             file=sys.stderr,
         )
@@ -42,7 +42,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Error: local file or process operation failed: {error}", file=sys.stderr)
         print(
             "Loop stopped; checkout changes, commits, and assignments were preserved. "
-            "If Copilot, delegated agents, or background work may still be running, "
+            "If the selected harness, delegated agents, or background work may still be running, "
             "verify they have stopped before rerunning.",
             file=sys.stderr,
         )

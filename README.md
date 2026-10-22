@@ -1,18 +1,20 @@
 # Implement Loop
 
 Implement prepared direct child GitHub issues sequentially from the target
-checkout. This first Python slice uses Copilot CLI with the external `/implement`
-skill; Python 3.11+ is required, and the runner has no third-party runtime
+checkout. OpenCode V2 is the default harness; GitHub Copilot CLI remains
+selectable. Python 3.11+ is required, and the runner has no third-party runtime
 dependencies.
 
 ```bash
 cd /path/to/target-repository
 /path/to/implement-loop/implement-loop 123
+/path/to/implement-loop/implement-loop 123 --harness copilot
 ```
 
-The default limit is five Copilot invocations. Override it with
-`--max-iterations N`. See [usage and recovery](docs/usage.md) for prerequisites,
-queue rules, completion checks, records, and failure handling. See
+The default limit is five harness invocations. Override it with
+`--max-iterations N`. Only the selected harness CLI is required. See
+[usage and recovery](docs/usage.md) for prerequisites, supported harness
+capabilities, queue rules, completion checks, records, and failure handling. See
 [development checks](docs/development.md) for contributor setup.
 
 The wrapper claims and closes issues; it does not push commits or open PRs.
