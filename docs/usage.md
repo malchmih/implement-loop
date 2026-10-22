@@ -29,6 +29,7 @@ already on `PATH`:
 /path/to/implement-loop/implement-loop 123 --harness copilot
 /path/to/implement-loop/implement-loop 123 --max-iterations 10
 /path/to/implement-loop/implement-loop 123 --config-file ./experiment.toml
+/path/to/implement-loop/implement-loop 123 --allow-no-new-commit 456
 /path/to/implement-loop/implement-loop 123 --copilot-model gpt-6-luna \
   --copilot-reasoning-effort high
 ```
@@ -36,6 +37,10 @@ already on `PATH`:
 OpenCode is the default. `--harness` accepts only `opencode` or `copilot`; an
 unknown value fails before the run starts. The default limit is five invocations
 of the selected harness, and `--max-iterations` must be a positive integer.
+`--allow-no-new-commit TICKET_NUMBER` is a per-invocation exception for one
+ticket; it is not a user preference and cannot be set in TOML. It does not affect
+ticket selection or waive eligibility, ownership, or any completion check other
+than the requirement to create a new descendant commit for that named ticket.
 `./implement-loop --help` is side-effect free. The command uses the current
 checkout and its configured GitHub host. A conflicting `GH_REPO` override is
 rejected. A matching override is allowed.
@@ -202,10 +207,28 @@ of semantic correctness or test results.
 
 Before closing, the wrapper requires successful selected-harness exit and
 persisted records, valid result evidence, the original branch, a clean checkout,
-and a new descendant commit. It also confirms the parent is still open and that
-the ticket remains open, unblocked, exclusively assigned, and a direct child.
-The closure comment names the local branch and commit and accurately reports the
-agent attestation and wrapper checks. It does not claim a push, merge, or PR.
+and—by default—a new descendant commit. It also confirms the parent is still
+open and that the ticket remains open, unblocked, exclusively assigned, and a
+direct child.
+
+For one named ticket, `--allow-no-new-commit TICKET_NUMBER` waives only the
+requirement to create a new descendant commit during that attempt. The skill must
+still assess the existing committed implementation against the current ticket
+and parent requirements, perform required review and validation, and write valid
+attempt-bound result evidence. The wrapper does not infer correctness from the
+presence or content of existing commits. The original branch and a clean checkout
+remain mandatory in either case, including untracked and submodule status. If
+HEAD changes, it must still descend from the pre-attempt commit. All harness,
+record, result, parent, ticket, ownership, and eligibility checks remain
+mandatory. Other tickets in the same run still require a new descendant commit.
+
+The exception does not select or prioritize its named ticket. The runner still
+chooses the first eligible direct child in GitHub's returned order; a different
+selected ticket receives the normal new-commit requirement. A successful closure
+comment identifies the actual local branch and commit. When the exception is
+used, it says the requirement was waived and, if HEAD stayed unchanged, that it
+remained at the pre-attempt commit rather than claiming a new descendant commit.
+It does not claim a push, merge, or PR.
 
 ## Output and private records
 
@@ -253,6 +276,29 @@ After a failure:
 4. Inspect the GitHub issue and decide whether to keep it assigned, close it
    manually, or unassign it before rerunning. A ticket still assigned to you is
    intentionally skipped on the next run.
+
+### Finalize already-committed work after approval
+
+When a ticket's implementation is already committed and any needed human review
+or approval is complete, inspect the ticket and checkout, then unassign the
+ticket yourself before rerunning. For example:
+
+```bash
+gh issue view 456 --comments
+# Inspect the existing branch/commit and confirm the checkout is clean.
+# Obtain any required human approval before continuing.
+gh issue edit 456 --remove-assignee @me
+implement-loop 123 --allow-no-new-commit 456
+```
+
+Replace `implement-loop` with the executable path from [Run a spec](#run-a-spec)
+if it is not on `PATH`. Confirm ticket `#456` is the first eligible child in the
+normal queue order; the option does not force its selection or skip earlier
+eligible tickets. The skill receives approval comments as requirements context,
+but Implement Loop does not watch for approval comments or use them as resume
+triggers. It also does not unassign the ticket automatically or restore an old
+harness conversation: each rerun starts a fresh attempt. The named ticket must
+still have a clean, committed checkout; uncommitted changes are never accepted.
 
 The local lock lives in the repository's Git common directory and coordinates
 worktrees on this machine only. If a process is killed uncatchably, verify the

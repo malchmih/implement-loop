@@ -73,7 +73,10 @@ if tool_name in ("copilot", "opencode"):
         sys.stdout.write("Model unavailable: explicitly selected GPT-6 Luna\n")
         sys.exit(1)
 
-    if state.get("make_commit", True):
+    make_commit = state.get("make_commit_by_ticket", {}).get(
+        str(ticket_number), state.get("make_commit", True)
+    )
+    if make_commit:
         output_path = Path(f"implementation-{ticket_number}.txt")
         output_path.write_text(f"implemented ticket {ticket_number} in attempt {attempt_id}\n")
         subprocess.run(["git", "add", output_path.name], check=True)
@@ -404,6 +407,7 @@ class LoopTests(unittest.TestCase):
         self.assertIn(b"implement-loop", result.stdout)
         self.assertIn(b"--max-iterations", result.stdout)
         self.assertIn(b"--harness", result.stdout)
+        self.assertIn(b"--allow-no-new-commit TICKET_NUMBER", result.stdout)
         self.assertIn(b"--config-file", result.stdout)
         self.assertIn(b"--opencode-model", result.stdout)
         self.assertIn(b"--copilot-reasoning-effort", result.stdout)
@@ -655,6 +659,12 @@ class LoopTests(unittest.TestCase):
                 '[execution.harnesses.opencode]\nreasoning_effort = "max"\n',
                 None,
                 b"Unknown configuration key",
+            ),
+            (
+                "non-persistent-commit-exception",
+                "[execution]\nallow_no_new_commit_ticket = 2\n",
+                None,
+                b"Unknown configuration key execution.allow_no_new_commit_ticket",
             ),
             (
                 "invalid-type",
@@ -943,11 +953,14 @@ class LoopTests(unittest.TestCase):
                 state["tickets"]["2"]["assignees"] = []
                 state["tickets"]["2"]["issue_dependencies_summary"]["blocked_by"] = 0
                 state["events"] = []
+                state["make_commit"] = False
                 self.state = state
                 self.save_state()
                 result, runs = self.run_loop(
                     "--max-iterations",
                     "1",
+                    "--allow-no-new-commit",
+                    "2",
                     extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": mode},
                 )
                 after = self.load_state()
@@ -968,10 +981,13 @@ class LoopTests(unittest.TestCase):
             with self.subTest(harness=harness or "default"):
                 self.state = self.default_state()
                 self.state["agent_exit"] = 7
+                self.state["make_commit"] = False
                 self.save_state()
                 result, runs = self.run_loop(
                     "--max-iterations",
                     "1",
+                    "--allow-no-new-commit",
+                    "2",
                     harness=harness,
                 )
                 state = self.load_state()
@@ -990,9 +1006,15 @@ class LoopTests(unittest.TestCase):
 
     def test_required_record_persistence_failure_prevents_closure(self) -> None:
         self.state["agent_action"] = "break_records"
+        self.state["make_commit"] = False
         self.save_state()
 
-        result, runs = self.run_loop("--max-iterations", "1")
+        result, runs = self.run_loop(
+            "--max-iterations",
+            "1",
+            "--allow-no-new-commit",
+            "2",
+        )
 
         state = self.load_state()
         attempt = runs[-1] / "attempt-1-ticket-2"
@@ -1040,6 +1062,30 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual(state["tickets"]["3"]["state"], "open")
         self.assertEqual(state["tickets"]["4"]["state"], "closed")
+
+    def test_named_exception_does_not_bypass_blockers_or_assigned_ticket_skips(self) -> None:
+        for exception_ticket in (2, 3):
+            with self.subTest(exception_ticket=exception_ticket):
+                self.state = self.default_state()
+                self.state["tickets"]["2"]["issue_dependencies_summary"]["blocked_by"] = 1
+                self.add_ticket(3, assignees=["tester"])
+                self.add_ticket(4)
+                self.save_state()
+
+                result, _ = self.run_loop(
+                    "--max-iterations",
+                    "1",
+                    "--allow-no-new-commit",
+                    str(exception_ticket),
+                )
+
+                state = self.load_state()
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [4])
+                self.assertEqual(state["tickets"]["2"]["state"], "open")
+                self.assertEqual(state["tickets"]["3"]["state"], "open")
+                self.assertEqual(state["tickets"]["3"]["assignees"], [{"login": "tester"}])
+                self.assertEqual(state["tickets"]["4"]["state"], "closed")
 
     def test_queue_refreshes_after_closure_and_preserves_returned_order(self) -> None:
         self.add_ticket(3)
@@ -1305,7 +1351,7 @@ class LoopTests(unittest.TestCase):
         self.state["claim_conflict"] = True
         self.save_state()
 
-        result, _ = self.run_loop()
+        result, _ = self.run_loop("--allow-no-new-commit", "2")
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
@@ -1321,7 +1367,7 @@ class LoopTests(unittest.TestCase):
         self.state["claim_blocker"] = True
         self.save_state()
 
-        result, _ = self.run_loop()
+        result, _ = self.run_loop("--allow-no-new-commit", "2")
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
@@ -1334,7 +1380,7 @@ class LoopTests(unittest.TestCase):
         self.state["claim_remove_child"] = True
         self.save_state()
 
-        result, _ = self.run_loop()
+        result, _ = self.run_loop("--allow-no-new-commit", "2")
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
@@ -1342,11 +1388,18 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
         self.assertEqual(state["copilot_calls"], [])
 
-    def test_ownership_change_after_harness_preserves_work_but_prevents_closure(self) -> None:
+    def test_ownership_change_after_harness_is_rejected_even_with_named_exception(self) -> None:
         self.state["agent_action"] = "change_owner"
+        self.state["make_commit"] = False
         self.save_state()
+        existing_head = self.git("rev-parse", "HEAD")
 
-        result, _ = self.run_loop("--max-iterations", "1")
+        result, _ = self.run_loop(
+            "--max-iterations",
+            "1",
+            "--allow-no-new-commit",
+            "2",
+        )
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
@@ -1355,14 +1408,47 @@ class LoopTests(unittest.TestCase):
             state["tickets"]["2"]["assignees"],
             [{"login": "tester"}, {"login": "other"}],
         )
-        self.assertIn("implementation-2.txt", self.git("show", "--pretty=", "--name-only"))
+        self.assertEqual(self.git("rev-parse", "HEAD"), existing_head)
+        self.assertEqual(self.git("status", "--porcelain"), "")
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
 
-    def test_parent_must_remain_open_before_closure(self) -> None:
+    def test_ticket_blocker_and_membership_are_rechecked_with_named_exception(self) -> None:
+        cases = (
+            ("add_blocker", b"no longer open, unblocked"),
+            ("remove_child", b"no longer an open direct child"),
+        )
+        for action, diagnostic in cases:
+            with self.subTest(action=action):
+                self.state = self.default_state()
+                self.state["agent_action"] = action
+                self.state["make_commit"] = False
+                self.save_state()
+
+                result, _ = self.run_loop(
+                    "--max-iterations",
+                    "1",
+                    "--allow-no-new-commit",
+                    "2",
+                )
+
+                state = self.load_state()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(diagnostic, result.stderr)
+                self.assertEqual(state["tickets"]["2"]["state"], "open")
+                self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
+                self.assertEqual([event[0] for event in state["events"]], ["assign"])
+
+    def test_parent_must_remain_open_even_with_named_exception(self) -> None:
         self.state["agent_action"] = "close_parent"
+        self.state["make_commit"] = False
         self.save_state()
 
-        result, _ = self.run_loop("--max-iterations", "1")
+        result, _ = self.run_loop(
+            "--max-iterations",
+            "1",
+            "--allow-no-new-commit",
+            "2",
+        )
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
@@ -1396,11 +1482,151 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
 
-    def test_dirty_checkout_after_harness_is_preserved_and_not_closed(self) -> None:
-        self.state["agent_action"] = "dirty"
+    def test_named_ticket_can_be_finalized_without_a_new_commit(self) -> None:
+        self.state["make_commit"] = False
+        self.save_state()
+        existing_head = self.git("rev-parse", "HEAD")
+
+        result, runs = self.run_loop(
+            "--max-iterations",
+            "1",
+            "--allow-no-new-commit",
+            "2",
+        )
+
+        state = self.load_state()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(state["tickets"]["2"]["state"], "closed")
+        self.assertEqual([event[0] for event in state["events"]], ["assign", "close"])
+        self.assertEqual(self.git("rev-parse", "HEAD"), existing_head)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
+        comment = state["events"][1][2]
+        self.assertIn(f"branch main at commit {existing_head}", comment)
+        self.assertIn("new-commit requirement was waived for ticket #2", comment)
+        self.assertIn(f"HEAD remained at the pre-attempt commit {existing_head}", comment)
+        self.assertNotIn("a new descendant commit was produced", comment)
+
+        attempt = runs[0] / "attempt-1-ticket-2"
+        checks = json.loads((attempt / "checks.json").read_text())
+        self.assertTrue(checks["new_commit_requirement_waived"])
+        self.assertFalse(checks["new_descendant_commit"])
+        prompt = state["copilot_calls"][0]["prompt"]
+        self.assertIn("assess the existing committed implementation", prompt)
+        self.assertIn("do not manufacture a commit solely to satisfy the wrapper", prompt)
+
+    def test_named_ticket_exception_does_not_force_selection(self) -> None:
+        self.add_ticket(3)
+        self.state["make_commit"] = False
         self.save_state()
 
-        result, _ = self.run_loop("--max-iterations", "1")
+        result, runs = self.run_loop(
+            "--max-iterations",
+            "2",
+            "--allow-no-new-commit",
+            "3",
+        )
+
+        state = self.load_state()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"No new commit was made", result.stderr)
+        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
+        self.assertEqual(state["tickets"]["2"]["state"], "open")
+        self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
+        self.assertEqual(state["tickets"]["3"]["state"], "open")
+        self.assertEqual(state["tickets"]["3"]["assignees"], [])
+        self.assertEqual([event[0] for event in state["events"]], ["assign"])
+        self.assertIn(
+            "requires a new local descendant commit",
+            state["copilot_calls"][0]["prompt"],
+        )
+        metadata = json.loads((runs[0] / "run.json").read_text())
+        self.assertEqual(metadata["allow_no_new_commit_ticket"], 3)
+
+    def test_only_named_ticket_can_complete_without_a_new_commit_in_the_run(self) -> None:
+        self.add_ticket(3)
+        self.state["make_commit_by_ticket"] = {"3": False}
+        self.save_state()
+
+        result, runs = self.run_loop(
+            "--max-iterations",
+            "2",
+            "--allow-no-new-commit",
+            "3",
+        )
+
+        state = self.load_state()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2, 3])
+        self.assertEqual(state["tickets"]["2"]["state"], "closed")
+        self.assertEqual(state["tickets"]["3"]["state"], "closed")
+        self.assertEqual(
+            [event[0] for event in state["events"]],
+            [
+                "assign",
+                "close",
+                "assign",
+                "close",
+            ],
+        )
+
+        first_comment = state["events"][1][2]
+        second_comment = state["events"][3][2]
+        self.assertNotIn("new-commit requirement was waived", first_comment)
+        self.assertIn("new descendant commit was produced and verified", first_comment)
+        self.assertIn("new-commit requirement was waived for ticket #3", second_comment)
+        self.assertIn("HEAD remained at the pre-attempt commit", second_comment)
+        self.assertNotIn("a new descendant commit was produced", second_comment)
+
+        first_checks = json.loads((runs[0] / "attempt-1-ticket-2/checks.json").read_text())
+        second_checks = json.loads((runs[0] / "attempt-2-ticket-3/checks.json").read_text())
+        self.assertFalse(first_checks["new_commit_requirement_waived"])
+        self.assertTrue(first_checks["new_descendant_commit"])
+        self.assertTrue(second_checks["new_commit_requirement_waived"])
+        self.assertFalse(second_checks["new_descendant_commit"])
+
+    def test_named_exception_does_not_apply_to_later_tickets(self) -> None:
+        self.add_ticket(3)
+        self.add_ticket(4)
+        self.state["make_commit_by_ticket"] = {"3": False, "4": False}
+        self.save_state()
+
+        result, runs = self.run_loop(
+            "--max-iterations",
+            "3",
+            "--allow-no-new-commit",
+            "3",
+        )
+
+        state = self.load_state()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"No new commit was made", result.stderr)
+        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2, 3, 4])
+        self.assertEqual(state["tickets"]["2"]["state"], "closed")
+        self.assertEqual(state["tickets"]["3"]["state"], "closed")
+        self.assertEqual(state["tickets"]["4"]["state"], "open")
+        self.assertEqual(state["tickets"]["4"]["assignees"], [{"login": "tester"}])
+        self.assertEqual(
+            [event[:2] for event in state["events"]],
+            [["assign", 2], ["close", 2], ["assign", 3], ["close", 3], ["assign", 4]],
+        )
+        prompt = state["copilot_calls"][2]["prompt"]
+        self.assertIn("requires a new local descendant commit", prompt)
+        self.assertNotIn("new-commit requirement is not required", prompt)
+        later_attempt = json.loads((runs[0] / "attempt-3-ticket-4/attempt.json").read_text())
+        self.assertFalse(later_attempt["new_commit_requirement_waived"])
+
+    def test_dirty_checkout_is_rejected_even_with_named_exception(self) -> None:
+        self.state["agent_action"] = "dirty"
+        self.state["make_commit"] = False
+        self.save_state()
+
+        result, _ = self.run_loop(
+            "--max-iterations",
+            "1",
+            "--allow-no-new-commit",
+            "2",
+        )
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
@@ -1448,11 +1674,17 @@ class LoopTests(unittest.TestCase):
                             [{"login": "tester"}, {"login": "other"}],
                         )
 
-    def test_changed_branch_after_harness_is_preserved_and_not_closed(self) -> None:
+    def test_changed_branch_is_rejected_even_with_named_exception(self) -> None:
         self.state["agent_action"] = "branch"
+        self.state["make_commit"] = False
         self.save_state()
 
-        result, _ = self.run_loop("--max-iterations", "1")
+        result, _ = self.run_loop(
+            "--max-iterations",
+            "1",
+            "--allow-no-new-commit",
+            "2",
+        )
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
@@ -1461,12 +1693,17 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
 
-    def test_non_descendant_history_is_rejected_without_closing_ticket(self) -> None:
+    def test_non_descendant_history_is_rejected_even_with_named_exception(self) -> None:
         self.add_ticket(3)
         self.state["agent_action_by_ticket"] = {"3": "rewrite_history"}
         self.save_state()
 
-        result, _ = self.run_loop("--max-iterations", "2")
+        result, _ = self.run_loop(
+            "--max-iterations",
+            "2",
+            "--allow-no-new-commit",
+            "3",
+        )
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)

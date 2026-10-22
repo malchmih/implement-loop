@@ -75,10 +75,26 @@ def _build_prompt(
     ticket_number: int,
     attempt_id: str,
     result_path: Path,
+    allow_no_new_commit: bool,
     context: dict[str, Any],
     skill_reference: str,
 ) -> str:
     requirements = json.dumps(context, ensure_ascii=False, indent=2)
+    if allow_no_new_commit:
+        commit_guidance = (
+            "For this attempt only, a new local commit is not required. Inspect and assess the "
+            "existing committed implementation against this ticket's current requirements; do "
+            "not infer correctness from unrelated existing commits. Review and run all required "
+            "validation. If the implementation already satisfies the requirements, you may "
+            "report success without creating a commit; do not manufacture a commit solely to "
+            "satisfy the wrapper. If you change files, commit the changes. Never report success "
+            "with uncommitted changes."
+        )
+    else:
+        commit_guidance = (
+            "This attempt requires a new local descendant commit; existing commits alone do "
+            "not satisfy it. Commit the completed work before reporting success."
+        )
     return (
         f"{skill_reference} Implement only ticket #{ticket_number} in "
         f"{repository.repo_ref}, a direct child of spec #{spec_number}.\n\n"
@@ -89,13 +105,16 @@ def _build_prompt(
         "merge a PR, or write to GitHub issues; the wrapper owns assignment, "
         "comments, and closure. Let the external skill named implement, requested "
         f"with {skill_reference}, perform the "
-        "implementation, required validation, review, and commit. Any delegated "
+        "implementation, required validation, review, and commits as required by the "
+        "instructions below. Any delegated "
         "workers must follow these same scope and execution restrictions. Wait "
         "for all ticket-scoped delegated work to finish and incorporate its "
         "results before reporting completion. If blocked or if required validation "
         "fails, do not report success.\n\n"
-        "After all work, review, validation, and the required local commit have "
-        "succeeded, write one JSON object to this initially absent file:\n"
+        f"{commit_guidance}\n\n"
+        "After implementation, review, and required validation have succeeded—and any "
+        "commits required above are complete—write one JSON object to this initially absent "
+        "file:\n"
         f"{result_path}\n"
         f"Attempt ID: {attempt_id}\n"
         "The JSON must identify this ticket and attempt and use exactly these "
@@ -337,17 +356,36 @@ def _process_failure(outcome: ProcessOutcome, harness: HarnessSpec) -> list[str]
 def _closure_comment(
     branch: str,
     commit: str,
+    before_commit: str,
     spec_number: int,
     ticket_number: int,
     harness: HarnessSpec,
+    new_commit_requirement_waived: bool,
 ) -> str:
+    if new_commit_requirement_waived:
+        if commit == before_commit:
+            commit_check = (
+                f"the new-commit requirement was waived for ticket #{ticket_number} in this "
+                f"invocation; HEAD remained at the pre-attempt commit {before_commit}"
+            )
+        else:
+            commit_check = (
+                f"the new-commit requirement was waived for ticket #{ticket_number} in this "
+                f"invocation; commit {commit} was also verified as a descendant of pre-attempt "
+                f"commit {before_commit}"
+            )
+    else:
+        commit_check = (
+            "a new descendant commit was produced and verified from pre-attempt commit "
+            f"{before_commit}"
+        )
     return (
         f"Implemented locally by implement-loop on branch {branch} at commit {commit}. "
         "The agent attested that acceptance criteria and required validation passed. "
         f"The wrapper verified successful {harness.display_name} exit, "
         "persisted process/result records, "
-        "valid per-attempt result evidence, an unchanged branch, a clean checkout, a new "
-        "descendant commit, an open parent spec, and the ticket's open/unblocked/direct-child "
+        "valid per-attempt result evidence, an unchanged branch, a clean checkout, "
+        f"{commit_check}, an open parent spec, and the ticket's open/unblocked/direct-child "
         f"status with exclusive assignment for ticket #{ticket_number} under spec #{spec_number}. "
         "The wrapper did not push or open a PR."
     )
@@ -397,6 +435,7 @@ def run(options: Options) -> None:
             "initial_head": checkout.initial_head,
             "spec": options.spec_number,
             "max_iterations": options.max_iterations,
+            "allow_no_new_commit_ticket": options.allow_no_new_commit_ticket,
             "configuration_file": (
                 str(options.config_file) if options.config_file is not None else None
             ),
@@ -466,6 +505,7 @@ def run(options: Options) -> None:
                 return
 
             ticket_number = ticket["number"]
+            new_commit_requirement_waived = ticket_number == options.allow_no_new_commit_ticket
             attempt_number = attempts + 1
             attempt_id = str(uuid.uuid4())
             attempt_dir = records.attempt_directory(attempt_number, ticket_number)
@@ -491,6 +531,7 @@ def run(options: Options) -> None:
                     ticket_number=ticket_number,
                     attempt_id=attempt_id,
                     result_path=result_path,
+                    allow_no_new_commit=new_commit_requirement_waived,
                     context=context,
                     skill_reference=harness.skill_reference,
                 )
@@ -512,6 +553,7 @@ def run(options: Options) -> None:
                         "attempt": attempt_number,
                         "attempt_id": attempt_id,
                         "result_path": str(result_path),
+                        "new_commit_requirement_waived": new_commit_requirement_waived,
                         **harness.metadata(),
                     },
                     exclusive=True,
@@ -573,7 +615,9 @@ def run(options: Options) -> None:
 
                 assert_checkout(checkout)
                 after_head = current_head(checkout)
-                require_new_descendant(checkout, before_head, after_head)
+                new_descendant_commit = after_head != before_head
+                if new_descendant_commit or not new_commit_requirement_waived:
+                    require_new_descendant(checkout, before_head, after_head)
                 final_spec, final_ticket, final_children = _assert_owned_ticket(
                     github,
                     repository,
@@ -598,9 +642,11 @@ def run(options: Options) -> None:
                 closure_comment = _closure_comment(
                     checkout.branch,
                     after_head,
+                    before_head,
                     options.spec_number,
                     ticket_number,
                     harness,
+                    new_commit_requirement_waived,
                 )
                 records.write_text(attempt_dir / "commit", f"{after_head}\n", exclusive=True)
                 records.write_text(
@@ -621,7 +667,8 @@ def run(options: Options) -> None:
                         },
                         "branch_unchanged": True,
                         "checkout_clean": True,
-                        "new_descendant_commit": True,
+                        "new_commit_requirement_waived": new_commit_requirement_waived,
+                        "new_descendant_commit": new_descendant_commit,
                         "parent_open": True,
                         "ticket_open_unblocked_direct_child_exclusively_assigned": True,
                     },
