@@ -69,8 +69,13 @@ def _nonnegative_integer(value: str) -> int:
 
 
 def _nonempty_setting(value: str) -> str:
-    if not value or value.isspace() or any(character.isspace() for character in value):
-        raise argparse.ArgumentTypeError("must be a non-empty value without whitespace")
+    if (
+        not value
+        or value.isspace()
+        or "\x00" in value
+        or any(character.isspace() for character in value)
+    ):
+        raise argparse.ArgumentTypeError("must be a non-empty value without whitespace or NUL")
     return value
 
 
@@ -175,9 +180,12 @@ def _config_setting_string(value: Any, context: str) -> str:
         not isinstance(value, str)
         or not value
         or value.isspace()
+        or "\x00" in value
         or any(character.isspace() for character in value)
     ):
-        raise _ConfigurationError(f"{context} must be a non-empty string without whitespace.")
+        raise _ConfigurationError(
+            f"{context} must be a non-empty string without whitespace or NUL."
+        )
     return value
 
 

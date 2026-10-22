@@ -94,10 +94,12 @@ configured agents or subagents may select their own models.
 `run-*` folders. `~` is expanded and relative paths are resolved from the
 invocation's current directory. When neither is set, records use
 `${XDG_STATE_HOME:-$HOME/.local/state}/implement-loop`; a non-empty
-`XDG_STATE_HOME` must be absolute. Record directories are made private and
-locations inside or containing the target checkout, the home directory itself,
-and filesystem root are rejected so the runner cannot change shared directory
-permissions or scan a parent containing the checkout.
+`XDG_STATE_HOME` must be absolute. A missing dedicated records directory is
+created with mode `0700`; an existing one must already have that mode. The runner
+refuses to change permissions on an existing directory, which could be shared.
+Locations inside or containing the target checkout, the home directory itself,
+and filesystem root are also rejected so the runner cannot scan a parent
+containing the checkout.
 
 The runner uses native same-repository direct child issues, in GitHub's returned
 order. It skips closed, blocked, or assigned tickets; assignments to the

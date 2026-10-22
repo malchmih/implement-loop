@@ -669,6 +669,12 @@ class LoopTests(unittest.TestCase):
                 None,
                 b"reasoning_effort must be one of",
             ),
+            (
+                "nul-model",
+                '[execution.harnesses.opencode]\nmodel = "\\u0000"\n',
+                None,
+                b"without whitespace or NUL",
+            ),
             ("missing-explicit", None, "missing.toml", b"Cannot read explicitly selected"),
         )
         for name, contents, explicit_path, diagnostic in cases:
@@ -1527,9 +1533,29 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(runs, [])
         self.assertFalse((self.repo / ".git/implement-loop.lock").exists())
 
+    def test_existing_shared_record_directory_is_not_made_private_in_place(self) -> None:
+        shared_dir = self.home / "shared-records"
+        shared_dir.mkdir()
+        shared_dir.chmod(0o1777)
+        self.state["records_dir"] = str(shared_dir)
+        self.state["tickets"]["2"]["assignees"] = [{"login": "tester"}]
+        self.save_state()
+
+        result, _ = self.run_loop(
+            "--records-dir",
+            str(shared_dir),
+            harness=None,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"must already have mode 0700", result.stderr)
+        self.assertEqual(stat.S_IMODE(shared_dir.stat().st_mode), 0o1777)
+        self.assertEqual(self.load_state()["events"], [])
+        self.assertFalse(any(shared_dir.glob("run-*")))
+
     def test_configured_record_directory_and_retention_are_effective(self) -> None:
         records_dir = self.home / "private-records"
-        records_dir.mkdir()
+        records_dir.mkdir(mode=0o700)
 
         def old_run(age: timedelta, suffix: str) -> Path:
             stamp = (datetime.now(UTC) - age).strftime("%Y%m%dT%H%M%SZ")
@@ -1567,8 +1593,8 @@ class LoopTests(unittest.TestCase):
     def test_cli_record_directory_and_retention_override_user_configuration(self) -> None:
         configured_dir = self.home / "configured-records"
         cli_records_dir = self.home / "cli-records"
-        configured_dir.mkdir()
-        cli_records_dir.mkdir()
+        configured_dir.mkdir(mode=0o700)
+        cli_records_dir.mkdir(mode=0o700)
 
         def old_run(directory: Path, age: timedelta, suffix: str) -> Path:
             stamp = (datetime.now(UTC) - age).strftime("%Y%m%dT%H%M%SZ")
@@ -1615,7 +1641,7 @@ class LoopTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.state = self.default_state()
                 records_dir = self.home / f"keep-forever-{source}"
-                records_dir.mkdir()
+                records_dir.mkdir(mode=0o700)
                 stamp = (datetime.now(UTC) - timedelta(days=100)).strftime("%Y%m%dT%H%M%SZ")
                 expired = records_dir / f"run-{stamp}-ABC123"
                 expired.mkdir()
@@ -1677,7 +1703,7 @@ class LoopTests(unittest.TestCase):
 
     def test_seven_day_retention_protects_marked_unrelated_symlink_and_legacy_data(self) -> None:
         state_dir = self.home / ".local/state/implement-loop"
-        state_dir.mkdir(parents=True)
+        state_dir.mkdir(parents=True, mode=0o700)
 
         def old_run(age: timedelta, suffix: str = "ABC123") -> Path:
             stamp = (datetime.now(UTC) - age).strftime("%Y%m%dT%H%M%SZ")
@@ -1723,7 +1749,7 @@ class LoopTests(unittest.TestCase):
         retention_seconds = 7 * 24 * 60 * 60
         boundary_start = int(time.time()) - retention_seconds
         state_dir = self.home / ".local/state/implement-loop"
-        state_dir.mkdir(parents=True)
+        state_dir.mkdir(parents=True, mode=0o700)
         stamp = datetime.fromtimestamp(boundary_start, UTC).strftime("%Y%m%dT%H%M%SZ")
         boundary_run = state_dir / f"run-{stamp}-ABC123"
         boundary_run.mkdir()
@@ -1760,7 +1786,7 @@ class LoopTests(unittest.TestCase):
 
     def test_retention_removal_failure_warns_and_does_not_block_run(self) -> None:
         state_dir = self.home / ".local/state/implement-loop"
-        state_dir.mkdir(parents=True)
+        state_dir.mkdir(parents=True, mode=0o700)
         stamp = (datetime.now(UTC) - timedelta(days=8)).strftime("%Y%m%dT%H%M%SZ")
         expired = state_dir / f"run-{stamp}-ABC123"
         expired.mkdir()

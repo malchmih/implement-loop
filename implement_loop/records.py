@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import sys
 import time
 from dataclasses import dataclass
@@ -61,7 +62,12 @@ class RunRecords:
 
         try:
             records_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-            records_dir.chmod(0o700)
+            mode = stat.S_IMODE(records_dir.stat().st_mode)
+            if mode != 0o700:
+                raise LoopError(
+                    f"Existing run-record directory {records_dir} must already have mode "
+                    f"0700 (found {mode:04o})."
+                )
         except OSError as error:
             raise LoopError(
                 f"Cannot create private run-record directory {records_dir}: {error}"
