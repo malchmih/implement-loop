@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "implement-loop"
+INSTALLER = SCRIPT.parent / "install.sh"
 REPOSITORY_URL = "https://api.github.com/repos/test/repo"
 
 FAKE_TOOL = r"""#!/usr/bin/env python3
@@ -366,6 +367,7 @@ class LoopTests(unittest.TestCase):
         extra_env: dict[str, str] | None = None,
         cwd: Path | None = None,
         preexec_fn: Callable[[], None] | None = None,
+        executable: Path = SCRIPT,
     ) -> tuple[subprocess.CompletedProcess[bytes], list[Path]]:
         env = dict(self.env)
         if extra_env:
@@ -373,7 +375,7 @@ class LoopTests(unittest.TestCase):
         state_home = Path(env.get("XDG_STATE_HOME", self.home / ".local/state"))
         state_dir = state_home / "implement-loop"
         existing_runs = set(state_dir.glob("run-*")) if state_dir.exists() else set()
-        command = [str(SCRIPT), "1"]
+        command = [str(executable), "1"]
         if harness is not None:
             command.extend(("--harness", harness))
         command.extend(args)
@@ -391,6 +393,174 @@ class LoopTests(unittest.TestCase):
             else []
         )
         return result, runs
+
+    def copy_source_tree(self) -> Path:
+        source = self.home / "source checkout"
+        shutil.copytree(
+            SCRIPT.parent,
+            source,
+            ignore=shutil.ignore_patterns(
+                ".git", "__pycache__", ".venv", ".mypy_cache", ".ruff_cache"
+            ),
+        )
+        return source
+
+    def run_installer(
+        self,
+        source: Path,
+        destination: Path | None = None,
+        *,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        command = [str(source / INSTALLER.name)]
+        if destination is not None:
+            command.append(str(destination))
+        return subprocess.run(
+            command,
+            cwd=self.repo,
+            env=env if env is not None else self.env,
+            capture_output=True,
+            timeout=30,
+        )
+
+    def test_installer_custom_destination_is_created_and_repeat_safe(self) -> None:
+        source = self.copy_source_tree()
+        destination = self.home / "chosen executable directory" / "nested"
+
+        first = self.run_installer(source, destination)
+        installed = destination / "implement-loop"
+        self.assertEqual(first.returncode, 0, first.stderr.decode())
+        self.assertTrue(installed.is_symlink())
+        self.assertEqual(os.readlink(installed), str(source.resolve() / SCRIPT.name))
+
+        path_env = dict(self.env)
+        path_env["PATH"] = str(destination.resolve()) + os.pathsep + path_env["PATH"]
+        second = self.run_installer(source, destination, env=path_env)
+        self.assertEqual(second.returncode, 0, second.stderr.decode())
+        self.assertIn(b"PATH already includes", second.stdout)
+        self.assertTrue(installed.is_symlink())
+        self.assertEqual(os.readlink(installed), str(source.resolve() / SCRIPT.name))
+
+    def test_installer_refuses_unrelated_file_directory_and_link_collisions(self) -> None:
+        source = self.copy_source_tree()
+        unrelated_target = self.home / "unrelated executable"
+        unrelated_target.write_text("keep this target\n")
+
+        for kind in ("file", "directory", "symlink", "dangling symlink"):
+            with self.subTest(kind=kind):
+                destination = self.home / f"collision destination {kind}"
+                destination.mkdir()
+                link = destination / "implement-loop"
+                marker = destination / "keep.txt"
+                if kind == "file":
+                    link.write_text("keep this file\n")
+                elif kind == "directory":
+                    link.mkdir()
+                    marker.write_text("keep this directory\n")
+                elif kind == "symlink":
+                    link.symlink_to(unrelated_target)
+                else:
+                    link.symlink_to(self.home / "missing unrelated target")
+                original_link = os.readlink(link) if link.is_symlink() else None
+
+                result = self.run_installer(source, destination)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(str(link).encode(), result.stderr)
+                self.assertIn(b"Choose another destination", result.stderr)
+                self.assertIn(b"manually", result.stderr)
+                if kind == "file":
+                    self.assertEqual(link.read_text(), "keep this file\n")
+                elif kind == "directory":
+                    self.assertTrue(link.is_dir())
+                    self.assertEqual(marker.read_text(), "keep this directory\n")
+                else:
+                    self.assertTrue(link.is_symlink())
+                    self.assertEqual(os.readlink(link), original_link)
+
+    def test_installer_reports_prerequisites_and_path_without_mutating_user_settings(self) -> None:
+        source = self.copy_source_tree()
+        profile_contents = {
+            self.home / ".bashrc": b"# keep shell settings\n",
+            self.home / ".zshrc": b"# keep shell settings\n",
+            self.home / ".config/opencode/opencode.json": b"keep opencode settings\n",
+            self.home / ".config/github-copilot/config.json": b"keep copilot settings\n",
+        }
+        for path, contents in profile_contents.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(contents)
+
+        limited_path = self.home / "installer-prerequisites"
+        limited_path.mkdir()
+        utilities = ("dirname", "mkdir", "ln", "readlink", "git")
+        for utility in utilities:
+            target = shutil.which(utility)
+            self.assertIsNotNone(target, f"test environment needs {utility}")
+            (limited_path / utility).symlink_to(target)
+        for tool, target in (
+            ("python3", sys.executable),
+            ("gh", self.bin / "gh"),
+            ("opencode", self.bin / "opencode"),
+        ):
+            (limited_path / tool).symlink_to(target)
+
+        env = dict(self.env, PATH=str(limited_path))
+        existing_entries = {path.relative_to(self.home) for path in self.home.rglob("*")}
+
+        result = self.run_installer(source, env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(result.stderr, b"")
+        output = result.stdout.decode()
+        for prerequisite in ("Python 3.11", "git", "gh", "opencode", "copilot"):
+            self.assertIn(prerequisite, output)
+        self.assertIn("PATH", output)
+        self.assertIn("PATH does not include", output)
+        self.assertIn(str(self.home / ".local/bin"), output)
+        self.assertIn("optional", output.lower())
+        self.assertIn("Missing: copilot", output)
+        self.assertNotIn("uv", output.lower())
+        self.assertEqual(
+            {path.relative_to(self.home) for path in self.home.rglob("*")} - existing_entries,
+            {Path(".local"), Path(".local/bin"), Path(".local/bin/implement-loop")},
+        )
+        for path, contents in profile_contents.items():
+            self.assertEqual(path.read_bytes(), contents)
+        state = self.load_state()
+        self.assertEqual(state["events"], [])
+        self.assertEqual(state["opencode_calls"], [])
+        self.assertEqual(state["copilot_calls"], [])
+
+    def test_installed_command_runs_from_a_target_checkout_subdirectory(self) -> None:
+        source = self.copy_source_tree()
+
+        install = self.run_installer(source)
+        self.assertEqual(install.returncode, 0, install.stderr.decode())
+
+        installed = self.home / ".local/bin/implement-loop"
+        self.assertTrue(installed.is_symlink())
+        self.assertEqual(os.readlink(installed), str(source.resolve() / SCRIPT.name))
+
+        nested = self.repo / "nested"
+        nested.mkdir()
+        (nested / "tracked.txt").write_text("target checkout fixture\n")
+        self.git("add", "nested")
+        self.git("commit", "--quiet", "-m", "Add target subdirectory")
+
+        result, _ = self.run_loop(
+            "--max-iterations",
+            "1",
+            harness=None,
+            cwd=nested,
+            executable=installed,
+        )
+
+        state = self.load_state()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(state["tickets"]["2"]["state"], "closed")
+        self.assertTrue((self.repo / "implementation-2.txt").is_file())
+        self.assertFalse((source / "implementation-2.txt").exists())
+        self.assertEqual(self.git("status", "--porcelain"), "")
 
     def load_state(self) -> dict[str, object]:
         return json.loads(self.state_path.read_text())

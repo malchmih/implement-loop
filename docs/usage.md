@@ -5,9 +5,9 @@
 - Python 3.11 or later, Git, and GitHub CLI (`gh`).
 - An authenticated GitHub CLI session with permission to read native
   sub-issues/dependencies, assign issues, comment, and close issues.
-- The CLI, authentication, and model account for the selected harness: OpenCode
-  V2 (the default) or GitHub Copilot CLI (`--harness copilot`). The other harness
-  is not required for a run.
+- OpenCode V2 is the default and requires its CLI, authentication, and an
+  available model. GitHub Copilot CLI (`--harness copilot`) is an optional
+  alternative; only the selected harness is required for a run.
 - The external skill named `implement`. Implement Loop does not bundle, install,
   or configure it. For a personal skill shared by both harnesses, put it at
   `~/.agents/skills/implement/SKILL.md`. OpenCode also discovers skills under
@@ -18,19 +18,45 @@
 - A checkout with an existing commit, an attached branch, and no staged,
   unstaged, untracked, or submodule changes.
 
-## Run a spec
+## Install
 
-Run the executable from the target checkout, including from a subdirectory. Until
-an installer is added, use the source checkout's executable path unless it is
-already on `PATH`:
+Run the installer from the source checkout:
 
 ```bash
-/path/to/implement-loop/implement-loop 123
-/path/to/implement-loop/implement-loop 123 --harness copilot
-/path/to/implement-loop/implement-loop 123 --max-iterations 10
-/path/to/implement-loop/implement-loop 123 --config-file ./experiment.toml
-/path/to/implement-loop/implement-loop 123 --allow-no-new-commit 456
-/path/to/implement-loop/implement-loop 123 --copilot-model gpt-6-luna \
+cd /path/to/implement-loop
+./install.sh
+# Or choose a different executable directory:
+./install.sh "$HOME/bin"
+```
+
+With no argument, the installer creates `~/.local/bin` if needed and links
+`implement-loop` there. A destination argument selects another directory, which
+is also created if needed. Repeating installation of the same link is safe;
+unrelated files, directories, or links at that command path are refused with a
+diagnostic. The installer reports whether the destination is on `PATH` and which
+runtime commands are available. It does not edit shell profiles, install
+dependencies, authenticate GitHub, configure a harness, or install the external
+skill. Add the printed destination to `PATH` yourself if necessary, for example:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The executable remains backed by this source checkout. Updating the checkout
+updates the linked command; moving or deleting the checkout breaks it. There is
+no copy installation.
+
+## Run a spec
+
+Run the installed command from the target checkout, including from a subdirectory:
+
+```bash
+implement-loop 123
+implement-loop 123 --harness copilot
+implement-loop 123 --max-iterations 10
+implement-loop 123 --config-file ./experiment.toml
+implement-loop 123 --allow-no-new-commit 456
+implement-loop 123 --copilot-model gpt-6-luna \
   --copilot-reasoning-effort high
 ```
 

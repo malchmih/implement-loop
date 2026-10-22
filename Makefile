@@ -2,6 +2,7 @@
 
 check:
 	uv sync --locked
+	shellcheck install.sh
 	uv run --locked ruff check .
 	uv run --locked ruff format --check .
 	uv run --locked mypy
