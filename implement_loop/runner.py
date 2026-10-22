@@ -392,6 +392,22 @@ def run(options: Options) -> None:
             checkout.root,
             options.records,
         )
+        run_metadata: dict[str, Any] = {
+            "branch": checkout.branch,
+            "initial_head": checkout.initial_head,
+            "spec": options.spec_number,
+            "max_iterations": options.max_iterations,
+            "configuration_file": (
+                str(options.config_file) if options.config_file is not None else None
+            ),
+            "records_directory": str(records.records_dir),
+            "retention_days": options.records.retention_days,
+            "keep_records_forever": options.records.retention_days is None,
+            **harness.metadata(),
+            "started_at": records.started_at.isoformat(),
+        }
+        records.write_json(records.run_dir / "run.json", run_metadata, exclusive=True)
+
         github = GitHub(checkout.root)
         repository = github.resolve_repository()
         login = github.authenticated_login(repository)
@@ -410,24 +426,12 @@ def run(options: Options) -> None:
             },
             exclusive=True,
         )
-        run_metadata: dict[str, Any] = {
-            "repository": repository.repo_ref,
-            "github_host": repository.host,
-            "branch": checkout.branch,
-            "initial_head": checkout.initial_head,
-            "spec": options.spec_number,
-            "max_iterations": options.max_iterations,
-            "configuration_file": (
-                str(options.config_file) if options.config_file is not None else None
-            ),
-            "records_directory": str(records.records_dir),
-            "retention_days": options.records.retention_days,
-            "keep_records_forever": options.records.retention_days is None,
-            **harness.metadata(),
-            "login": login,
-            "started_at": records.started_at.isoformat(),
-        }
-        records.write_json(records.run_dir / "run.json", run_metadata, exclusive=True)
+        run_metadata.update(
+            repository=repository.repo_ref,
+            github_host=repository.host,
+            login=login,
+        )
+        records.write_json(records.run_dir / "run.json", run_metadata)
         records.write_json(records.run_dir / "user.json", {"login": login}, exclusive=True)
         records.write_json(records.run_dir / "spec.json", spec, exclusive=True)
         print(

@@ -179,6 +179,8 @@ if args[:2] == ["repo", "view"]:
     markers = records_dir.glob("run-*/active.pid")
     if not any(path.read_text().strip() == str(os.getppid()) for path in markers):
         sys.exit("Missing live run marker")
+    if state.get("repository_view_failure"):
+        sys.exit("simulated repository discovery failure")
     if "GH_REPO" in os.environ:
         state["repo_view_saw_override"] = os.environ["GH_REPO"]
     result = {"nameWithOwner": "test/repo", "url": "https://github.com/test/repo"}
@@ -704,6 +706,36 @@ class LoopTests(unittest.TestCase):
                 self.assertEqual(runs, [])
                 self.assertFalse(state_dir.exists())
                 self.assertFalse((self.repo / ".git/implement-loop.lock").exists())
+
+    def test_run_records_selected_configuration_before_github_discovery(self) -> None:
+        config_home = self.home / "early-record-config"
+        config_file = config_home / "implement-loop/config.toml"
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text(
+            '[execution]\nharness = "copilot"\nmax_attempts = 2\n\n'
+            "[execution.harnesses.copilot]\n"
+            'model = "configured-model"\nreasoning_effort = "high"\n'
+        )
+        self.state["repository_view_failure"] = True
+        self.save_state()
+
+        result, runs = self.run_loop(
+            harness=None,
+            extra_env={"XDG_CONFIG_HOME": str(config_home)},
+        )
+
+        state = self.load_state()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"simulated repository discovery failure", result.stderr)
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(state["events"], [])
+        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(state["opencode_calls"], [])
+        run_metadata = json.loads((runs[0] / "run.json").read_text())
+        self.assertEqual(run_metadata["configuration_file"], str(config_file.resolve()))
+        self.assertEqual(run_metadata["harness"], "copilot")
+        self.assertEqual(run_metadata["model"], "configured-model")
+        self.assertEqual(run_metadata["reasoning_effort"], "high")
 
     def test_invalid_cli_reasoning_effort_is_rejected_before_side_effects(self) -> None:
         result, runs = self.run_loop(
