@@ -1,0 +1,185 @@
+"""Private per-run records and conservative startup retention."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import secrets
+import shutil
+import sys
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from .errors import LoopError
+
+_RUN_NAME = re.compile(r"^run-([0-9]{8}T[0-9]{6}Z)-([A-Za-z0-9]{6})$")
+_RUN_SUFFIX_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+_RETENTION_SECONDS = 7 * 24 * 60 * 60
+
+
+def _within(path: Path, directory: Path) -> bool:
+    try:
+        path.relative_to(directory)
+        return True
+    except ValueError:
+        return False
+
+
+class RunRecords:
+    """A private run directory containing context, prompts, and process evidence."""
+
+    def __init__(self, state_dir: Path, run_dir: Path, started_at: datetime) -> None:
+        self.state_dir = state_dir
+        self.run_dir = run_dir
+        self.started_at = started_at
+        self.active_marker = run_dir / "active.pid"
+
+    @classmethod
+    def create(cls, target_root: Path) -> RunRecords:
+        home = Path.home()
+        state_home_value = os.environ.get("XDG_STATE_HOME")
+        if state_home_value:
+            state_home = Path(state_home_value).expanduser()
+            if not state_home.is_absolute():
+                raise LoopError("XDG_STATE_HOME must be an absolute path.")
+        else:
+            state_home = home / ".local" / "state"
+
+        state_dir = (state_home / "implement-loop").resolve()
+        repository_root = target_root.resolve()
+        if _within(state_dir, repository_root):
+            raise LoopError(
+                "The run-record location is inside the target checkout. Choose an "
+                "external XDG_STATE_HOME so results and diagnostics do not dirty the checkout."
+            )
+
+        try:
+            state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            state_dir.chmod(0o700)
+        except OSError as error:
+            raise LoopError(
+                f"Cannot create private run-record directory {state_dir}: {error}"
+            ) from error
+
+        started_at = datetime.now(UTC).replace(microsecond=0)
+        stamp = started_at.strftime("%Y%m%dT%H%M%SZ")
+        run_dir: Path | None = None
+        for _ in range(20):
+            suffix = "".join(secrets.choice(_RUN_SUFFIX_ALPHABET) for _ in range(6))
+            candidate = state_dir / f"run-{stamp}-{suffix}"
+            try:
+                candidate.mkdir(mode=0o700)
+                run_dir = candidate
+                break
+            except FileExistsError:
+                continue
+            except OSError as error:
+                raise LoopError(
+                    f"Cannot create private run records at {candidate}: {error}"
+                ) from error
+        if run_dir is None:
+            raise LoopError("Cannot allocate a unique private run-record directory.")
+
+        records = cls(state_dir=state_dir, run_dir=run_dir, started_at=started_at)
+        try:
+            records.write_text(records.active_marker, f"{os.getpid()}\n", exclusive=True)
+        except OSError as error:
+            raise LoopError(f"Cannot create the active run marker: {error}") from error
+        records.prune_expired()
+        return records
+
+    def attempt_directory(self, attempt_number: int, ticket_number: int) -> Path:
+        path = self.run_dir / f"attempt-{attempt_number}-ticket-{ticket_number}"
+        try:
+            path.mkdir(mode=0o700)
+        except OSError as error:
+            raise LoopError(f"Cannot create private attempt records at {path}: {error}") from error
+        return path
+
+    def write_text(self, path: Path, value: str, *, exclusive: bool = False) -> None:
+        self.write_bytes(path, value.encode("utf-8"), exclusive=exclusive)
+
+    def write_json(self, path: Path, value: Any, *, exclusive: bool = False) -> None:
+        text = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        self.write_text(path, text, exclusive=exclusive)
+
+    def write_bytes(self, path: Path, value: bytes, *, exclusive: bool = False) -> None:
+        resolved_path = path.resolve(strict=False)
+        if not _within(resolved_path, self.run_dir.resolve()):
+            raise LoopError(f"Refusing to write a run record outside {self.run_dir}.")
+        flags = os.O_WRONLY | os.O_CREAT
+        flags |= os.O_EXCL if exclusive else os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(path, flags, 0o600)
+            with os.fdopen(descriptor, "wb") as record:
+                record.write(value)
+        except OSError as error:
+            raise LoopError(f"Cannot persist required run record {path}: {error}") from error
+
+    def prune_expired(self) -> None:
+        """Remove only old, unmarked run directories; cleanup never blocks a run."""
+
+        try:
+            entries = list(os.scandir(self.state_dir))
+        except OSError as error:
+            self._warn(f"Cannot scan run records at {self.state_dir}; skipping cleanup: {error}")
+            return
+
+        cutoff = time.time() - _RETENTION_SECONDS
+        for entry in entries:
+            if not entry.name.startswith("run-") or entry.is_symlink():
+                continue
+            try:
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+            except OSError as error:
+                self._warn(f"Cannot inspect old run record {entry.path}; keeping it: {error}")
+                continue
+            match = _RUN_NAME.fullmatch(entry.name)
+            if match is None:
+                continue
+
+            stamp = match.group(1)
+            try:
+                started_at = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+                if started_at.strftime("%Y%m%dT%H%M%SZ") != stamp:
+                    raise ValueError("timestamp did not round-trip")
+            except ValueError:
+                self._warn(f"Cannot read the start timestamp for {entry.path}; keeping it.")
+                continue
+            if started_at.timestamp() >= cutoff:
+                continue
+
+            marker = Path(entry.path) / "active.pid"
+            if os.path.lexists(marker):
+                self._warn(f"Keeping expired run with an active marker: {entry.path}")
+                continue
+            try:
+                shutil.rmtree(entry.path)
+            except OSError as error:
+                self._warn(
+                    f"Cannot remove expired run {entry.path}; a later startup will retry: {error}"
+                )
+
+    def finish(self) -> None:
+        """Remove this process's active marker after the wrapper has stopped."""
+
+        try:
+            owner = self.active_marker.read_text(encoding="ascii").strip()
+            if owner == str(os.getpid()):
+                self.active_marker.unlink()
+            elif os.path.lexists(self.active_marker):
+                self._warn(f"Leaving changed active marker in {self.run_dir}.")
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            self._warn(f"Cannot clear the active marker for {self.run_dir}: {error}")
+
+    @staticmethod
+    def _warn(message: str) -> None:
+        print(f"Warning: {message}", file=sys.stderr)
