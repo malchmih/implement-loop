@@ -111,15 +111,19 @@ _HARNESS_SPECS: dict[str, HarnessSpec] = {
 }
 
 
-def default_harness_settings(name: str) -> HarnessSettings:
-    """Return the pinned model defaults for a supported harness."""
-
+def _harness_spec(name: str) -> HarnessSpec:
     try:
-        spec = _HARNESS_SPECS[name]
+        return _HARNESS_SPECS[name]
     except KeyError as error:
         raise LoopError(
             f"Unknown harness {name!r}; choose either 'opencode' or 'copilot'."
         ) from error
+
+
+def default_harness_settings(name: str) -> HarnessSettings:
+    """Return the pinned model defaults for a supported harness."""
+
+    spec = _harness_spec(name)
     return HarnessSettings(
         model=spec.model,
         model_variant=spec.model_variant,
@@ -130,12 +134,7 @@ def default_harness_settings(name: str) -> HarnessSettings:
 def select_harness(name: str, settings: HarnessSettings | None = None) -> HarnessSpec:
     """Return the documented invocation with the selected model settings."""
 
-    try:
-        spec = _HARNESS_SPECS[name]
-    except KeyError as error:
-        raise LoopError(
-            f"Unknown harness {name!r}; choose either 'opencode' or 'copilot'."
-        ) from error
+    spec = _harness_spec(name)
     selected = settings or default_harness_settings(name)
     return HarnessSpec(
         name=spec.name,

@@ -390,8 +390,7 @@ def run(options: Options) -> None:
         assert_checkout(checkout)
         records = RunRecords.create(
             checkout.root,
-            options.records_dir,
-            options.retention_days,
+            options.records,
         )
         github = GitHub(checkout.root)
         repository = github.resolve_repository()
@@ -421,9 +420,9 @@ def run(options: Options) -> None:
             "configuration_file": (
                 str(options.config_file) if options.config_file is not None else None
             ),
-            "records_directory": str(records.state_dir),
-            "retention_days": options.retention_days,
-            "keep_records_forever": options.retention_days is None,
+            "records_directory": str(records.records_dir),
+            "retention_days": options.records.retention_days,
+            "keep_records_forever": options.records.retention_days is None,
             **harness.metadata(),
             "login": login,
             "started_at": records.started_at.isoformat(),

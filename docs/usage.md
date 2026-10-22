@@ -76,10 +76,11 @@ retention_days = 7
 Supported configuration keys are `execution.harness`, positive integer
 `execution.max_attempts`, `execution.harnesses.opencode.model` and `.variant`,
 `execution.harnesses.copilot.model` and `.reasoning_effort`, and the `records`
-keys shown above. Unknown keys, wrong types, invalid values, and malformed TOML
-are errors before the runner claims a ticket or invokes a harness. Attempts must
-be from 1 through 999,999,999. Retention days may be from 0 through 999,999,999;
-zero expires every unmarked prior run at the next startup.
+keys shown above. Copilot reasoning effort accepts `none`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, or `max`. Unknown keys, wrong types, invalid values,
+and malformed TOML are errors before the runner claims a ticket or invokes a
+harness. Attempts must be from 1 through 999,999,999. Retention days may be from
+0 through 999,999,999; zero expires every unmarked prior run at the next startup.
 
 The corresponding one-run CLI overrides are `--harness`, `--max-iterations`,
 `--opencode-model`, `--opencode-variant`, `--copilot-model`,
@@ -162,6 +163,7 @@ Official references for these contracts:
 - [OpenCode V2 models](https://opencode.ai/v2/docs/models/)
 - [OpenCode V2 Copilot provider](https://opencode.ai/v2/docs/providers/)
 - [OpenCode V2 permissions](https://opencode.ai/v2/docs/permissions/)
+- [Copilot CLI command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
 - [Copilot CLI programmatic reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference)
 - [Copilot CLI skill setup](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills)
 - [Supported Copilot models](https://docs.github.com/en/copilot/reference/ai-models/supported-models)

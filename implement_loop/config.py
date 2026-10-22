@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from .harness import HarnessSettings, default_harness_settings
+from .records import RunRecordSettings
 
 _POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]{0,8}$")
 _NONNEGATIVE_INTEGER = re.compile(r"^(0|[1-9][0-9]{0,8})$")
+_COPILOT_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 _MAX_INTEGER = 999_999_999
 _DEFAULT_MAX_ITERATIONS = 5
 _DEFAULT_RETENTION_DAYS = 7
@@ -29,13 +31,18 @@ class Options:
     harness: str
     opencode: HarnessSettings
     copilot: HarnessSettings
-    records_dir: Path
-    retention_days: int | None
+    records: RunRecordSettings
     config_file: Path | None
 
 
 class _ConfigurationError(ValueError):
     """A user configuration cannot be applied safely."""
+
+
+@dataclass(frozen=True)
+class _RecordPreferences:
+    directory: Path | None
+    retention_days: int | None
 
 
 @dataclass(frozen=True)
@@ -46,8 +53,7 @@ class _Preferences:
     max_iterations: int
     opencode: HarnessSettings
     copilot: HarnessSettings
-    records_dir: Path | None
-    retention_days: int | None
+    records: _RecordPreferences
 
 
 def _positive_integer(value: str) -> int:
@@ -65,6 +71,13 @@ def _nonnegative_integer(value: str) -> int:
 def _nonempty_setting(value: str) -> str:
     if not value or value.isspace() or any(character.isspace() for character in value):
         raise argparse.ArgumentTypeError("must be a non-empty value without whitespace")
+    return value
+
+
+def _reasoning_effort_argument(value: str) -> str:
+    if value not in _COPILOT_REASONING_EFFORTS:
+        choices = ", ".join(_COPILOT_REASONING_EFFORTS)
+        raise argparse.ArgumentTypeError(f"reasoning effort must be one of: {choices}")
     return value
 
 
@@ -168,6 +181,14 @@ def _config_setting_string(value: Any, context: str) -> str:
     return value
 
 
+def _config_reasoning_effort(value: Any, context: str) -> str:
+    effort = _config_setting_string(value, context)
+    if effort not in _COPILOT_REASONING_EFFORTS:
+        choices = ", ".join(_COPILOT_REASONING_EFFORTS)
+        raise _ConfigurationError(f"{context} must be one of: {choices}.")
+    return effort
+
+
 def _config_integer(value: Any, context: str, *, allow_zero: bool) -> int:
     minimum = 0 if allow_zero else 1
     if type(value) is not int or not minimum <= value <= _MAX_INTEGER:
@@ -210,7 +231,7 @@ def _apply_harness_table(
         else settings.model
     )
     reasoning_effort = (
-        _config_setting_string(
+        _config_reasoning_effort(
             table["reasoning_effort"],
             f"execution.harnesses.{name}.reasoning_effort",
         )
@@ -265,22 +286,27 @@ def _apply_config(document: dict[str, Any], preferences: _Preferences) -> _Prefe
         {"directory", "retention_days", "keep_forever"},
         "records",
     )
-    records_dir = preferences.records_dir
-    retention_days = preferences.retention_days
+    record_preferences = preferences.records
     if "directory" in records:
-        records_dir = _config_path(records["directory"], "records.directory")
+        record_preferences = replace(
+            record_preferences,
+            directory=_config_path(records["directory"], "records.directory"),
+        )
     if "retention_days" in records:
-        retention_days = _config_integer(
-            records["retention_days"], "records.retention_days", allow_zero=True
+        record_preferences = replace(
+            record_preferences,
+            retention_days=_config_integer(
+                records["retention_days"], "records.retention_days", allow_zero=True
+            ),
         )
     if "keep_forever" in records:
         keep_forever = records["keep_forever"]
         if type(keep_forever) is not bool:
             raise _ConfigurationError("records.keep_forever must be true or false.")
         if keep_forever:
-            retention_days = None
+            record_preferences = replace(record_preferences, retention_days=None)
 
-    return replace(preferences, records_dir=records_dir, retention_days=retention_days)
+    return replace(preferences, records=record_preferences)
 
 
 def _default_preferences() -> _Preferences:
@@ -289,8 +315,7 @@ def _default_preferences() -> _Preferences:
         max_iterations=_DEFAULT_MAX_ITERATIONS,
         opencode=default_harness_settings("opencode"),
         copilot=default_harness_settings("copilot"),
-        records_dir=None,
-        retention_days=_DEFAULT_RETENTION_DAYS,
+        records=_RecordPreferences(directory=None, retention_days=_DEFAULT_RETENTION_DAYS),
     )
 
 
@@ -356,7 +381,7 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
     parser.add_argument(
         "--copilot-reasoning-effort",
         metavar="EFFORT",
-        type=_nonempty_setting,
+        type=_reasoning_effort_argument,
         help="Copilot reasoning effort (default: max)",
     )
     parser.add_argument(
@@ -413,17 +438,21 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
             )
 
         if parsed.records_dir is not None:
-            records_dir = _resolve_path(parsed.records_dir, "--records-dir")
-        elif preferences.records_dir is not None:
-            records_dir = preferences.records_dir
+            records_directory = _resolve_path(parsed.records_dir, "--records-dir")
+        elif preferences.records.directory is not None:
+            records_directory = preferences.records.directory
         else:
-            records_dir = _default_records_dir()
+            records_directory = _default_records_dir()
 
-        retention_days = preferences.retention_days
+        retention_days = preferences.records.retention_days
         if parsed.retention_days is not None:
             retention_days = parsed.retention_days
         elif parsed.keep_records_forever:
             retention_days = None
+        records = RunRecordSettings(
+            directory=records_directory,
+            retention_days=retention_days,
+        )
     except _ConfigurationError as error:
         parser.error(str(error))
 
@@ -433,7 +462,6 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
         harness=preferences.harness,
         opencode=preferences.opencode,
         copilot=preferences.copilot,
-        records_dir=records_dir,
-        retention_days=retention_days,
+        records=records,
         config_file=config_file,
     )

@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -659,10 +660,20 @@ class LoopTests(unittest.TestCase):
                 None,
                 b"execution.max_attempts must be a positive integer",
             ),
+            (
+                "invalid-reasoning-effort",
+                '[execution]\nharness = "copilot"\n\n'
+                '[execution.harnesses.copilot]\nreasoning_effort = "bogus"\n',
+                None,
+                b"reasoning_effort must be one of",
+            ),
             ("missing-explicit", None, "missing.toml", b"Cannot read explicitly selected"),
         )
         for name, contents, explicit_path, diagnostic in cases:
             with self.subTest(name=name):
+                state_dir = self.home / ".local/state/implement-loop"
+                if state_dir.exists():
+                    shutil.rmtree(state_dir)
                 self.state = self.default_state()
                 self.save_state()
                 config_home = self.home / f"config-{name}"
@@ -677,7 +688,6 @@ class LoopTests(unittest.TestCase):
                         config_file.write_text(contents)
                 else:
                     args = ("--config-file", str(config_home / explicit_path))
-                state_dir = self.home / ".local/state/implement-loop"
 
                 result, runs = self.run_loop(
                     *args,
@@ -694,6 +704,23 @@ class LoopTests(unittest.TestCase):
                 self.assertEqual(runs, [])
                 self.assertFalse(state_dir.exists())
                 self.assertFalse((self.repo / ".git/implement-loop.lock").exists())
+
+    def test_invalid_cli_reasoning_effort_is_rejected_before_side_effects(self) -> None:
+        result, runs = self.run_loop(
+            "--harness",
+            "copilot",
+            "--copilot-reasoning-effort",
+            "bogus",
+            harness=None,
+        )
+
+        self.assertEqual(result.returncode, 2, result.stderr.decode())
+        self.assertIn(b"reasoning effort must be one of", result.stderr)
+        self.assertEqual(self.load_state()["events"], [])
+        self.assertEqual(self.load_state()["copilot_calls"], [])
+        self.assertEqual(runs, [])
+        self.assertFalse((self.home / ".local/state/implement-loop").exists())
+        self.assertFalse((self.repo / ".git/implement-loop.lock").exists())
 
     def test_empty_configuration_and_record_paths_are_rejected_early(self) -> None:
         for option in ("--config-file", "--records-dir"):
@@ -1659,6 +1686,45 @@ class LoopTests(unittest.TestCase):
             self.assertTrue((preserved / "agent.log").is_file())
         self.assertTrue(link.is_symlink())
         self.assertEqual((target / "agent.log").read_text(), "symlink target\n")
+
+    def test_retention_expires_strictly_after_the_configured_boundary(self) -> None:
+        retention_seconds = 7 * 24 * 60 * 60
+        boundary_start = int(time.time()) - retention_seconds
+        state_dir = self.home / ".local/state/implement-loop"
+        state_dir.mkdir(parents=True)
+        stamp = datetime.fromtimestamp(boundary_start, UTC).strftime("%Y%m%dT%H%M%SZ")
+        boundary_run = state_dir / f"run-{stamp}-ABC123"
+        boundary_run.mkdir()
+        (boundary_run / "agent.log").write_text("recent activity must not affect age\n")
+        support = self.home / "time-support"
+        support.mkdir()
+        (support / "sitecustomize.py").write_text(
+            "import os\n"
+            "import time\n"
+            "time.time = lambda: float(os.environ['IMPLEMENT_LOOP_TEST_FIXED_TIME'])\n"
+        )
+        self.state["tickets"]["2"]["assignees"] = [{"login": "tester"}]
+        self.save_state()
+
+        at_boundary, _ = self.run_loop(
+            extra_env={
+                "PYTHONPATH": str(support),
+                "IMPLEMENT_LOOP_TEST_FIXED_TIME": str(boundary_start + retention_seconds),
+            }
+        )
+
+        self.assertEqual(at_boundary.returncode, 0, at_boundary.stderr.decode())
+        self.assertTrue(boundary_run.is_dir())
+
+        just_expired, _ = self.run_loop(
+            extra_env={
+                "PYTHONPATH": str(support),
+                "IMPLEMENT_LOOP_TEST_FIXED_TIME": str(boundary_start + retention_seconds + 0.5),
+            }
+        )
+
+        self.assertEqual(just_expired.returncode, 0, just_expired.stderr.decode())
+        self.assertFalse(boundary_run.exists())
 
     def test_retention_removal_failure_warns_and_does_not_block_run(self) -> None:
         state_dir = self.home / ".local/state/implement-loop"
