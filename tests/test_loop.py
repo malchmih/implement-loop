@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import os
 import pty
+import resource
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -139,10 +142,13 @@ if Path(sys.argv[0]).name == "copilot":
                 result["validation"] = "failed"
             Path(result_path).write_text(json.dumps(result))
 
-    output = state.get(
-        "agent_output",
-        'IMPLEMENT_LOOP_COMPLETE {"issue":2,"status":"completed",'
-        '"acceptance_criteria":"passed","validation":"passed"}',
+    output = os.environ.get(
+        "IMPLEMENT_LOOP_TEST_OUTPUT",
+        state.get(
+            "agent_output",
+            'IMPLEMENT_LOOP_COMPLETE {"issue":2,"status":"completed",'
+            '"acceptance_criteria":"passed","validation":"passed"}',
+        ),
     )
     sys.stdout.write("Agent output\n" + output + "\n")
     sys.exit(int(state.get("agent_exit", 0)))
@@ -337,6 +343,7 @@ class LoopTests(unittest.TestCase):
         *args: str,
         extra_env: dict[str, str] | None = None,
         cwd: Path | None = None,
+        preexec_fn: Callable[[], None] | None = None,
     ) -> tuple[subprocess.CompletedProcess[bytes], list[Path]]:
         env = dict(self.env)
         if extra_env:
@@ -350,6 +357,7 @@ class LoopTests(unittest.TestCase):
             env=env,
             capture_output=True,
             timeout=30,
+            preexec_fn=preexec_fn,
         )
         runs = (
             sorted(path for path in state_dir.glob("run-*") if path not in existing_runs)
@@ -518,6 +526,29 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
         attempt.chmod(0o700)
+
+    @unittest.skipUnless(hasattr(resource, "RLIMIT_FSIZE"), "requires POSIX file-size limits")
+    def test_agent_log_write_failure_prevents_closure(self) -> None:
+        def limit_file_size() -> None:
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (8192, 8192))
+
+        result, runs = self.run_loop(
+            "--max-iterations",
+            "1",
+            extra_env={"IMPLEMENT_LOOP_TEST_OUTPUT": "x" * 20_000},
+            preexec_fn=limit_file_size,
+        )
+
+        state = self.load_state()
+        attempt = runs[-1] / "attempt-1-ticket-2"
+        process = json.loads((attempt / "process.json").read_text())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"Unable to persist the complete Copilot output log", result.stderr)
+        self.assertFalse(process["log_persisted"])
+        self.assertLessEqual((attempt / "agent.log").stat().st_size, 8192)
+        self.assertEqual(state["tickets"]["2"]["state"], "open")
+        self.assertEqual([event[0] for event in state["events"]], ["assign"])
 
     def test_queue_skips_blocked_and_assigned_children_and_ignores_labels(self) -> None:
         self.state["tickets"]["2"]["issue_dependencies_summary"]["blocked_by"] = 1
