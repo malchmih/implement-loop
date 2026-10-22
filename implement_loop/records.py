@@ -20,14 +20,6 @@ _RUN_SUFFIX_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst
 _RETENTION_SECONDS = 7 * 24 * 60 * 60
 
 
-def _within(path: Path, directory: Path) -> bool:
-    try:
-        path.relative_to(directory)
-        return True
-    except ValueError:
-        return False
-
-
 class RunRecords:
     """A private run directory containing context, prompts, and process evidence."""
 
@@ -50,7 +42,7 @@ class RunRecords:
 
         state_dir = (state_home / "implement-loop").resolve()
         repository_root = target_root.resolve()
-        if _within(state_dir, repository_root):
+        if state_dir.is_relative_to(repository_root):
             raise LoopError(
                 "The run-record location is inside the target checkout. Choose an "
                 "external XDG_STATE_HOME so results and diagnostics do not dirty the checkout."
@@ -108,7 +100,7 @@ class RunRecords:
 
     def write_bytes(self, path: Path, value: bytes, *, exclusive: bool = False) -> None:
         resolved_path = path.resolve(strict=False)
-        if not _within(resolved_path, self.run_dir.resolve()):
+        if not resolved_path.is_relative_to(self.run_dir.resolve()):
             raise LoopError(f"Refusing to write a run record outside {self.run_dir}.")
         flags = os.O_WRONLY | os.O_CREAT
         flags |= os.O_EXCL if exclusive else os.O_TRUNC

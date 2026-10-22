@@ -28,14 +28,6 @@ from .records import RunRecords
 _MAX_PROMPT_BYTES = 100_000
 
 
-def _inside(path: Path, directory: Path) -> bool:
-    try:
-        path.relative_to(directory)
-        return True
-    except ValueError:
-        return False
-
-
 def _require_command(name: str) -> None:
     if shutil.which(name) is None:
         raise LoopError(f"Required executable not found on PATH: {name}")
@@ -46,7 +38,7 @@ def _new_result_destination(target_root: Path, attempt_id: str) -> tuple[Path, P
         directory = Path(tempfile.mkdtemp(prefix=f"implement-loop-result-{attempt_id}-")).resolve()
     except OSError as error:
         raise LoopError(f"Cannot create a private temporary result directory: {error}") from error
-    if _inside(directory, target_root.resolve()):
+    if directory.is_relative_to(target_root.resolve()):
         try:
             shutil.rmtree(directory)
         except OSError:
@@ -95,9 +87,11 @@ def _build_prompt(
         f"{branch}. Avoid destructive history changes. Do not push, open or "
         "merge a PR, or write to GitHub issues; the wrapper owns assignment, "
         "comments, and closure. Let the external /implement skill perform the "
-        "implementation, required validation, review, and commit. Wait for "
-        "ticket-scoped delegated work before reporting completion. If blocked, "
-        "or if required validation fails, do not report success.\n\n"
+        "implementation, required validation, review, and commit. Any delegated "
+        "workers must follow these same scope and execution restrictions. Wait "
+        "for all ticket-scoped delegated work to finish and incorporate its "
+        "results before reporting completion. If blocked or if required validation "
+        "fails, do not report success.\n\n"
         "After all work, review, validation, and the required local commit have "
         "succeeded, write one JSON object to this initially absent file:\n"
         f"{result_path}\n"
@@ -203,71 +197,71 @@ def _record_result(
 ) -> tuple[JsonObject | None, str | None]:
     evidence_path = attempt_dir / "completion-evidence.json"
     if not os.path.lexists(result_path):
-        records.write_json(
+        return _reject_result(
+            records,
             evidence_path,
-            {"status": "missing", "issue": ticket_number, "attempt_id": attempt_id},
-            exclusive=True,
+            ticket_number,
+            attempt_id,
+            "missing",
+            "Copilot did not write the required per-attempt result file.",
         )
-        return None, "Copilot did not write the required per-attempt result file."
 
     try:
         details = result_path.lstat()
     except OSError as error:
-        records.write_json(
+        return _reject_result(
+            records,
             evidence_path,
-            {
-                "status": "unreadable",
-                "issue": ticket_number,
-                "attempt_id": attempt_id,
-                "error": str(error),
-            },
-            exclusive=True,
+            ticket_number,
+            attempt_id,
+            "unreadable",
+            "The per-attempt result file could not be read.",
+            {"error": str(error)},
         )
-        return None, "The per-attempt result file could not be read."
     if not stat.S_ISREG(details.st_mode):
-        records.write_json(
+        return _reject_result(
+            records,
             evidence_path,
-            {
-                "status": "wrong_file_type",
-                "issue": ticket_number,
-                "attempt_id": attempt_id,
-            },
-            exclusive=True,
+            ticket_number,
+            attempt_id,
+            "wrong_file_type",
+            "The per-attempt result destination is not a regular file.",
         )
-        return None, "The per-attempt result destination is not a regular file."
 
     try:
         raw_result = result_path.read_bytes()
     except OSError as error:
-        records.write_json(
+        return _reject_result(
+            records,
             evidence_path,
-            {
-                "status": "unreadable",
-                "issue": ticket_number,
-                "attempt_id": attempt_id,
-                "error": str(error),
-            },
-            exclusive=True,
+            ticket_number,
+            attempt_id,
+            "unreadable",
+            "The per-attempt result file could not be read.",
+            {"error": str(error)},
         )
-        return None, "The per-attempt result file could not be read."
     records.write_bytes(attempt_dir / "completion-result.json", raw_result, exclusive=True)
 
     try:
         parsed = json.loads(raw_result.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
-        records.write_json(
+        return _reject_result(
+            records,
             evidence_path,
-            {"status": "malformed_json", "issue": ticket_number, "attempt_id": attempt_id},
-            exclusive=True,
+            ticket_number,
+            attempt_id,
+            "malformed_json",
+            "The per-attempt result file is not valid UTF-8 JSON.",
         )
-        return None, "The per-attempt result file is not valid UTF-8 JSON."
     if not isinstance(parsed, dict):
-        records.write_json(
+        return _reject_result(
+            records,
             evidence_path,
-            {"status": "wrong_json_type", "issue": ticket_number, "attempt_id": attempt_id},
-            exclusive=True,
+            ticket_number,
+            attempt_id,
+            "wrong_json_type",
+            "The per-attempt result must be a JSON object.",
         )
-        return None, "The per-attempt result must be a JSON object."
 
     issue = parsed.get("issue")
     if type(issue) is not int or issue != ticket_number:
@@ -285,21 +279,43 @@ def _record_result(
     else:
         validation_error = None
 
-    status = "valid" if validation_error is None else "rejected"
+    if validation_error is not None:
+        return _reject_result(
+            records,
+            evidence_path,
+            ticket_number,
+            attempt_id,
+            "rejected",
+            validation_error,
+            {"error": validation_error},
+        )
     records.write_json(
         evidence_path,
-        {
-            "status": status,
-            "issue": ticket_number,
-            "attempt_id": attempt_id,
-            "error": validation_error,
-        },
+        {"status": "valid", "issue": ticket_number, "attempt_id": attempt_id, "error": None},
         exclusive=True,
     )
-    if validation_error is not None:
-        return None, validation_error
     records.write_json(attempt_dir / "completion.json", parsed, exclusive=True)
     return parsed, None
+
+
+def _reject_result(
+    records: RunRecords,
+    evidence_path: Path,
+    ticket_number: int,
+    attempt_id: str,
+    status: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+) -> tuple[None, str]:
+    evidence: dict[str, Any] = {
+        "status": status,
+        "issue": ticket_number,
+        "attempt_id": attempt_id,
+    }
+    if details:
+        evidence.update(details)
+    records.write_json(evidence_path, evidence, exclusive=True)
+    return None, message
 
 
 def _process_failure(outcome: ProcessOutcome) -> list[str]:
@@ -329,7 +345,7 @@ def _closure_comment(
         "valid per-attempt result evidence, an unchanged branch, a clean checkout, a new "
         "descendant commit, an open parent spec, and the ticket's open/unblocked/direct-child "
         f"status with exclusive assignment for ticket #{ticket_number} under spec #{spec_number}. "
-        "No PR was opened and nothing was pushed."
+        "The wrapper did not push or open a PR."
     )
 
 

@@ -157,16 +157,27 @@ class GitHub:
             raise LoopError("GitHub returned an empty authenticated user login.")
         return login
 
-    def get_spec(self, repository: Repository, number: int) -> JsonObject:
+    def _get_issue(
+        self,
+        repository: Repository,
+        number: int,
+        description: str,
+    ) -> JsonObject:
         value = self.api_json(repository, f"{repository.api_prefix}/issues/{number}")
         if not isinstance(value, dict):
-            raise LoopError(f"Spec #{number} is missing native issue metadata.")
+            raise LoopError(f"{description} #{number} is missing native issue metadata.")
         if type(value.get("number")) is not int or value["number"] != number:
-            raise LoopError(f"GitHub returned malformed metadata for spec #{number}.")
-        self._validate_issue_identity(value, repository, f"spec #{number}")
+            raise LoopError(
+                f"GitHub returned malformed metadata for {description.lower()} #{number}."
+            )
+        self._validate_issue_identity(value, repository, f"{description.lower()} #{number}")
+        self._validate_body(value, f"{description.lower()} #{number}")
+        return value
+
+    def get_spec(self, repository: Repository, number: int) -> JsonObject:
+        value = self._get_issue(repository, number, "Spec")
         if value.get("state") != "open":
             raise LoopError("The spec must be an open GitHub issue, not a pull request.")
-        self._validate_body(value, f"spec #{number}")
         return value
 
     def get_children(
@@ -209,17 +220,11 @@ class GitHub:
         number: int,
         repository_url: str,
     ) -> JsonObject:
-        value = self.api_json(repository, f"{repository.api_prefix}/issues/{number}")
-        if not isinstance(value, dict):
-            raise LoopError(f"Ticket #{number} is missing native issue metadata.")
-        if type(value.get("number")) is not int or value["number"] != number:
-            raise LoopError(f"GitHub returned malformed metadata for ticket #{number}.")
-        self._validate_issue_identity(value, repository, f"ticket #{number}")
+        value = self._get_issue(repository, number, "Ticket")
         if value.get("repository_url") != repository_url:
             raise LoopError(f"Ticket #{number} belongs to a different repository.")
         if value.get("state") not in ("open", "closed"):
             raise LoopError(f"Ticket #{number} is missing a valid issue state.")
-        self._validate_body(value, f"ticket #{number}")
 
         assignees = value.get("assignees")
         if not isinstance(assignees, list):

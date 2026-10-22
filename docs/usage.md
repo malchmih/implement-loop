@@ -47,7 +47,9 @@ exclusive ownership, open state, blockers, and direct-child membership. It
 supplies the complete parent/ticket bodies and comments as requirements context.
 The parent is context, not permission to implement sibling tickets. Context
 larger than the safe 100 KB Copilot prompt budget is rejected before assignment;
-it is never silently truncated.
+it is never silently truncated. Any delegated workers must follow the same
+ticket scope and execution restrictions; the implementing agent must wait for
+them and incorporate their results before reporting completion.
 
 ## Completion and issue lifecycle
 
