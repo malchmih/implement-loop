@@ -17,6 +17,15 @@ HarnessName = Literal["opencode", "copilot"]
 
 
 @dataclass(frozen=True)
+class HarnessSettings:
+    """User-selected model and reasoning values for one harness."""
+
+    model: str
+    model_variant: str | None = None
+    reasoning_effort: str | None = None
+
+
+@dataclass(frozen=True)
 class HarnessSpec:
     """Pinned invocation details for one supported harness."""
 
@@ -102,15 +111,41 @@ _HARNESS_SPECS: dict[str, HarnessSpec] = {
 }
 
 
-def select_harness(name: str) -> HarnessSpec:
-    """Return the fixed, documented invocation for a selected harness."""
+def default_harness_settings(name: str) -> HarnessSettings:
+    """Return the pinned model defaults for a supported harness."""
 
     try:
-        return _HARNESS_SPECS[name]
+        spec = _HARNESS_SPECS[name]
     except KeyError as error:
         raise LoopError(
             f"Unknown harness {name!r}; choose either 'opencode' or 'copilot'."
         ) from error
+    return HarnessSettings(
+        model=spec.model,
+        model_variant=spec.model_variant,
+        reasoning_effort=spec.reasoning_effort,
+    )
+
+
+def select_harness(name: str, settings: HarnessSettings | None = None) -> HarnessSpec:
+    """Return the documented invocation with the selected model settings."""
+
+    try:
+        spec = _HARNESS_SPECS[name]
+    except KeyError as error:
+        raise LoopError(
+            f"Unknown harness {name!r}; choose either 'opencode' or 'copilot'."
+        ) from error
+    selected = settings or default_harness_settings(name)
+    return HarnessSpec(
+        name=spec.name,
+        executable=spec.executable,
+        display_name=spec.display_name,
+        model=selected.model,
+        model_variant=selected.model_variant,
+        reasoning_effort=selected.reasoning_effort,
+        skill_reference=spec.skill_reference,
+    )
 
 
 @dataclass(frozen=True)

@@ -12,7 +12,9 @@ cd /path/to/target-repository
 ```
 
 The default limit is five harness invocations. Override it with
-`--max-iterations N`. Only the selected harness CLI is required. See
+`--max-iterations N`. An optional user TOML file and explicit flags can also
+select harness/model preferences and private record retention. Only the selected
+harness CLI is required. See
 [usage and recovery](docs/usage.md) for prerequisites, supported harness
 capabilities, queue rules, completion checks, records, and failure handling. See
 [development checks](docs/development.md) for contributor setup.

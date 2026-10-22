@@ -28,6 +28,9 @@ already on `PATH`:
 /path/to/implement-loop/implement-loop 123
 /path/to/implement-loop/implement-loop 123 --harness copilot
 /path/to/implement-loop/implement-loop 123 --max-iterations 10
+/path/to/implement-loop/implement-loop 123 --config-file ./experiment.toml
+/path/to/implement-loop/implement-loop 123 --copilot-model gpt-6-luna \
+  --copilot-reasoning-effort high
 ```
 
 OpenCode is the default. `--harness` accepts only `opencode` or `copilot`; an
@@ -36,6 +39,64 @@ of the selected harness, and `--max-iterations` must be a positive integer.
 `./implement-loop --help` is side-effect free. The command uses the current
 checkout and its configured GitHub host. A conflicting `GH_REPO` override is
 rejected. A matching override is allowed.
+
+## User configuration
+
+Configuration is optional. By default the command looks for
+`${XDG_CONFIG_HOME:-$HOME/.config}/implement-loop/config.toml`; a non-empty
+`XDG_CONFIG_HOME` must be an absolute path. `--config-file PATH` selects a
+different file instead of discovering the normal one. If explicitly selected,
+the file must exist and be readable. The runner never loads configuration from
+the target checkout.
+
+Settings are merged in this order: built-in defaults, the selected user TOML
+file, then options explicitly supplied on the command line. Omitted CLI options
+do not replace values from the file. For example:
+
+```toml
+[execution]
+harness = "opencode"
+max_attempts = 5
+
+[execution.harnesses.opencode]
+model = "github-copilot/gpt-6-luna"
+variant = "max"
+
+[execution.harnesses.copilot]
+model = "gpt-6-luna"
+reasoning_effort = "max"
+
+[records]
+directory = "~/.local/state/implement-loop"
+retention_days = 7
+# Set to true to disable expiry; it takes precedence over retention_days.
+# keep_forever = true
+```
+
+Supported configuration keys are `execution.harness`, positive integer
+`execution.max_attempts`, `execution.harnesses.opencode.model` and `.variant`,
+`execution.harnesses.copilot.model` and `.reasoning_effort`, and the `records`
+keys shown above. Unknown keys, wrong types, invalid values, and malformed TOML
+are errors before the runner claims a ticket or invokes a harness. Attempts must
+be from 1 through 999,999,999. Retention days may be from 0 through 999,999,999;
+zero expires every unmarked prior run at the next startup.
+
+The corresponding one-run CLI overrides are `--harness`, `--max-iterations`,
+`--opencode-model`, `--opencode-variant`, `--copilot-model`,
+`--copilot-reasoning-effort`, `--records-dir`, and either `--retention-days N`
+or `--keep-records-forever`. The two retention flags are mutually exclusive.
+An explicit `--retention-days` overrides a file's `keep_forever = true` choice.
+The harness model/reasoning values describe the root harness invocation only;
+configured agents or subagents may select their own models.
+
+`records.directory` and `--records-dir` name the exact directory that contains
+`run-*` folders. `~` is expanded and relative paths are resolved from the
+invocation's current directory. When neither is set, records use
+`${XDG_STATE_HOME:-$HOME/.local/state}/implement-loop`; a non-empty
+`XDG_STATE_HOME` must be absolute. Record directories are made private and
+locations inside or containing the target checkout, the home directory itself,
+and filesystem root are rejected so the runner cannot change shared directory
+permissions or scan a parent containing the checkout.
 
 The runner uses native same-repository direct child issues, in GitHub's returned
 order. It skips closed, blocked, or assigned tickets; assignments to the
@@ -145,15 +206,24 @@ agent attestation and wrapper checks. It does not claim a push, merge, or PR.
 ## Output and private records
 
 Harness output is streamed live and stored in private per-run records. Records
-are stored under `${XDG_STATE_HOME:-$HOME/.local/state}/implement-loop/`. They
+are stored in the configured records directory or, by default, under
+`${XDG_STATE_HOME:-$HOME/.local/state}/implement-loop/`. They
 include repository and user metadata, issue/comment snapshots, the full prompt,
 process outcome, raw and validated completion evidence, agent output, selected
-harness/model settings, and successful commit references. Files and directories
-are private. Startup cleanup removes only recognized, unmarked run directories
-older than seven days. Marked, symlinked, unrecognized, malformed, and legacy
-`copilot-ralph` data is preserved. Cleanup errors warn and do not block a run.
-This retention policy does not control harness-native sessions, logs, telemetry,
-or other harness-native storage.
+harness/model/reasoning settings, selected configuration-file path, retention
+policy, and successful commit references. This metadata describes the root
+harness selection, not the effective settings of every configured subagent.
+Files and directories are private. At startup, cleanup removes only identifiable
+loop-owned run directories whose encoded start time is older than the configured
+retention duration (seven days by default); recent file activity does not extend
+retention. Failed runs follow the same policy on a later startup. Marked runs
+(even with stale markers), symlinked directories, unrecognized entries, and
+legacy `copilot-ralph` data are preserved. Cleanup errors warn and do not block a
+run. `keep_forever = true` or `--keep-records-forever` disables expiry.
+
+This policy applies only to Implement Loop-owned records. It does not control
+harness-native sessions, logs, telemetry, or other harness-native storage; manage
+those separately using the harness's own settings.
 
 OpenCode's `--standalone` runs against a private server instead of the shared
 background service. It is **not** a sandbox, filesystem/network isolation, or a

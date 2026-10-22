@@ -17,7 +17,7 @@ from .errors import LoopError
 
 _RUN_NAME = re.compile(r"^run-([0-9]{8}T[0-9]{6}Z)-([A-Za-z0-9]{6})$")
 _RUN_SUFFIX_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-_RETENTION_SECONDS = 7 * 24 * 60 * 60
+_SECONDS_PER_DAY = 24 * 60 * 60
 
 
 class RunRecords:
@@ -30,22 +30,25 @@ class RunRecords:
         self.active_marker = run_dir / "active.pid"
 
     @classmethod
-    def create(cls, target_root: Path) -> RunRecords:
-        home = Path.home()
-        state_home_value = os.environ.get("XDG_STATE_HOME")
-        if state_home_value:
-            state_home = Path(state_home_value).expanduser()
-            if not state_home.is_absolute():
-                raise LoopError("XDG_STATE_HOME must be an absolute path.")
-        else:
-            state_home = home / ".local" / "state"
-
-        state_dir = (state_home / "implement-loop").resolve()
+    def create(
+        cls,
+        target_root: Path,
+        records_dir: Path,
+        retention_days: int | None,
+    ) -> RunRecords:
+        state_dir = records_dir.resolve()
         repository_root = target_root.resolve()
-        if state_dir.is_relative_to(repository_root):
+        home = Path.home().resolve()
+        if (
+            state_dir.is_relative_to(repository_root)
+            or repository_root.is_relative_to(state_dir)
+            or state_dir == Path("/")
+            or state_dir == home
+        ):
             raise LoopError(
-                "The run-record location is inside the target checkout. Choose an "
-                "external XDG_STATE_HOME so results and diagnostics do not dirty the checkout."
+                "The run-record location must be a dedicated directory outside the target "
+                "checkout, not an ancestor of it, the home directory, or filesystem root. "
+                "Choose an external --records-dir, records.directory, or XDG_STATE_HOME."
             )
 
         try:
@@ -80,7 +83,7 @@ class RunRecords:
             records.write_text(records.active_marker, f"{os.getpid()}\n", exclusive=True)
         except OSError as error:
             raise LoopError(f"Cannot create the active run marker: {error}") from error
-        records.prune_expired()
+        records.prune_expired(retention_days)
         return records
 
     def attempt_directory(self, attempt_number: int, ticket_number: int) -> Path:
@@ -113,8 +116,11 @@ class RunRecords:
         except OSError as error:
             raise LoopError(f"Cannot persist required run record {path}: {error}") from error
 
-    def prune_expired(self) -> None:
-        """Remove only old, unmarked run directories; cleanup never blocks a run."""
+    def prune_expired(self, retention_days: int | None) -> None:
+        """Remove only expired, unmarked run directories; cleanup never blocks a run."""
+
+        if retention_days is None:
+            return
 
         try:
             entries = list(os.scandir(self.state_dir))
@@ -122,7 +128,7 @@ class RunRecords:
             self._warn(f"Cannot scan run records at {self.state_dir}; skipping cleanup: {error}")
             return
 
-        cutoff = time.time() - _RETENTION_SECONDS
+        cutoff = int(time.time()) - retention_days * _SECONDS_PER_DAY
         for entry in entries:
             if not entry.name.startswith("run-") or entry.is_symlink():
                 continue

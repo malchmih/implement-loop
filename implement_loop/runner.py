@@ -379,7 +379,8 @@ def run(options: Options) -> None:
     os.umask(0o077)
     _require_command("git")
     _require_command("gh")
-    harness = select_harness(options.harness)
+    harness_settings = options.opencode if options.harness == "opencode" else options.copilot
+    harness = select_harness(options.harness, harness_settings)
     _require_command(harness.executable)
     checkout = discover_checkout(Path.cwd())
     lock = RepositoryLock(checkout.common_dir)
@@ -387,7 +388,11 @@ def run(options: Options) -> None:
     records: RunRecords | None = None
     try:
         assert_checkout(checkout)
-        records = RunRecords.create(checkout.root)
+        records = RunRecords.create(
+            checkout.root,
+            options.records_dir,
+            options.retention_days,
+        )
         github = GitHub(checkout.root)
         repository = github.resolve_repository()
         login = github.authenticated_login(repository)
@@ -413,6 +418,12 @@ def run(options: Options) -> None:
             "initial_head": checkout.initial_head,
             "spec": options.spec_number,
             "max_iterations": options.max_iterations,
+            "configuration_file": (
+                str(options.config_file) if options.config_file is not None else None
+            ),
+            "records_directory": str(records.state_dir),
+            "retention_days": options.retention_days,
+            "keep_records_forever": options.retention_days is None,
             **harness.metadata(),
             "login": login,
             "started_at": records.started_at.isoformat(),

@@ -174,7 +174,8 @@ if args[:2] == ["repo", "view"]:
     if not lock.is_file() or lock.read_text().strip() != str(os.getppid()):
         sys.exit("Missing implement-loop lock")
     state_home = Path(os.environ.get("XDG_STATE_HOME", home / ".local/state"))
-    markers = (state_home / "implement-loop").glob("run-*/active.pid")
+    records_dir = Path(state.get("records_dir", state_home / "implement-loop"))
+    markers = records_dir.glob("run-*/active.pid")
     if not any(path.read_text().strip() == str(os.getppid()) for path in markers):
         sys.exit("Missing live run marker")
     if "GH_REPO" in os.environ:
@@ -267,6 +268,8 @@ class LoopTests(unittest.TestCase):
         self.save_state()
         self.env = dict(os.environ, HOME=str(self.home))
         self.env.pop("GH_REPO", None)
+        self.env.pop("XDG_CONFIG_HOME", None)
+        self.env.pop("XDG_STATE_HOME", None)
         self.env.pop("NO_COLOR", None)
         self.env.pop("FORCE_COLOR", None)
         self.env["PATH"] = str(self.bin) + os.pathsep + os.environ["PATH"]
@@ -398,6 +401,12 @@ class LoopTests(unittest.TestCase):
         self.assertIn(b"implement-loop", result.stdout)
         self.assertIn(b"--max-iterations", result.stdout)
         self.assertIn(b"--harness", result.stdout)
+        self.assertIn(b"--config-file", result.stdout)
+        self.assertIn(b"--opencode-model", result.stdout)
+        self.assertIn(b"--copilot-reasoning-effort", result.stdout)
+        self.assertIn(b"--records-dir", result.stdout)
+        self.assertIn(b"--retention-days", result.stdout)
+        self.assertIn(b"--keep-records-forever", result.stdout)
         self.assertIn(b"opencode", result.stdout)
         self.assertIn(b"copilot", result.stdout)
         self.assertEqual(self.load_state()["events"], [])
@@ -443,8 +452,265 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(run_metadata["model"], "github-copilot/gpt-6-luna")
         self.assertEqual(run_metadata["model_variant"], "max")
         self.assertIsNone(run_metadata["reasoning_effort"])
+        self.assertIsNone(run_metadata["configuration_file"])
+        self.assertEqual(
+            run_metadata["records_directory"],
+            str((self.home / ".local/state/implement-loop").resolve()),
+        )
+        self.assertEqual(run_metadata["retention_days"], 7)
+        self.assertFalse(run_metadata["keep_records_forever"])
         self.assertTrue((attempt / "agent.log").is_file())
         self.assertIn("successful OpenCode exit", state["events"][1][2])
+
+    def test_project_configuration_is_not_loaded_automatically(self) -> None:
+        (self.repo / ".implement-loop.toml").write_text("[execution\nharness = 'copilot'\n")
+        self.git("add", ".implement-loop.toml")
+        self.git("commit", "--quiet", "-m", "Add unselected project config fixture")
+
+        result, _ = self.run_loop("--max-iterations", "1", harness=None)
+
+        state = self.load_state()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(len(state["opencode_calls"]), 1)
+        self.assertEqual(state["copilot_calls"], [])
+
+    def test_user_config_selects_harness_models_and_attempt_limit(self) -> None:
+        self.add_ticket(3)
+        self.save_state()
+        config_home = self.home / "custom-config"
+        config_file = config_home / "implement-loop/config.toml"
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text(
+            '[execution]\nharness = "copilot"\nmax_attempts = 1\n\n'
+            "[execution.harnesses.copilot]\n"
+            'model = "custom-copilot-model"\nreasoning_effort = "high"\n'
+        )
+
+        result, runs = self.run_loop(
+            harness=None,
+            extra_env={"XDG_CONFIG_HOME": str(config_home)},
+        )
+
+        state = self.load_state()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(len(state["copilot_calls"]), 1)
+        self.assertEqual(state["opencode_calls"], [])
+        self.assertEqual(
+            state["copilot_calls"][0]["args"][
+                state["copilot_calls"][0]["args"].index("--model") + 1
+            ],
+            "custom-copilot-model",
+        )
+        self.assertEqual(
+            state["copilot_calls"][0]["args"][
+                state["copilot_calls"][0]["args"].index("--reasoning-effort") + 1
+            ],
+            "high",
+        )
+        self.assertEqual(state["tickets"]["2"]["state"], "closed")
+        self.assertEqual(state["tickets"]["3"]["state"], "open")
+        self.assertEqual(len(runs), 1)
+
+    def test_conventional_user_config_path_is_discovered(self) -> None:
+        config_file = self.home / ".config/implement-loop/config.toml"
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text('[execution]\nharness = "copilot"\n')
+
+        result, runs = self.run_loop(harness=None)
+
+        state = self.load_state()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(len(state["copilot_calls"]), 1)
+        self.assertEqual(state["opencode_calls"], [])
+        metadata = json.loads((runs[0] / "run.json").read_text())
+        self.assertEqual(metadata["configuration_file"], str(config_file))
+
+    def test_user_config_overrides_opencode_model_and_variant(self) -> None:
+        config_home = self.home / "opencode-config"
+        config_file = config_home / "implement-loop/config.toml"
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text(
+            "[execution.harnesses.opencode]\n"
+            'model = "custom-provider/custom-model"\nvariant = "high"\n'
+        )
+
+        result, runs = self.run_loop(
+            "--max-iterations",
+            "1",
+            harness=None,
+            extra_env={"XDG_CONFIG_HOME": str(config_home)},
+        )
+
+        state = self.load_state()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(len(state["opencode_calls"]), 1)
+        args = state["opencode_calls"][0]["args"]
+        self.assertEqual(args[args.index("--model") + 1], "custom-provider/custom-model#high")
+        metadata = json.loads((runs[0] / "run.json").read_text())
+        self.assertEqual(metadata["model"], "custom-provider/custom-model")
+        self.assertEqual(metadata["model_variant"], "high")
+
+    def test_cli_model_and_reasoning_values_override_user_config(self) -> None:
+        config_home = self.home / "cli-model-config"
+        config_file = config_home / "implement-loop/config.toml"
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text(
+            '[execution]\nharness = "copilot"\n\n'
+            "[execution.harnesses.copilot]\n"
+            'model = "configured-model"\nreasoning_effort = "low"\n'
+        )
+
+        result, _ = self.run_loop(
+            "--max-iterations",
+            "1",
+            "--copilot-model",
+            "cli-selected-model",
+            "--copilot-reasoning-effort",
+            "high",
+            harness=None,
+            extra_env={"XDG_CONFIG_HOME": str(config_home)},
+        )
+
+        state = self.load_state()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        args = state["copilot_calls"][0]["args"]
+        self.assertEqual(args[args.index("--model") + 1], "cli-selected-model")
+        self.assertEqual(args[args.index("--reasoning-effort") + 1], "high")
+
+    def test_cli_opencode_model_and_variant_override_user_config(self) -> None:
+        config_home = self.home / "cli-opencode-config"
+        config_file = config_home / "implement-loop/config.toml"
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text(
+            "[execution.harnesses.opencode]\n"
+            'model = "configured-provider/configured-model"\nvariant = "low"\n'
+        )
+
+        result, _ = self.run_loop(
+            "--max-iterations",
+            "1",
+            "--opencode-model",
+            "cli-provider/cli-model",
+            "--opencode-variant",
+            "medium",
+            harness=None,
+            extra_env={"XDG_CONFIG_HOME": str(config_home)},
+        )
+
+        state = self.load_state()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        args = state["opencode_calls"][0]["args"]
+        self.assertEqual(args[args.index("--model") + 1], "cli-provider/cli-model#medium")
+
+    def test_explicit_config_replaces_discovery_and_cli_values_take_precedence(self) -> None:
+        self.add_ticket(3)
+        self.save_state()
+        config_home = self.home / "custom-config"
+        discovered_file = config_home / "implement-loop/config.toml"
+        discovered_file.parent.mkdir(parents=True)
+        discovered_file.write_text(
+            '[execution]\nharness = "copilot"\nmax_attempts = 5\n\n'
+            '[execution.harnesses.copilot]\nmodel = "discovered-model"\n'
+            'reasoning_effort = "low"\n'
+        )
+        explicit_file = self.home / "explicit.toml"
+        explicit_file.write_text(
+            '[execution]\nharness = "opencode"\nmax_attempts = 2\n\n'
+            '[execution.harnesses.copilot]\nmodel = "explicit-model"\n'
+            'reasoning_effort = "high"\n'
+        )
+
+        result, runs = self.run_loop(
+            "--config-file",
+            str(explicit_file),
+            "--harness",
+            "copilot",
+            "--max-iterations",
+            "1",
+            harness=None,
+            extra_env={"XDG_CONFIG_HOME": str(config_home)},
+        )
+
+        state = self.load_state()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(len(state["copilot_calls"]), 1)
+        self.assertEqual(state["opencode_calls"], [])
+        call_args = state["copilot_calls"][0]["args"]
+        self.assertEqual(call_args[call_args.index("--model") + 1], "explicit-model")
+        self.assertEqual(call_args[call_args.index("--reasoning-effort") + 1], "high")
+        self.assertEqual(state["tickets"]["3"]["state"], "open")
+        run_metadata = json.loads((runs[0] / "run.json").read_text())
+        self.assertEqual(run_metadata["configuration_file"], str(explicit_file.resolve()))
+
+    def test_invalid_configuration_fails_before_claiming_or_invoking_a_harness(self) -> None:
+        cases = (
+            ("malformed", "[execution\nharness = 'copilot'\n", None, b"Invalid TOML"),
+            ("invalid-encoding", b"\xff", None, b"not valid UTF-8"),
+            (
+                "unknown-key",
+                '[execution.harnesses.opencode]\nreasoning_effort = "max"\n',
+                None,
+                b"Unknown configuration key",
+            ),
+            (
+                "invalid-type",
+                "[execution]\nmax_attempts = true\n",
+                None,
+                b"execution.max_attempts must be a positive integer",
+            ),
+            ("missing-explicit", None, "missing.toml", b"Cannot read explicitly selected"),
+        )
+        for name, contents, explicit_path, diagnostic in cases:
+            with self.subTest(name=name):
+                self.state = self.default_state()
+                self.save_state()
+                config_home = self.home / f"config-{name}"
+                args: tuple[str, ...] = ()
+                if explicit_path is None:
+                    config_file = config_home / "implement-loop/config.toml"
+                    config_file.parent.mkdir(parents=True)
+                    assert contents is not None
+                    if isinstance(contents, bytes):
+                        config_file.write_bytes(contents)
+                    else:
+                        config_file.write_text(contents)
+                else:
+                    args = ("--config-file", str(config_home / explicit_path))
+                state_dir = self.home / ".local/state/implement-loop"
+
+                result, runs = self.run_loop(
+                    *args,
+                    harness=None,
+                    extra_env={"XDG_CONFIG_HOME": str(config_home)},
+                )
+
+                state = self.load_state()
+                self.assertEqual(result.returncode, 2, result.stderr.decode())
+                self.assertIn(diagnostic, result.stderr)
+                self.assertEqual(state["events"], [])
+                self.assertEqual(state["opencode_calls"], [])
+                self.assertEqual(state["copilot_calls"], [])
+                self.assertEqual(runs, [])
+                self.assertFalse(state_dir.exists())
+                self.assertFalse((self.repo / ".git/implement-loop.lock").exists())
+
+    def test_empty_configuration_and_record_paths_are_rejected_early(self) -> None:
+        for option in ("--config-file", "--records-dir"):
+            with self.subTest(option=option):
+                self.state = self.default_state()
+                self.save_state()
+
+                result, runs = self.run_loop(option, "", harness=None)
+
+                self.assertEqual(result.returncode, 2, result.stderr.decode())
+                self.assertIn(b"non-empty path", result.stderr)
+                self.assertEqual(self.load_state()["events"], [])
+                self.assertEqual(self.load_state()["opencode_calls"], [])
+                self.assertEqual(self.load_state()["copilot_calls"], [])
+                self.assertEqual(runs, [])
+                self.assertFalse((self.home / ".local/state/implement-loop").exists())
+                self.assertFalse((self.repo / ".git/implement-loop.lock").exists())
 
     def test_explicit_copilot_selection_preserves_native_skill_and_model(self) -> None:
         result, runs = self.run_loop("--max-iterations", "1", harness="copilot")
@@ -765,11 +1031,12 @@ class LoopTests(unittest.TestCase):
             self.add_ticket(number)
         self.save_state()
 
-        result, _ = self.run_loop()
+        result, _ = self.run_loop(harness=None)
 
         state = self.load_state()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(len(state["copilot_calls"]), 5)
+        self.assertEqual(len(state["opencode_calls"]), 5)
+        self.assertEqual(state["copilot_calls"], [])
         self.assertEqual(state["tickets"]["7"]["state"], "open")
         self.assertIn(b"Attempt limit reached after 5 invocation(s)", result.stdout)
 
@@ -1189,6 +1456,146 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(runs[0].parent.stat().st_mode), 0o700)
         self.assertFalse((self.home / ".local/state/implement-loop").exists())
 
+    def test_records_directory_cannot_contain_the_target_checkout(self) -> None:
+        result, runs = self.run_loop("--records-dir", str(self.home), harness=None)
+
+        state = self.load_state()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"must be a dedicated directory outside the target checkout", result.stderr)
+        self.assertEqual(state["events"], [])
+        self.assertEqual(state["opencode_calls"], [])
+        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(runs, [])
+        self.assertFalse((self.repo / ".git/implement-loop.lock").exists())
+
+    def test_configured_record_directory_and_retention_are_effective(self) -> None:
+        records_dir = self.home / "private-records"
+        records_dir.mkdir()
+
+        def old_run(age: timedelta, suffix: str) -> Path:
+            stamp = (datetime.now(UTC) - age).strftime("%Y%m%dT%H%M%SZ")
+            path = records_dir / f"run-{stamp}-{suffix}"
+            path.mkdir()
+            (path / "agent.log").write_text("recent file activity does not extend retention\n")
+            return path
+
+        retained = old_run(timedelta(days=8), "ABC123")
+        expired = old_run(timedelta(days=16), "DEF456")
+        config_home = self.home / "records-config"
+        config_file = config_home / "implement-loop/config.toml"
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text(f'[records]\ndirectory = "{records_dir}"\nretention_days = 14\n')
+        self.state["records_dir"] = str(records_dir)
+        self.state["tickets"]["2"]["assignees"] = [{"login": "tester"}]
+        self.save_state()
+
+        result, _ = self.run_loop(
+            harness=None,
+            extra_env={"XDG_CONFIG_HOME": str(config_home)},
+        )
+        runs = sorted(path for path in records_dir.glob("run-*") if (path / "run.json").is_file())
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0].parent, records_dir)
+        self.assertTrue(retained.is_dir())
+        self.assertFalse(expired.exists())
+        self.assertEqual(stat.S_IMODE(records_dir.stat().st_mode), 0o700)
+        metadata = json.loads((runs[0] / "run.json").read_text())
+        self.assertEqual(metadata["records_directory"], str(records_dir.resolve()))
+        self.assertEqual(metadata["retention_days"], 14)
+
+    def test_cli_record_directory_and_retention_override_user_configuration(self) -> None:
+        configured_dir = self.home / "configured-records"
+        cli_records_dir = self.home / "cli-records"
+        configured_dir.mkdir()
+        cli_records_dir.mkdir()
+
+        def old_run(directory: Path, age: timedelta, suffix: str) -> Path:
+            stamp = (datetime.now(UTC) - age).strftime("%Y%m%dT%H%M%SZ")
+            path = directory / f"run-{stamp}-{suffix}"
+            path.mkdir()
+            (path / "agent.log").write_text("old run\n")
+            return path
+
+        old_in_configured_dir = old_run(configured_dir, timedelta(days=20), "ABC123")
+        within_cli_retention = old_run(cli_records_dir, timedelta(days=8), "DEF456")
+        outside_cli_retention = old_run(cli_records_dir, timedelta(days=16), "GHI789")
+        config_home = self.home / "record-override-config"
+        config_file = config_home / "implement-loop/config.toml"
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text(f'[records]\ndirectory = "{configured_dir}"\nretention_days = 0\n')
+        self.state["records_dir"] = str(cli_records_dir)
+        self.state["tickets"]["2"]["assignees"] = [{"login": "tester"}]
+        self.save_state()
+
+        result, _ = self.run_loop(
+            "--records-dir",
+            str(cli_records_dir),
+            "--retention-days",
+            "14",
+            harness=None,
+            extra_env={"XDG_CONFIG_HOME": str(config_home)},
+        )
+        runs = sorted(
+            path for path in cli_records_dir.glob("run-*") if (path / "run.json").is_file()
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0].parent, cli_records_dir)
+        self.assertTrue(old_in_configured_dir.is_dir())
+        self.assertTrue(within_cli_retention.is_dir())
+        self.assertFalse(outside_cli_retention.exists())
+        metadata = json.loads((runs[0] / "run.json").read_text())
+        self.assertEqual(metadata["records_directory"], str(cli_records_dir.resolve()))
+        self.assertEqual(metadata["retention_days"], 14)
+
+    def test_keep_forever_disables_expiry_in_config_and_on_the_cli(self) -> None:
+        for source in ("config", "cli"):
+            with self.subTest(source=source):
+                self.state = self.default_state()
+                records_dir = self.home / f"keep-forever-{source}"
+                records_dir.mkdir()
+                stamp = (datetime.now(UTC) - timedelta(days=100)).strftime("%Y%m%dT%H%M%SZ")
+                expired = records_dir / f"run-{stamp}-ABC123"
+                expired.mkdir()
+                (expired / "agent.log").write_text("keep forever\n")
+                self.state["records_dir"] = str(records_dir)
+                self.state["tickets"]["2"]["assignees"] = [{"login": "tester"}]
+                self.save_state()
+
+                config_home = self.home / f"keep-config-{source}"
+                config_file = config_home / "implement-loop/config.toml"
+                config_file.parent.mkdir(parents=True)
+                configured_dir = records_dir if source == "config" else self.home / "unused-records"
+                config_file.write_text(
+                    "[records]\n"
+                    f'directory = "{configured_dir}"\n'
+                    "retention_days = 0\n" + ("keep_forever = true\n" if source == "config" else "")
+                )
+                args = (
+                    ("--records-dir", str(records_dir), "--keep-records-forever")
+                    if source == "cli"
+                    else ()
+                )
+
+                result, _ = self.run_loop(
+                    *args,
+                    harness=None,
+                    extra_env={"XDG_CONFIG_HOME": str(config_home)},
+                )
+                runs = sorted(
+                    path for path in records_dir.glob("run-*") if (path / "run.json").is_file()
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertTrue(expired.is_dir())
+                self.assertEqual(len(runs), 1)
+                metadata = json.loads((runs[0] / "run.json").read_text())
+                self.assertIsNone(metadata["retention_days"])
+                self.assertTrue(metadata["keep_records_forever"])
+
     def test_terminal_output_enables_color_when_no_color_is_unset(self) -> None:
         master, slave = pty.openpty()
         try:
@@ -1221,6 +1628,8 @@ class LoopTests(unittest.TestCase):
             return path
 
         expired = old_run(timedelta(days=8))
+        (expired / "run.json").write_text(json.dumps({"status": "failed"}))
+        (expired / "process.json").write_text(json.dumps({"exit_code": 1}))
         boundary = old_run(timedelta(days=7) - timedelta(minutes=1))
         recent = old_run(timedelta(days=6))
         marked = old_run(timedelta(days=9), "DEF456")
