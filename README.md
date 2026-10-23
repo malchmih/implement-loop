@@ -40,3 +40,10 @@ proof of semantic correctness.
 - [Configuration and private records](docs/configuration.md)
 - [Workflow and recovery](docs/usage.md)
 - [Development and testing](docs/development.md)
+- [Changelog](CHANGELOG.md)
+
+## License
+
+[Zero-Clause BSD (0BSD)](LICENSE). You may use, modify, and redistribute this
+software for any purpose, including commercially, without attribution or retaining
+the license notice. The software is provided "as is", without warranty.
