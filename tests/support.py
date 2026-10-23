@@ -367,7 +367,9 @@ event = {
 with Path(os.environ["IMPLEMENT_LOOP_TEST_ALERT_LOG"]).open("a") as log:
     log.write(json.dumps(event) + "\n")
 
-mode = os.environ.get(f"IMPLEMENT_LOOP_TEST_{tool_name.upper()}_MODE")
+mode = os.environ.get(
+    f"IMPLEMENT_LOOP_TEST_{tool_name.upper().replace('-', '_')}_MODE"
+)
 if mode in ("fail", "hang"):
     print("simulated alert stdout", flush=True)
     print("simulated alert stderr", file=sys.stderr, flush=True)
@@ -460,9 +462,21 @@ class LoopTestCase(TemporaryHomeTestCase):
         super().setUp()
         self.repo = self.home / "repo"
         self.repo.mkdir()
-        for tool in ("gh", "copilot", "opencode", "osascript", "afplay"):
+        for tool in (
+            "gh",
+            "copilot",
+            "opencode",
+            "osascript",
+            "afplay",
+            "notify-send",
+            "canberra-gtk-play",
+        ):
             path = self.bin / tool
-            path.write_text(FAKE_ALERT_TOOL if tool in ("osascript", "afplay") else FAKE_TOOL)
+            path.write_text(
+                FAKE_ALERT_TOOL
+                if tool in ("osascript", "afplay", "notify-send", "canberra-gtk-play")
+                else FAKE_TOOL
+            )
             path.chmod(0o700)
 
         self.state_path = self.home / "github-state.json"

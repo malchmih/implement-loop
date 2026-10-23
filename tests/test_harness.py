@@ -57,13 +57,15 @@ class HarnessTests(LoopTestCase):
     def test_copilot_terminal_output_is_live_before_harness_exit(self) -> None:
         self._assert_live_harness_output("copilot", terminal=True)
 
-    def _assert_signal_stops_run_without_alert(self, stop_signal: int) -> None:
+    def _assert_signal_stops_run_without_alert(
+        self, stop_signal: int, *, platform: str = "darwin"
+    ) -> None:
         ready_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         ready_listener.bind(("127.0.0.1", 0))
         ready_listener.listen()
         ready_listener.settimeout(LIVE_READY_TIMEOUT)
         env = dict(self.env)
-        env.update(self.platform_test_environment("darwin"))
+        env.update(self.platform_test_environment(platform))
         env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT"] = LIVE_OUTPUT_FRAGMENT.decode("ascii")
         env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"] = str(ready_listener.getsockname()[1])
         process: subprocess.Popen[bytes] | None = None
@@ -156,6 +158,12 @@ class HarnessTests(LoopTestCase):
 
     def test_termination_reports_existing_run_and_ticket_records_without_alert(self) -> None:
         self._assert_signal_stops_run_without_alert(signal.SIGTERM)
+
+    def test_linux_ctrl_c_reports_existing_records_without_alert(self) -> None:
+        self._assert_signal_stops_run_without_alert(signal.SIGINT, platform="linux")
+
+    def test_linux_termination_reports_existing_records_without_alert(self) -> None:
+        self._assert_signal_stops_run_without_alert(signal.SIGTERM, platform="linux")
 
     def test_transcript_marker_without_result_file_does_not_close_ticket(self) -> None:
         for harness, selected_calls, unselected_calls in (
