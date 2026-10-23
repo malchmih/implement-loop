@@ -48,8 +48,18 @@ def discover_checkout(cwd: Path) -> Checkout:
 
     root_text = _checked_git(cwd, "rev-parse", "--show-toplevel")
     root = Path(root_text).resolve()
-    branch = _checked_git(root, "symbolic-ref", "--quiet", "--short", "HEAD")
-    initial_head = _checked_git(root, "rev-parse", "--verify", "HEAD^{commit}")
+    try:
+        branch = _checked_git(root, "symbolic-ref", "--quiet", "--short", "HEAD")
+    except LoopError as error:
+        raise LoopError(
+            "The checkout must be on an attached branch; detached HEAD is not supported."
+        ) from error
+    try:
+        initial_head = _checked_git(root, "rev-parse", "--verify", "HEAD^{commit}")
+    except LoopError as error:
+        raise LoopError(
+            "The checkout must contain an existing commit; an unborn branch is not supported."
+        ) from error
     common_text = _checked_git(root, "rev-parse", "--git-common-dir")
     common_dir = Path(common_text)
     if not common_dir.is_absolute():

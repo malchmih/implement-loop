@@ -149,6 +149,13 @@ is never silently truncated. Delegated workers must follow the same ticket scope
 and execution restrictions, and the implementing agent must wait for them before
 reporting completion.
 
+Selection, assignment, and these rechecks are separate GitHub operations, not an
+atomic distributed claim. The local lock coordinates Implement Loop runs that
+share this repository's Git common directory on this machine; it does not
+coordinate other machines or protect against unrelated editors. Rechecks stop
+the run when a change is observed, but cannot prevent an external change that
+races after a read.
+
 ## Harness capabilities and skill setup
 
 The invocation contracts were checked against OpenCode CLI v2.1.3 and GitHub
@@ -237,6 +244,12 @@ and—by default—a new descendant commit. It also confirms the parent is still
 open and that the ticket remains open, unblocked, exclusively assigned, and a
 direct child.
 
+These checks are fail-closed detection, not isolation or rollback. Git-state
+checks at completion happen after the harness has run: a dirty tree, changed
+branch, or rewritten history prevents wrapper closure but does not undo the
+agent's files or commits. The runner does not sandbox trusted automation or
+guarantee that delegated/background processes have stopped.
+
 For one named ticket, `--allow-no-new-commit TICKET_NUMBER` waives only the
 requirement to create a new descendant commit during that attempt. The skill must
 still assess the existing committed implementation against the current ticket
@@ -288,7 +301,12 @@ OpenCode or Copilot native session data.
 Failures stop the loop with a nonzero status. The runner does not retry, roll
 back, stash, reset, unassign, or skip ahead. It preserves assignments, commits,
 and working files. If GitHub closure partially succeeds, inspect the issue before
-restarting.
+restarting. A failed `gh issue close --comment` command does not prove that
+neither its comment nor the closure took effect, and a closure-confirmation read
+can fail after GitHub has closed the ticket. Check the issue itself and the
+attempt's `closure-comment.txt`, `checks.json`, and `closed-ticket.json` when
+present before deciding how to recover; the runner will not retry or repair a
+partial outcome automatically.
 
 After a failure:
 

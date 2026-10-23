@@ -92,6 +92,8 @@ if tool_name in ("copilot", "opencode"):
     )
     if action == "dirty":
         Path("unfinished.txt").write_text("uncommitted change\n")
+    elif action == "dirty_submodule":
+        Path("nested-module/uncommitted.txt").write_text("submodule work to preserve\n")
     elif action == "branch":
         subprocess.run(["git", "switch", "--quiet", "-c", "agent-branch"], check=True)
     elif action == "rewrite_history":
@@ -119,6 +121,9 @@ if tool_name in ("copilot", "opencode"):
             child for child in state["children"] if child.get("number") != ticket_number
         ]
         save_state()
+    elif action == "close_ticket":
+        ticket_for(ticket_number)["state"] = "closed"
+        save_state()
     elif action == "close_parent":
         state["spec"]["state"] = "closed"
         save_state()
@@ -129,6 +134,10 @@ if tool_name in ("copilot", "opencode"):
             )
         )
         attempt_dir.chmod(0o500)
+
+    if state.get("fail_preclosure_read_after_harness"):
+        state["fail_next_issue_read_for"] = ticket_number
+        save_state()
 
     mode = os.environ.get("IMPLEMENT_LOOP_TEST_RESULT_MODE", "valid")
     if mode != "missing":
@@ -192,6 +201,8 @@ elif args[:2] == ["issue", "edit"]:
     number = int(args[2])
     ticket = ticket_for(number)
     login = args[args.index("--add-assignee") + 1]
+    if state.get("claim_failure") == "before_write":
+        sys.exit("simulated GitHub claim failure before writing")
     ticket["assignees"].append({"login": login})
     if state.get("claim_conflict"):
         ticket["assignees"].append({"login": "other"})
@@ -199,25 +210,42 @@ elif args[:2] == ["issue", "edit"]:
         ticket["issue_dependencies_summary"]["blocked_by"] = 1
     if state.get("claim_close"):
         ticket["state"] = "closed"
+    if state.get("claim_close_parent"):
+        state["spec"]["state"] = "closed"
     if state.get("claim_remove_child"):
         state["children"] = [child for child in state["children"] if child["number"] != number]
     state.setdefault("events", []).append(["assign", number, login])
     save_state()
+    if state.get("claim_failure") == "after_write":
+        sys.exit("simulated GitHub claim failure after writing")
     sys.exit(0)
 elif args[:2] == ["issue", "close"]:
     number = int(args[2])
+    comment = args[args.index("--comment") + 1]
+    if state.get("close_comment_failure_after_write"):
+        state.setdefault("comments", {}).setdefault(str(number), []).append(
+            {"user": {"login": "tester"}, "body": comment}
+        )
+        state.setdefault("events", []).append(["comment", number, comment])
+        save_state()
+        sys.exit("simulated GitHub failure after posting the closure comment")
     if state.get("close_failure"):
         sys.exit("simulated GitHub closure failure")
     ticket_for(number)["state"] = "closed"
-    comment = args[args.index("--comment") + 1]
     state.setdefault("events", []).append(["close", number, comment])
+    if state.get("fail_confirmation_after_close"):
+        state["fail_next_issue_read_for"] = number
     save_state()
+    if state.get("close_failure_after_write"):
+        sys.exit("simulated GitHub closure failure after closing the issue")
     sys.exit(0)
 elif args[:1] == ["api"]:
     if "--hostname" not in args:
         sys.exit("GitHub API call omitted the resolved hostname")
     state.setdefault("api_hosts", []).append(args[args.index("--hostname") + 1])
     endpoint = args[-1]
+    if state.get("api_failure_endpoint") == endpoint:
+        sys.exit("simulated required GitHub API read failure")
     if endpoint == "user":
         result = {"login": state["login"]}
     elif endpoint.endswith("/comments?per_page=100"):
@@ -247,6 +275,10 @@ elif args[:1] == ["api"]:
         if not match:
             sys.exit("Unexpected API endpoint: " + endpoint)
         number = int(match.group(1))
+        if state.get("fail_next_issue_read_for") == number:
+            state.pop("fail_next_issue_read_for")
+            save_state()
+            sys.exit("simulated required issue read failure")
         result = state["spec"] if number == state["spec"]["number"] else ticket_for(number)
 else:
     sys.exit("Unexpected gh arguments: " + repr(args))
@@ -348,6 +380,27 @@ class LoopTests(unittest.TestCase):
             "labels": [{"name": label} for label in (labels or [])],
         }
         self.state["children"].append({"number": number})
+
+    def add_submodule(self) -> Path:
+        source = self.home / "submodule-source"
+        source.mkdir()
+        self.git("init", "--quiet", cwd=source)
+        self.git("config", "user.name", "Implement Loop Test", cwd=source)
+        self.git("config", "user.email", "implement-loop-test@example.invalid", cwd=source)
+        (source / "tracked.txt").write_text("submodule fixture\n")
+        self.git("add", "tracked.txt", cwd=source)
+        self.git("commit", "--quiet", "-m", "Initial submodule fixture", cwd=source)
+        self.git(
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            str(source),
+            "nested-module",
+        )
+        self.git("add", ".gitmodules", "nested-module")
+        self.git("commit", "--quiet", "-m", "Add test submodule")
+        return self.repo / "nested-module"
 
     def git(self, *args: str, cwd: Path | None = None) -> str:
         result = subprocess.run(
@@ -1217,21 +1270,31 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
 
-    def test_queue_skips_blocked_and_assigned_children_and_ignores_labels(self) -> None:
-        self.state["tickets"]["2"]["issue_dependencies_summary"]["blocked_by"] = 1
+    def test_queue_skips_blockers_and_assignments_and_ignores_labels(self) -> None:
+        self.state["tickets"]["2"]["issue_dependencies_summary"]["blocked_by"] = 2
+        self.state["tickets"]["2"]["blocking_issues"] = [3, 99]
         self.add_ticket(3, assignees=["tester"])
-        self.add_ticket(4, labels=["wontfix"])
-        self.state["children"] = [{"number": 2}, {"number": 3}, {"number": 4}]
+        self.add_ticket(4, assignees=["someone-else"])
+        self.add_ticket(5, labels=["wontfix"])
+        self.add_ticket(99)
+        self.state["children"] = [
+            {"number": 2},
+            {"number": 3},
+            {"number": 4},
+            {"number": 5},
+        ]
         self.save_state()
 
         result, _ = self.run_loop("--max-iterations", "1")
 
         state = self.load_state()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [4])
+        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [5])
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual(state["tickets"]["3"]["state"], "open")
-        self.assertEqual(state["tickets"]["4"]["state"], "closed")
+        self.assertEqual(state["tickets"]["4"]["state"], "open")
+        self.assertEqual(state["tickets"]["5"]["state"], "closed")
+        self.assertNotIn(99, [child["number"] for child in state["children"]])
 
     def test_named_exception_does_not_bypass_blockers_or_assigned_ticket_skips(self) -> None:
         for exception_ticket in (2, 3):
@@ -1339,7 +1402,20 @@ class LoopTests(unittest.TestCase):
         result, _ = self.run_loop()
 
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"attached branch", result.stderr)
         self.assertEqual(self.load_state()["events"], [])
+        self.assertFalse((self.repo / ".git/implement-loop.lock").exists())
+
+    def test_unborn_branch_is_rejected_with_recovery_guidance(self) -> None:
+        self.git("checkout", "--quiet", "--orphan", "unborn")
+
+        result, _ = self.run_loop()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"existing commit", result.stderr)
+        self.assertEqual(self.load_state()["events"], [])
+        self.assertEqual(self.load_state()["copilot_calls"], [])
+        self.assertEqual(self.git("branch", "--show-current"), "unborn")
         self.assertFalse((self.repo / ".git/implement-loop.lock").exists())
 
     def test_repository_common_lock_blocks_a_second_worktree(self) -> None:
@@ -1357,6 +1433,22 @@ class LoopTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"stale lock exists", result.stderr)
         self.assertEqual(self.load_state()["events"], [])
+        self.assertEqual((lock / "pid").read_text(), "another loop\n")
+
+    def test_repository_lock_blocks_a_second_run_in_the_same_checkout(self) -> None:
+        common_dir = Path(self.git("rev-parse", "--git-common-dir"))
+        if not common_dir.is_absolute():
+            common_dir = self.repo / common_dir
+        lock = common_dir.resolve() / "implement-loop.lock"
+        lock.mkdir()
+        (lock / "pid").write_text("another loop\n")
+
+        result, _ = self.run_loop()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"stale lock exists", result.stderr)
+        self.assertEqual(self.load_state()["events"], [])
+        self.assertEqual(self.load_state()["copilot_calls"], [])
         self.assertEqual((lock / "pid").read_text(), "another loop\n")
 
     def test_conflicting_github_repository_override_is_rejected(self) -> None:
@@ -1506,6 +1598,82 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(self.load_state()["events"], [])
         self.assertEqual(self.load_state()["copilot_calls"], [])
 
+    def test_malformed_issue_metadata_fails_closed_before_claim(self) -> None:
+        cases = ("missing_parent_repository", "non_integer_blocker_count", "boolean_child_number")
+        for malformed_case in cases:
+            with self.subTest(malformed_case=malformed_case):
+                self.state = self.default_state()
+                if malformed_case == "missing_parent_repository":
+                    self.state["spec"].pop("repository_url")
+                elif malformed_case == "non_integer_blocker_count":
+                    self.state["tickets"]["2"]["issue_dependencies_summary"]["blocked_by"] = True
+                else:
+                    self.state["children"][0]["number"] = True
+                self.save_state()
+
+                result, _ = self.run_loop()
+
+                state = self.load_state()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(state["tickets"]["2"]["assignees"], [])
+                self.assertEqual(state["events"], [])
+                self.assertEqual(state["copilot_calls"], [])
+
+    def test_failed_required_queue_read_stops_before_claim(self) -> None:
+        self.add_ticket(3)
+        self.state["api_failure_endpoint"] = "repos/test/repo/issues/1/sub_issues?per_page=100"
+        self.save_state()
+
+        result, _ = self.run_loop("--max-iterations", "2")
+
+        state = self.load_state()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"simulated required GitHub API read failure", result.stderr)
+        self.assertEqual(state["events"], [])
+        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(state["tickets"]["2"]["assignees"], [])
+        self.assertEqual(state["tickets"]["3"]["assignees"], [])
+
+    def test_failed_preclosure_read_preserves_work_and_stops_the_queue(self) -> None:
+        self.add_ticket(3)
+        self.state["fail_preclosure_read_after_harness"] = True
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "2")
+
+        state = self.load_state()
+        attempt = runs[0] / "attempt-1-ticket-2"
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"simulated required issue read failure", result.stderr)
+        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
+        self.assertEqual(state["tickets"]["2"]["state"], "open")
+        self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
+        self.assertEqual(state["tickets"]["3"]["assignees"], [])
+        self.assertEqual([event[0] for event in state["events"]], ["assign"])
+        self.assertTrue((attempt / "completion.json").is_file())
+        self.assertTrue((attempt / "process.json").is_file())
+        self.assertIn("implementation-2.txt", self.git("show", "--pretty=", "--name-only"))
+
+    def test_failed_closure_confirmation_does_not_start_another_ticket(self) -> None:
+        self.add_ticket(3)
+        self.state["fail_confirmation_after_close"] = True
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "2")
+
+        state = self.load_state()
+        attempt = runs[0] / "attempt-1-ticket-2"
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"simulated required issue read failure", result.stderr)
+        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
+        self.assertEqual(state["tickets"]["2"]["state"], "closed")
+        self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
+        self.assertEqual(state["tickets"]["3"]["state"], "open")
+        self.assertEqual(state["tickets"]["3"]["assignees"], [])
+        self.assertEqual([event[0] for event in state["events"]], ["assign", "close"])
+        self.assertTrue((attempt / "closure-comment.txt").is_file())
+        self.assertFalse((attempt / "closed-ticket.json").exists())
+
     def test_cross_repository_child_fails_closed(self) -> None:
         self.state["children"][0]["repository_url"] = "https://api.github.com/repos/other/repo"
         self.save_state()
@@ -1516,6 +1684,24 @@ class LoopTests(unittest.TestCase):
         self.assertIn(b"cross-repository children are not supported", result.stderr)
         self.assertEqual(self.load_state()["events"], [])
         self.assertEqual(self.load_state()["copilot_calls"], [])
+
+    def test_pull_requests_cannot_be_used_as_parent_specs_or_children(self) -> None:
+        for name in ("parent", "child"):
+            with self.subTest(name=name):
+                self.state = self.default_state()
+                if name == "parent":
+                    self.state["spec"]["pull_request"] = {"url": "pull/1"}
+                else:
+                    self.state["children"][0]["pull_request"] = {"url": "pull/2"}
+                self.save_state()
+
+                result, _ = self.run_loop()
+
+                state = self.load_state()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b"pull request, not an issue", result.stderr)
+                self.assertEqual(state["events"], [])
+                self.assertEqual(state["copilot_calls"], [])
 
     def test_claim_is_rechecked_for_exclusive_ownership_and_blockers(self) -> None:
         self.state["claim_conflict"] = True
@@ -1532,6 +1718,35 @@ class LoopTests(unittest.TestCase):
         )
         self.assertEqual(state["copilot_calls"], [])
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
+
+    def test_failed_claim_writes_stop_without_rolling_back_partial_assignment(self) -> None:
+        for failure_mode in ("before_write", "after_write"):
+            with self.subTest(failure_mode=failure_mode):
+                self.state = self.default_state()
+                self.add_ticket(3)
+                self.state["claim_failure"] = failure_mode
+                self.save_state()
+
+                result, runs = self.run_loop("--max-iterations", "2")
+
+                state = self.load_state()
+                attempt = runs[0] / "attempt-1-ticket-2"
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b"simulated GitHub claim failure", result.stderr)
+                self.assertEqual(state["copilot_calls"], [])
+                self.assertEqual(state["tickets"]["2"]["state"], "open")
+                self.assertEqual(state["tickets"]["3"]["state"], "open")
+                self.assertEqual(state["tickets"]["3"]["assignees"], [])
+                self.assertEqual(
+                    state["tickets"]["2"]["assignees"],
+                    [] if failure_mode == "before_write" else [{"login": "tester"}],
+                )
+                self.assertEqual(
+                    [event[0] for event in state["events"]],
+                    [] if failure_mode == "before_write" else ["assign"],
+                )
+                self.assertTrue((attempt / "attempt.json").is_file())
+                self.assertFalse((attempt / "process.json").exists())
 
     def test_blocker_appearing_after_claim_prevents_harness_invocation(self) -> None:
         self.state["claim_blocker"] = True
@@ -1557,6 +1772,32 @@ class LoopTests(unittest.TestCase):
         self.assertIn(b"no longer an open direct child", result.stderr)
         self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
         self.assertEqual(state["copilot_calls"], [])
+
+    def test_claim_recheck_refuses_a_closed_ticket_or_parent(self) -> None:
+        for changed_issue in ("ticket", "parent"):
+            with self.subTest(changed_issue=changed_issue):
+                self.state = self.default_state()
+                claim_option = "claim_close" if changed_issue == "ticket" else "claim_close_parent"
+                self.state[claim_option] = True
+                self.save_state()
+
+                result, runs = self.run_loop()
+
+                state = self.load_state()
+                attempt = runs[0] / "attempt-1-ticket-2"
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(state["copilot_calls"], [])
+                self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
+                self.assertEqual([event[0] for event in state["events"]], ["assign"])
+                self.assertFalse((attempt / "process.json").exists())
+                self.assertEqual(
+                    state["tickets"]["2"]["state"],
+                    "closed" if changed_issue == "ticket" else "open",
+                )
+                self.assertEqual(
+                    state["spec"]["state"],
+                    "closed" if changed_issue == "parent" else "open",
+                )
 
     def test_ownership_change_after_harness_is_rejected_even_with_named_exception(self) -> None:
         self.state["agent_action"] = "change_owner"
@@ -1626,6 +1867,25 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
 
+    def test_ticket_closed_during_execution_is_not_closed_again_or_followed(self) -> None:
+        self.add_ticket(3)
+        self.state["agent_action"] = "close_ticket"
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "2")
+
+        state = self.load_state()
+        attempt = runs[0] / "attempt-1-ticket-2"
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"no longer open", result.stderr)
+        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
+        self.assertEqual(state["tickets"]["2"]["state"], "closed")
+        self.assertEqual(state["tickets"]["3"]["state"], "open")
+        self.assertEqual(state["tickets"]["3"]["assignees"], [])
+        self.assertEqual([event[0] for event in state["events"]], ["assign"])
+        self.assertFalse((attempt / "closed-ticket.json").exists())
+        self.assertIn("implementation-2.txt", self.git("show", "--pretty=", "--name-only"))
+
     def test_github_close_failure_preserves_assignment_and_local_commit(self) -> None:
         self.state["close_failure"] = True
         self.save_state()
@@ -1639,6 +1899,43 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
         self.assertIn("implementation-2.txt", self.git("show", "--pretty=", "--name-only"))
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
+
+    def test_partial_closure_outcomes_preserve_work_and_stop_before_the_next_ticket(self) -> None:
+        cases = (
+            ("close_comment_failure_after_write", "comment"),
+            ("close_failure_after_write", "close"),
+        )
+        for failure_setting, expected_final_event in cases:
+            with self.subTest(failure_setting=failure_setting):
+                self.state = self.default_state()
+                self.add_ticket(3)
+                self.state[failure_setting] = True
+                self.save_state()
+
+                result, runs = self.run_loop("--max-iterations", "2")
+
+                state = self.load_state()
+                attempt = runs[0] / "attempt-1-ticket-2"
+                closure_comment = (attempt / "closure-comment.txt").read_text().strip()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b"simulated GitHub", result.stderr)
+                self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
+                self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
+                self.assertEqual(state["tickets"]["3"]["state"], "open")
+                self.assertEqual(state["tickets"]["3"]["assignees"], [])
+                self.assertIn("implementation-2.txt", self.git("show", "--pretty=", "--name-only"))
+                self.assertEqual(
+                    [event[0] for event in state["events"]],
+                    ["assign", expected_final_event],
+                )
+                if expected_final_event == "comment":
+                    self.assertEqual(state["tickets"]["2"]["state"], "open")
+                    self.assertEqual(state["comments"]["2"][-1]["body"], closure_comment)
+                else:
+                    self.assertEqual(state["tickets"]["2"]["state"], "closed")
+                self.assertTrue((attempt / "checks.json").is_file())
+                self.assertTrue((attempt / "closure-comment.txt").is_file())
+                self.assertFalse((attempt / "closed-ticket.json").exists())
 
     def test_new_commit_is_required_by_default(self) -> None:
         self.state["make_commit"] = False
@@ -1804,6 +2101,25 @@ class LoopTests(unittest.TestCase):
         self.assertTrue((self.repo / "unfinished.txt").is_file())
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
+
+    def test_submodule_changes_after_execution_prevent_closure_and_are_preserved(self) -> None:
+        submodule = self.add_submodule()
+        self.state["agent_action"] = "dirty_submodule"
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "1")
+
+        state = self.load_state()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"checkout is not clean", result.stderr)
+        self.assertEqual(state["tickets"]["2"]["state"], "open")
+        self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
+        self.assertEqual([event[0] for event in state["events"]], ["assign"])
+        self.assertEqual(
+            (submodule / "uncommitted.txt").read_text(), "submodule work to preserve\n"
+        )
+        self.assertIn("implementation-2.txt", self.git("show", "--pretty=", "--name-only"))
+        self.assertTrue((runs[0] / "attempt-1-ticket-2/process.json").is_file())
 
     def test_both_harnesses_share_git_and_ownership_completion_checks(self) -> None:
         for harness, selected_calls, unselected_calls in (
