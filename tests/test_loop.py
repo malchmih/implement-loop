@@ -39,6 +39,12 @@ def save_state():
 def ticket_for(number):
     return state["tickets"][str(number)]
 
+def page_response(items, page_size):
+    pages = [items[index:index + page_size] for index in range(0, len(items), page_size)]
+    if "--paginate" in args and "--slurp" in args:
+        return pages or [[]]
+    return pages[0] if pages else []
+
 tool_name = Path(sys.argv[0]).name
 if tool_name in ("copilot", "opencode"):
     if tool_name == "opencode":
@@ -252,11 +258,7 @@ elif args[:1] == ["api"]:
         number = endpoint.split("/issues/")[1].split("/")[0]
         comments = state.get("comments", {}).get(number, [])
         page_size = state.get("comment_page_size", 100)
-        pages = [comments[index:index + page_size] for index in range(0, len(comments), page_size)]
-        if "--paginate" in args and "--slurp" in args:
-            result = pages or [[]]
-        else:
-            result = pages[0] if pages else []
+        result = page_response(comments, page_size)
     elif endpoint.endswith("/sub_issues?per_page=100"):
         children = []
         for child in state["children"]:
@@ -269,11 +271,7 @@ elif args[:1] == ["api"]:
                 "pull_request": child.get("pull_request"),
             })
         page_size = state.get("sub_issue_page_size", 100)
-        pages = [children[index:index + page_size] for index in range(0, len(children), page_size)]
-        if "--paginate" in args and "--slurp" in args:
-            result = pages or [[]]
-        else:
-            result = pages[0] if pages else []
+        result = page_response(children, page_size)
     else:
         match = re.search(r"/issues/(\d+)$", endpoint)
         if not match:
@@ -1938,16 +1936,20 @@ class LoopTests(unittest.TestCase):
         self.assertIn("implementation-2.txt", self.git("show", "--pretty=", "--name-only"))
 
     def test_github_close_failure_preserves_assignment_and_local_commit(self) -> None:
+        self.add_ticket(3)
         self.state["close_failure"] = True
         self.save_state()
 
-        result, _ = self.run_loop("--max-iterations", "1")
+        result, _ = self.run_loop("--max-iterations", "2")
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"GitHub CLI failed during closing ticket", result.stderr)
+        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
+        self.assertEqual(state["tickets"]["3"]["state"], "open")
+        self.assertEqual(state["tickets"]["3"]["assignees"], [])
         self.assertIn("implementation-2.txt", self.git("show", "--pretty=", "--name-only"))
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
 
