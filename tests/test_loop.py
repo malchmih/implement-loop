@@ -48,6 +48,9 @@ def ticket_for(number):
 def claim_failure_message(default):
     return state.get("claim_failure_detail", default)
 
+def closure_failure_message(default):
+    return state.get("close_failure_detail", default)
+
 def page_response(items, page_size):
     pages = [items[index:index + page_size] for index in range(0, len(items), page_size)]
     if "--paginate" in args and "--slurp" in args:
@@ -272,9 +275,11 @@ elif args[:2] == ["issue", "close"]:
         )
         state.setdefault("events", []).append(["comment", number, comment])
         save_state()
-        sys.exit("simulated GitHub failure after posting the closure comment")
+        sys.exit(
+            closure_failure_message("simulated GitHub failure after posting the closure comment")
+        )
     if state.get("close_failure"):
-        sys.exit("simulated GitHub closure failure")
+        sys.exit(closure_failure_message("simulated GitHub closure failure"))
     ticket_for(number)["state"] = "closed"
     state.setdefault("events", []).append(["close", number, comment])
     if state.get("fail_queue_refresh_after_close"):
@@ -283,7 +288,9 @@ elif args[:2] == ["issue", "close"]:
         state["fail_next_issue_read_for"] = number
     save_state()
     if state.get("close_failure_after_write"):
-        sys.exit("simulated GitHub closure failure after closing the issue")
+        sys.exit(
+            closure_failure_message("simulated GitHub closure failure after closing the issue")
+        )
     sys.exit(0)
 elif args[:1] == ["api"]:
     if "--hostname" not in args:
@@ -320,7 +327,9 @@ elif args[:1] == ["api"]:
         if state.get("fail_next_issue_read_for") == number:
             state.pop("fail_next_issue_read_for")
             save_state()
-            sys.exit("simulated required issue read failure")
+            sys.exit(
+                state.get("issue_read_failure_detail", "simulated required issue read failure")
+            )
         result = state["spec"] if number == state["spec"]["number"] else ticket_for(number)
 else:
     sys.exit("Unexpected gh arguments: " + repr(args))
@@ -2243,6 +2252,7 @@ class LoopTests(unittest.TestCase):
         attempt = runs[0] / "attempt-1-ticket-2"
         self.assertEqual(result.returncode, 1, result.stderr.decode())
         self.assertIn(b"simulated required GitHub API read failure", result.stderr)
+        self.assertNotIn(b"may already be closed", result.stderr)
         self.assertIn(f"Run records: {runs[0].resolve()}".encode(), result.stderr)
         self.assertIn(
             f"Ticket #2 records (no harness invocation started): {attempt.resolve()}".encode(),
@@ -2330,6 +2340,7 @@ class LoopTests(unittest.TestCase):
         attempt = runs[0] / "attempt-1-ticket-2"
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"simulated required issue read failure", result.stderr)
+        self.assertNotIn(b"may already be closed", result.stderr)
         self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
@@ -2342,6 +2353,9 @@ class LoopTests(unittest.TestCase):
     def test_failed_closure_confirmation_does_not_start_another_ticket(self) -> None:
         self.add_ticket(3)
         self.state["fail_confirmation_after_close"] = True
+        self.state["issue_read_failure_detail"] = (
+            "simulated required issue read failure\nadditional issue-read stderr detail"
+        )
         self.save_state()
 
         result, runs = self.run_loop("--max-iterations", "2")
@@ -2349,7 +2363,16 @@ class LoopTests(unittest.TestCase):
         state = self.load_state()
         attempt = runs[0] / "attempt-1-ticket-2"
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"simulated required issue read failure", result.stderr)
+        self.assertIn(
+            b"simulated required issue read failure\nadditional issue-read stderr detail",
+            result.stderr,
+        )
+        self.assertIn(
+            b"Ticket #2 may already be closed. "
+            b"Inspect ticket #2's live GitHub state before rerunning.",
+            result.stderr,
+        )
+        self.assertNotIn(b"The closure comment or closure", result.stderr)
         self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
         self.assertEqual(state["tickets"]["2"]["state"], "closed")
         self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
@@ -2426,6 +2449,11 @@ class LoopTests(unittest.TestCase):
                         f"simulated GitHub claim failure {failure_mode.replace('_', ' ')}\n"
                         "additional stderr detail"
                     ).encode(),
+                    result.stderr,
+                )
+                self.assertIn(
+                    b"Assignment of ticket #2 may have taken effect. "
+                    b"Inspect ticket #2's live GitHub state before rerunning.",
                     result.stderr,
                 )
                 self.assertIn(f"Run records: {runs[0].resolve()}".encode(), result.stderr)
@@ -2606,6 +2634,12 @@ class LoopTests(unittest.TestCase):
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"GitHub CLI failed during closing ticket", result.stderr)
+        self.assertIn(b"simulated GitHub closure failure", result.stderr)
+        self.assertIn(
+            b"The closure comment or closure of ticket #2 may have taken effect. "
+            b"Inspect ticket #2's live GitHub state before rerunning.",
+            result.stderr,
+        )
         self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
@@ -2624,6 +2658,9 @@ class LoopTests(unittest.TestCase):
                 self.state = self.default_state()
                 self.add_ticket(3)
                 self.state[failure_setting] = True
+                self.state["close_failure_detail"] = (
+                    "simulated GitHub closure failure detail\nadditional closure stderr detail"
+                )
                 self.save_state()
 
                 result, runs = self.run_loop("--max-iterations", "2")
@@ -2632,7 +2669,15 @@ class LoopTests(unittest.TestCase):
                 attempt = runs[0] / "attempt-1-ticket-2"
                 closure_comment = (attempt / "closure-comment.txt").read_text().strip()
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn(b"simulated GitHub", result.stderr)
+                self.assertIn(
+                    b"simulated GitHub closure failure detail\nadditional closure stderr detail",
+                    result.stderr,
+                )
+                self.assertIn(
+                    b"The closure comment or closure of ticket #2 may have taken effect. "
+                    b"Inspect ticket #2's live GitHub state before rerunning.",
+                    result.stderr,
+                )
                 self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
                 self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
                 self.assertEqual(state["tickets"]["3"]["state"], "open")

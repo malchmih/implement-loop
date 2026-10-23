@@ -243,14 +243,17 @@ failures after ticket processing do not point to the previously completed ticket
 The runner does not retry, roll back, stash, reset, unassign, or skip ahead. Any
 existing checkout changes, commits, and assignments were left in place; this does
 not imply that any of those effects occurred. A failed
-`gh issue edit --add-assignee` may have assigned the ticket before the command
-reported an error; inspect the issue rather than assuming the claim did not land.
-Likewise, a failed `gh issue close --comment` does not prove that neither its
-comment nor the closure took effect, and a closure-confirmation read can fail
-after GitHub has closed the ticket. Check the issue itself and the ticket
-records' `closure-comment.txt`, `checks.json`, and `closed-ticket.json` when
-present before deciding how to recover. The runner does not retry or repair
-partial GitHub writes automatically.
+`gh issue edit --add-assignee` warns that assignment of the affected ticket may
+have taken effect; inspect its live GitHub state before rerunning. A failed
+`gh issue close --comment` warns that its closure comment or the closure may
+have taken effect. If the subsequent closure-confirmation read fails, the
+command warns that the ticket may already be closed. These uncertainty warnings
+are scoped to the assignment, closure, and immediate closure-confirmation
+operations; an unrelated GitHub read failure does not imply uncertain closure.
+Inspect the live issue and its `closure-comment.txt`, `checks.json`, and
+`closed-ticket.json` records when present before deciding how to recover. A
+missing confirmation record does not prove that closure failed. The runner does
+not retry or repair partial GitHub writes automatically.
 
 After a failure:
 

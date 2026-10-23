@@ -692,7 +692,14 @@ def run(options: Options, diagnostics: DiagnosticContext) -> None:
                 )
 
                 github.close(repository, ticket_number, closure_comment)
-                closed_ticket = github.get_ticket(repository, ticket_number, repository_url)
+                try:
+                    closed_ticket = github.get_ticket(repository, ticket_number, repository_url)
+                except (LoopError, OSError) as error:
+                    raise LoopError(
+                        f"{error}\n"
+                        f"Ticket #{ticket_number} may already be closed. "
+                        f"Inspect ticket #{ticket_number}'s live GitHub state before rerunning."
+                    ) from error
                 if closed_ticket.get("state") != "closed":
                     raise LoopError(f"GitHub did not confirm ticket #{ticket_number} was closed.")
                 records.write_json(

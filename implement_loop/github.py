@@ -282,32 +282,46 @@ class GitHub:
         return comments
 
     def assign(self, repository: Repository, issue_number: int, login: str) -> None:
-        self._run(
-            [
-                "issue",
-                "edit",
-                str(issue_number),
-                "--repo",
-                repository.repo_ref,
-                "--add-assignee",
-                login,
-            ],
-            operation=f"assigning ticket #{issue_number}",
-        )
+        try:
+            self._run(
+                [
+                    "issue",
+                    "edit",
+                    str(issue_number),
+                    "--repo",
+                    repository.repo_ref,
+                    "--add-assignee",
+                    login,
+                ],
+                operation=f"assigning ticket #{issue_number}",
+            )
+        except LoopError as error:
+            raise LoopError(
+                f"{error}\n"
+                f"Assignment of ticket #{issue_number} may have taken effect. "
+                f"Inspect ticket #{issue_number}'s live GitHub state before rerunning."
+            ) from error
 
     def close(self, repository: Repository, issue_number: int, comment: str) -> None:
-        self._run(
-            [
-                "issue",
-                "close",
-                str(issue_number),
-                "--repo",
-                repository.repo_ref,
-                "--comment",
-                comment,
-            ],
-            operation=f"closing ticket #{issue_number}",
-        )
+        try:
+            self._run(
+                [
+                    "issue",
+                    "close",
+                    str(issue_number),
+                    "--repo",
+                    repository.repo_ref,
+                    "--comment",
+                    comment,
+                ],
+                operation=f"closing ticket #{issue_number}",
+            )
+        except LoopError as error:
+            raise LoopError(
+                f"{error}\n"
+                f"The closure comment or closure of ticket #{issue_number} may have taken effect. "
+                f"Inspect ticket #{issue_number}'s live GitHub state before rerunning."
+            ) from error
 
     @staticmethod
     def _validate_issue_identity(
