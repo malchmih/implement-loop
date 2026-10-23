@@ -1391,6 +1391,7 @@ class LoopTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"simulated repository discovery failure", result.stderr)
         self.assertEqual(len(runs), 1)
+        self.assertIn(f"Run records: {runs[0].resolve()}".encode(), result.stderr)
         self.assertEqual(state["events"], [])
         self.assertEqual(state["copilot_calls"], [])
         self.assertEqual(state["opencode_calls"], [])

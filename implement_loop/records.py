@@ -10,6 +10,7 @@ import shutil
 import stat
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,6 +45,8 @@ class RunRecords:
         cls,
         target_root: Path,
         settings: RunRecordSettings,
+        *,
+        on_run_directory_created: Callable[[Path], None],
     ) -> RunRecords:
         records_dir = settings.directory.resolve()
         repository_root = target_root.resolve()
@@ -81,14 +84,15 @@ class RunRecords:
             candidate = records_dir / f"run-{stamp}-{suffix}"
             try:
                 candidate.mkdir(mode=0o700)
-                run_dir = candidate
-                break
             except FileExistsError:
                 continue
             except OSError as error:
                 raise LoopError(
                     f"Cannot create private run records at {candidate}: {error}"
                 ) from error
+            run_dir = candidate
+            on_run_directory_created(run_dir)
+            break
         if run_dir is None:
             raise LoopError("Cannot allocate a unique private run-record directory.")
 

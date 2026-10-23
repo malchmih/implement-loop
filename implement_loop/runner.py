@@ -426,11 +426,15 @@ def run(options: Options, diagnostics: DiagnosticContext) -> None:
     records: RunRecords | None = None
     try:
         assert_checkout(checkout)
+
+        def remember_run_directory(path: Path) -> None:
+            diagnostics.run_records = path
+
         records = RunRecords.create(
             checkout.root,
             options.records,
+            on_run_directory_created=remember_run_directory,
         )
-        diagnostics.run_records = records.run_dir
         run_metadata: dict[str, Any] = {
             "branch": checkout.branch,
             "initial_head": checkout.initial_head,
