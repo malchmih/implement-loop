@@ -375,6 +375,8 @@ class TemporaryHomeTestCase(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
         self.env = _isolated_git_environment(self.home)
+        for variable in ("GH_REPO", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "NO_COLOR", "FORCE_COLOR"):
+            self.env.pop(variable, None)
         self.bin = self.home / "bin"
         self.bin.mkdir()
         self.env["PATH"] = str(self.bin) + os.pathsep + self.env["PATH"]
@@ -438,11 +440,6 @@ class LoopTestCase(TemporaryHomeTestCase):
         self.state_path = self.home / "github-state.json"
         self.state = self.default_state()
         self.save_state()
-        self.env.pop("GH_REPO", None)
-        self.env.pop("XDG_CONFIG_HOME", None)
-        self.env.pop("XDG_STATE_HOME", None)
-        self.env.pop("NO_COLOR", None)
-        self.env.pop("FORCE_COLOR", None)
         self.env["IMPLEMENT_LOOP_TEST_STATE"] = str(self.state_path)
 
         self.git("init", "--quiet")
