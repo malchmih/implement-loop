@@ -261,8 +261,6 @@ class HarnessTests(LoopTestCase):
                 result, runs = self.run_loop(
                     "--max-iterations",
                     "1",
-                    "--allow-no-new-commit",
-                    "2",
                     extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": mode},
                 )
                 after = self.load_state()
@@ -288,8 +286,6 @@ class HarnessTests(LoopTestCase):
                 result, runs = self.run_loop(
                     "--max-iterations",
                     "1",
-                    "--allow-no-new-commit",
-                    "2",
                     harness=harness,
                 )
                 state = self.load_state()
@@ -319,12 +315,7 @@ class HarnessTests(LoopTestCase):
         self.state["make_commit"] = False
         self.save_state()
 
-        result, runs = self.run_loop(
-            "--max-iterations",
-            "1",
-            "--allow-no-new-commit",
-            "2",
-        )
+        result, runs = self.run_loop("--max-iterations", "1")
 
         state = self.load_state()
         attempt = runs[-1] / "attempt-1-ticket-2"

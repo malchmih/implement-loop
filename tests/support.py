@@ -87,10 +87,7 @@ if tool_name in ("copilot", "opencode"):
         sys.stdout.write("Model unavailable: explicitly selected GPT-6 Luna\n")
         sys.exit(1)
 
-    make_commit = state.get("make_commit_by_ticket", {}).get(
-        str(ticket_number), state.get("make_commit", True)
-    )
-    if make_commit:
+    if state.get("make_commit", True):
         output_path = Path(f"implementation-{ticket_number}.txt")
         output_path.write_text(f"implemented ticket {ticket_number} in attempt {attempt_id}\n")
         subprocess.run(["git", "add", output_path.name], check=True)
@@ -226,15 +223,6 @@ if args[:2] == ["repo", "view"]:
 elif args[:2] == ["issue", "edit"]:
     number = int(args[2])
     ticket = ticket_for(number)
-    if "--remove-assignee" in args:
-        login = args[args.index("--remove-assignee") + 1]
-        assignee = state["login"] if login == "@me" else login
-        ticket["assignees"] = [
-            current for current in ticket["assignees"] if current["login"] != assignee
-        ]
-        state.setdefault("events", []).append(["unassign", number, login])
-        save_state()
-        sys.exit(0)
     login = args[args.index("--add-assignee") + 1]
     if state.get("claim_failure") == "before_write":
         sys.exit(

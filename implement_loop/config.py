@@ -28,7 +28,6 @@ class Options:
 
     spec_number: int
     max_iterations: int
-    allow_no_new_commit_ticket: int | None
     harness: str
     opencode: HarnessSettings
     copilot: HarnessSettings
@@ -370,12 +369,6 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
         help="maximum selected-harness invocations (default: 5)",
     )
     parser.add_argument(
-        "--allow-no-new-commit",
-        metavar="TICKET_NUMBER",
-        type=_positive_integer,
-        help="waive the new-commit requirement for this ticket in this invocation only",
-    )
-    parser.add_argument(
         "--opencode-model",
         metavar="MODEL",
         type=_nonempty_setting,
@@ -474,7 +467,6 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
     return Options(
         spec_number=parsed.spec_number,
         max_iterations=preferences.max_iterations,
-        allow_no_new_commit_ticket=parsed.allow_no_new_commit,
         harness=preferences.harness,
         opencode=preferences.opencode,
         copilot=preferences.copilot,

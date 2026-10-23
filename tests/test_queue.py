@@ -34,30 +34,6 @@ class QueueTests(LoopTestCase):
         self.assertEqual(state["tickets"]["6"]["state"], "closed")
         self.assertNotIn(99, [child["number"] for child in state["children"]])
 
-    def test_named_exception_does_not_bypass_blockers_or_assigned_ticket_skips(self) -> None:
-        for exception_ticket in (2, 3):
-            with self.subTest(exception_ticket=exception_ticket):
-                self.state = self.default_state()
-                self.state["tickets"]["2"]["issue_dependencies_summary"]["blocked_by"] = 1
-                self.add_ticket(3, assignees=["tester"])
-                self.add_ticket(4)
-                self.save_state()
-
-                result, _ = self.run_loop(
-                    "--max-iterations",
-                    "1",
-                    "--allow-no-new-commit",
-                    str(exception_ticket),
-                )
-
-                state = self.load_state()
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [4])
-                self.assertEqual(state["tickets"]["2"]["state"], "open")
-                self.assertEqual(state["tickets"]["3"]["state"], "open")
-                self.assertEqual(state["tickets"]["3"]["assignees"], [{"login": "tester"}])
-                self.assertEqual(state["tickets"]["4"]["state"], "closed")
-
     def test_queue_refreshes_after_closure_and_preserves_returned_order(self) -> None:
         self.add_ticket(3)
         self.state["children"] = [{"number": 3}, {"number": 2}]

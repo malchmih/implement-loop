@@ -29,7 +29,6 @@ class HelpSmokeTests(TemporaryHomeTestCase):
         self.assertIn(b"implement-loop", result.stdout)
         self.assertIn(b"--max-iterations", result.stdout)
         self.assertIn(b"--harness", result.stdout)
-        self.assertIn(b"--allow-no-new-commit TICKET_NUMBER", result.stdout)
         self.assertIn(b"--config-file", result.stdout)
         self.assertIn(b"--opencode-model", result.stdout)
         self.assertIn(b"--copilot-reasoning-effort", result.stdout)
@@ -284,12 +283,6 @@ class ConfigurationTests(LoopTestCase):
                 '[execution.harnesses.opencode]\nreasoning_effort = "max"\n',
                 None,
                 b"Unknown configuration key",
-            ),
-            (
-                "non-persistent-commit-exception",
-                "[execution]\nallow_no_new_commit_ticket = 2\n",
-                None,
-                b"Unknown configuration key execution.allow_no_new_commit_ticket",
             ),
             (
                 "invalid-type",

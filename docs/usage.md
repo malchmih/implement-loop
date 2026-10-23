@@ -67,7 +67,6 @@ implement-loop 123
 implement-loop 123 --harness copilot
 implement-loop 123 --max-iterations 10
 implement-loop 123 --config-file ./experiment.toml
-implement-loop 123 --allow-no-new-commit 456
 implement-loop 123 --copilot-model gpt-6-luna \
   --copilot-reasoning-effort high
 ```
@@ -75,10 +74,6 @@ implement-loop 123 --copilot-model gpt-6-luna \
 OpenCode is the default. `--harness` accepts only `opencode` or `copilot`; an
 unknown value fails before the run starts. The default limit is five invocations
 of the selected harness, and `--max-iterations` must be a positive integer.
-`--allow-no-new-commit TICKET_NUMBER` is a per-invocation exception for one
-ticket; it is not a user preference and cannot be set in TOML. It does not affect
-ticket selection or waive eligibility, ownership, or any completion check other
-than the requirement to create a new descendant commit for that named ticket.
 `./implement-loop --help` is side-effect free. The command uses the current
 checkout and its configured GitHub host. A conflicting `GH_REPO` override is
 rejected. A matching override is allowed.
@@ -196,9 +191,9 @@ of semantic correctness or test results.
 
 Before closing, the wrapper requires successful selected-harness exit and
 persisted records, valid result evidence, the original branch, a clean checkout,
-and—by default—a new descendant commit. It also confirms the parent is still
-open and that the ticket remains open, unblocked, exclusively assigned, and a
-direct child.
+and a new descendant commit produced during that attempt. It also confirms the
+parent is still open and that the ticket remains open, unblocked, exclusively
+assigned, and a direct child.
 
 These checks are fail-closed detection, not isolation or rollback. Git-state
 checks at completion happen after the harness has run: a dirty tree, changed
@@ -206,24 +201,12 @@ branch, or rewritten history prevents wrapper closure but does not undo the
 agent's files or commits. The runner does not sandbox trusted automation or
 guarantee that delegated/background processes have stopped.
 
-For one named ticket, `--allow-no-new-commit TICKET_NUMBER` waives only the
-requirement to create a new descendant commit during that attempt. The skill must
-still assess the existing committed implementation against the current ticket
-and parent requirements, perform required review and validation, and write valid
-attempt-bound result evidence. The wrapper does not infer correctness from the
-presence or content of existing commits. The original branch and a clean checkout
-remain mandatory in either case, including untracked and submodule status. If
-HEAD changes, it must still descend from the pre-attempt commit. All harness,
-record, result, parent, ticket, ownership, and eligibility checks remain
-mandatory. Other tickets in the same run still require a new descendant commit.
-
-The exception does not select or prioritize its named ticket. The runner still
-chooses the first eligible direct child in GitHub's returned order; a different
-selected ticket receives the normal new-commit requirement. A successful closure
-comment identifies the actual local branch and commit. When the exception is
-used, it says the requirement was waived and, if HEAD stayed unchanged, that it
-remained at the pre-attempt commit rather than claiming a new descendant commit.
-It does not claim a push, merge, or PR.
+Existing commits alone cannot satisfy an attempt, even if the work was already
+implemented or approval arrived later. The original branch and a clean checkout
+remain mandatory, including untracked and submodule status. A successful closure
+comment identifies the actual local branch and new descendant commit; it does
+not claim a push, merge, or PR. Already-committed work can instead be
+[finalized manually](#finalize-already-committed-work-after-approval).
 
 ## Output and record boundaries
 
@@ -283,26 +266,38 @@ After a failure:
 
 ### Finalize already-committed work after approval
 
-When a ticket's implementation is already committed and any needed human review
-or approval is complete, inspect the ticket and checkout, then unassign the
-ticket yourself before rerunning. For example:
+When work was committed before approval, or an attempt committed successfully
+but stopped before closure, use manual finalization rather than rerunning the
+ticket just to close it:
+
+1. Inspect the live ticket and comments, existing implementation commit, checkout,
+   validation records, and any surviving agent work. Verify potentially running
+   harnesses, delegated agents, and background work have stopped.
+2. Perform any required review and validation and obtain human approval as
+   appropriate. Do not infer correctness from the presence of a commit.
+3. If the ticket is still open and the work is complete, deliberately comment on
+   and close it yourself, accurately identifying the existing local commit and
+   checks actually performed. Inspect any existing closure comment before adding
+   another one.
+4. Rerun the loop for remaining eligible tickets.
+
+For example, after completing the inspection, validation, and approval above:
 
 ```bash
 gh issue view 456 --comments
-# Inspect the existing branch/commit and confirm the checkout is clean.
-# Obtain any required human approval before continuing.
-gh issue edit 456 --remove-assignee @me
-implement-loop 123 --allow-no-new-commit 456
+# Write an accurate account of the existing commit and checks actually performed.
+gh issue close 456 --comment "$(cat /path/to/reviewed-finalization-comment.txt)"
+implement-loop 123
 ```
 
-Replace `implement-loop` with the executable path from [Run a spec](#run-a-spec)
-if it is not on `PATH`. Confirm ticket `#456` is the first eligible child in the
-normal queue order; the option does not force its selection or skip earlier
-eligible tickets. The skill receives approval comments as requirements context,
-but Implement Loop does not watch for approval comments or use them as resume
-triggers. It also does not unassign the ticket automatically or restore an old
-harness conversation: each rerun starts a fresh attempt. The named ticket must
-still have a clean, committed checkout; uncommitted changes are never accepted.
+Manual finalization is a human action, not a successful attempt or
+wrapper-verified completion. Do not claim the wrapper verified checks it did not
+perform. Do not manufacture empty commits, amend history, or weaken completion
+checks to satisfy the runner. Uncommitted or incomplete work needs deliberate
+resolution, not premature closure. Implement Loop does not watch for approvals,
+resume sessions, or automatically finalize already-committed work.
+
+### Stale locks and active-run markers
 
 The local lock lives in the repository's Git common directory and coordinates
 worktrees on this machine only. If a process is killed uncatchably, inspect the
