@@ -493,6 +493,12 @@ class LoopTests(unittest.TestCase):
             timeout=30,
         )
 
+    def install_test_command(self) -> tuple[Path, Path]:
+        source = self.copy_source_tree()
+        result = self.run_installer(source)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        return source, self.home / ".local/bin/implement-loop"
+
     def test_installer_custom_destination_is_created_and_repeat_safe(self) -> None:
         source = self.copy_source_tree()
         destination = self.home / "chosen executable directory" / "nested"
@@ -602,12 +608,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(state["copilot_calls"], [])
 
     def test_installed_command_runs_from_a_target_checkout_subdirectory(self) -> None:
-        source = self.copy_source_tree()
-
-        install = self.run_installer(source)
-        self.assertEqual(install.returncode, 0, install.stderr.decode())
-
-        installed = self.home / ".local/bin/implement-loop"
+        source, installed = self.install_test_command()
         self.assertTrue(installed.is_symlink())
         self.assertEqual(os.readlink(installed), str(source.resolve() / SCRIPT.name))
 
@@ -633,10 +634,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(self.git("status", "--porcelain"), "")
 
     def test_installed_default_opencode_honors_config_and_progresses_returned_queue(self) -> None:
-        source = self.copy_source_tree()
-        install = self.run_installer(source)
-        self.assertEqual(install.returncode, 0, install.stderr.decode())
-        installed = self.home / ".local/bin/implement-loop"
+        source, installed = self.install_test_command()
 
         records_dir = self.home / "configured private records"
         config_home = self.home / "configured user settings"
@@ -748,10 +746,7 @@ class LoopTests(unittest.TestCase):
     def test_installed_copilot_finalizes_after_manual_unassignment_then_requires_new_commit(
         self,
     ) -> None:
-        source = self.copy_source_tree()
-        install = self.run_installer(source)
-        self.assertEqual(install.returncode, 0, install.stderr.decode())
-        installed = self.home / ".local/bin/implement-loop"
+        source, installed = self.install_test_command()
 
         existing_implementation = self.repo / "implementation-2.txt"
         existing_implementation.write_text("implementation committed before approval\n")
