@@ -230,27 +230,38 @@ data.
 
 ## Failure and manual recovery
 
-Failures stop the loop with a nonzero status. The runner does not retry, roll
-back, stash, reset, unassign, or skip ahead. It preserves assignments, commits,
-and working files. A failed `gh issue edit --add-assignee` may have assigned the
-ticket before the command reported an error; inspect the issue rather than
-assuming the claim did not land. Likewise, a failed `gh issue close --comment`
-does not prove that neither its comment nor the closure took effect, and a
-closure-confirmation read can fail after GitHub has closed the ticket. Check the
-issue itself and the attempt's `closure-comment.txt`, `checks.json`, and
-`closed-ticket.json` when present before deciding how to recover. The runner does
-not retry or repair partial GitHub writes automatically.
+Failures stop the loop with a nonzero status. Within its handled error boundary,
+the command prints the original error and, when available, the existing run-record
+directory and current ticket's record directory. A ticket pointer is labelled
+`(no harness invocation started)` when preparation or assignment failed before
+the harness was invoked. Ticket records can therefore exist before an attempt; a
+directory name or its existence alone does not establish that an attempt occurred.
+Failures before record creation do not print an invented path, and run-level
+failures after ticket processing do not point to the previously completed ticket.
+
+The runner does not retry, roll back, stash, reset, unassign, or skip ahead. Any
+existing checkout changes, commits, and assignments were left in place; this does
+not imply that any of those effects occurred. A failed
+`gh issue edit --add-assignee` may have assigned the ticket before the command
+reported an error; inspect the issue rather than assuming the claim did not land.
+Likewise, a failed `gh issue close --comment` does not prove that neither its
+comment nor the closure took effect, and a closure-confirmation read can fail
+after GitHub has closed the ticket. Check the issue itself and the ticket
+records' `closure-comment.txt`, `checks.json`, and `closed-ticket.json` when
+present before deciding how to recover. The runner does not retry or repair
+partial GitHub writes automatically.
 
 After a failure:
 
-1. Read the run's `agent.log`, `process.json`, context snapshots, prompt, result
-   evidence, and `checks.json` when present.
+1. Start with the original error and the printed record pointers. Inspect the
+   run's `agent.log`, `process.json`, context snapshots, prompt, result evidence,
+   and `checks.json` when present. Use the current ticket's record directory
+   when printed; its presence does not prove that the harness ran.
 2. Inspect the current branch, commit history, and working tree; resolve any
    partial work deliberately.
-3. Check whether the selected harness, delegated agents, or background work is
-   still running, and verify that they have stopped before restarting. An
-   interrupt, private-server mode, or release of the local lock does **not**
-   confirm descendant shutdown.
+3. Before rerunning, verify that any potentially running harness, delegated
+   agents, and background work have stopped. On interruption, the printed output,
+   record presence, and release of the local lock do **not** confirm shutdown.
 4. Inspect the GitHub issue and decide whether to keep it assigned, close it
    manually, or unassign it before rerunning. A ticket still assigned to you is
    intentionally skipped on the next run.

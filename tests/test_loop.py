@@ -236,7 +236,10 @@ elif args[:2] == ["issue", "edit"]:
         sys.exit(0)
     login = args[args.index("--add-assignee") + 1]
     if state.get("claim_failure") == "before_write":
-        sys.exit("simulated GitHub claim failure before writing")
+        sys.exit(state.get(
+            "claim_failure_detail",
+            "simulated GitHub claim failure before writing",
+        ))
     ticket["assignees"].append({"login": login})
     if state.get("claim_conflict"):
         ticket["assignees"].append({"login": "other"})
@@ -251,7 +254,10 @@ elif args[:2] == ["issue", "edit"]:
     state.setdefault("events", []).append(["assign", number, login])
     save_state()
     if state.get("claim_failure") == "after_write":
-        sys.exit("simulated GitHub claim failure after writing")
+        sys.exit(state.get(
+            "claim_failure_detail",
+            "simulated GitHub claim failure after writing",
+        ))
     sys.exit(0)
 elif args[:2] == ["issue", "close"]:
     number = int(args[2])
@@ -267,6 +273,8 @@ elif args[:2] == ["issue", "close"]:
         sys.exit("simulated GitHub closure failure")
     ticket_for(number)["state"] = "closed"
     state.setdefault("events", []).append(["close", number, comment])
+    if state.get("fail_queue_refresh_after_close"):
+        state["api_failure_endpoint"] = "repos/test/repo/issues/1/sub_issues?per_page=100"
     if state.get("fail_confirmation_after_close"):
         state["fail_next_issue_read_for"] = number
     save_state()
@@ -1388,6 +1396,28 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(run_metadata["model"], "configured-model")
         self.assertEqual(run_metadata["reasoning_effort"], "high")
 
+    def test_failure_before_record_creation_does_not_print_record_paths(self) -> None:
+        minimal_bin = self.home / "minimal-bin"
+        minimal_bin.mkdir()
+        for executable in ("python3", "git"):
+            resolved = shutil.which(executable, path=self.env["PATH"])
+            self.assertIsNotNone(resolved)
+            (minimal_bin / executable).symlink_to(resolved)
+
+        result, runs = self.run_loop(
+            harness="copilot",
+            extra_env={"PATH": str(minimal_bin)},
+        )
+
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, result.stderr.decode())
+        self.assertIn(b"Required executable not found on PATH: gh", result.stderr)
+        self.assertNotIn(b"Run records:", output)
+        self.assertNotIn(b"Ticket #", output)
+        self.assertEqual(runs, [])
+        self.assertFalse((self.home / ".local/state/implement-loop").exists())
+        self.assertFalse(self.repository_lock_path().exists())
+
     def test_invalid_cli_reasoning_effort_is_rejected_before_side_effects(self) -> None:
         result, runs = self.run_loop(
             "--harness",
@@ -1493,6 +1523,98 @@ class LoopTests(unittest.TestCase):
 
     def test_copilot_terminal_output_is_live_before_harness_exit(self) -> None:
         self._assert_live_harness_output("copilot", terminal=True)
+
+    def test_interrupt_reports_existing_run_and_ticket_records(self) -> None:
+        ready_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ready_listener.bind(("127.0.0.1", 0))
+        ready_listener.listen()
+        ready_listener.settimeout(LIVE_READY_TIMEOUT)
+        env = dict(self.env)
+        env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT"] = LIVE_OUTPUT_FRAGMENT.decode("ascii")
+        env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"] = str(ready_listener.getsockname()[1])
+        process: subprocess.Popen[bytes] | None = None
+        output = bytearray()
+
+        try:
+            process = subprocess.Popen(
+                [
+                    str(SCRIPT),
+                    "1",
+                    "--max-iterations",
+                    "1",
+                    "--harness",
+                    "copilot",
+                ],
+                cwd=self.repo,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            with ready_listener.accept()[0] as ready_connection:
+                ready_connection.settimeout(LIVE_READY_TIMEOUT)
+                self.assertEqual(ready_connection.recv(1), b"R")
+            assert process.stdout is not None
+            self._read_until_output(
+                process.stdout.fileno(),
+                output,
+                LIVE_OUTPUT_FRAGMENT,
+                timeout=LIVE_OUTPUT_TIMEOUT,
+            )
+            attempt_directories = list(
+                (self.home / ".local/state/implement-loop").glob("run-*/attempt-1-ticket-2")
+            )
+            self.assertEqual(len(attempt_directories), 1)
+            run_directory = attempt_directories[0].parent
+            attempt_directory = attempt_directories[0]
+
+            process.send_signal(signal.SIGINT)
+            assert process.stdin is not None
+            process.stdin.write(b"x")
+            process.stdin.flush()
+            remaining, _ = process.communicate(timeout=LIVE_READY_TIMEOUT)
+            output.extend(remaining)
+
+            self.assertEqual(process.returncode, 130, output.decode("utf-8", errors="replace"))
+            self.assertIn(b"Interrupted.", output)
+            self.assertIn(f"Run records: {run_directory.resolve()}".encode(), output)
+            self.assertIn(
+                f"Ticket #2 records: {attempt_directory.resolve()}".encode(),
+                output,
+            )
+            self.assertIn(
+                b"This output, the records, and release of the local lock do not confirm shutdown",
+                output,
+            )
+            self.assertTrue(run_directory.is_dir())
+            self.assertTrue(attempt_directory.is_dir())
+            self.assertFalse((run_directory / "active.pid").exists())
+            self.assertFalse(self.repository_lock_path().exists())
+            self.assertEqual(len(self.load_state()["copilot_calls"]), 1)
+        finally:
+            if process is not None:
+                if process.stdin is not None and not process.stdin.closed:
+                    try:
+                        process.stdin.write(b"x")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError, ValueError):
+                        pass
+                    try:
+                        process.stdin.close()
+                    except OSError:
+                        pass
+                try:
+                    process.wait(timeout=LIVE_READY_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    process.wait(timeout=5)
+                if process.stdout is not None:
+                    process.stdout.close()
+            ready_listener.close()
 
     def test_transcript_marker_without_result_file_does_not_close_ticket(self) -> None:
         for harness, selected_calls, unselected_calls in (
@@ -1645,6 +1767,14 @@ class LoopTests(unittest.TestCase):
                 self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
                 self.assertIn(f"{display_name} exited with status 7".encode(), result.stderr)
                 attempt = runs[-1] / "attempt-1-ticket-2"
+                self.assertIn(
+                    f"Run records: {runs[-1].resolve()}".encode(),
+                    result.stderr,
+                )
+                self.assertIn(
+                    f"Ticket #2 records: {attempt.resolve()}".encode(),
+                    result.stderr,
+                )
                 self.assertEqual(json.loads((attempt / "process.json").read_text())["exit_code"], 7)
                 self.assertEqual(
                     json.loads((attempt / "completion-evidence.json").read_text())["status"],
@@ -2099,6 +2229,43 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(state["tickets"]["2"]["assignees"], [])
         self.assertEqual(state["tickets"]["3"]["assignees"], [])
 
+    def test_preparation_failure_reports_ticket_records_before_metadata_exists(self) -> None:
+        self.state["api_failure_endpoint"] = "repos/test/repo/issues/2/comments?per_page=100"
+        self.save_state()
+
+        result, runs = self.run_loop()
+
+        attempt = runs[0] / "attempt-1-ticket-2"
+        self.assertEqual(result.returncode, 1, result.stderr.decode())
+        self.assertIn(b"simulated required GitHub API read failure", result.stderr)
+        self.assertIn(f"Run records: {runs[0].resolve()}".encode(), result.stderr)
+        self.assertIn(
+            f"Ticket #2 records (no harness invocation started): {attempt.resolve()}".encode(),
+            result.stderr,
+        )
+        self.assertTrue(attempt.is_dir())
+        self.assertEqual(list(attempt.iterdir()), [])
+        self.assertEqual(self.load_state()["events"], [])
+        self.assertEqual(self.load_state()["copilot_calls"], [])
+
+    def test_queue_refresh_failure_does_not_report_completed_ticket_records(self) -> None:
+        self.add_ticket(3)
+        self.state["fail_queue_refresh_after_close"] = True
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "2")
+
+        state = self.load_state()
+        self.assertEqual(result.returncode, 1, result.stderr.decode())
+        self.assertIn(b"simulated required GitHub API read failure", result.stderr)
+        self.assertIn(f"Run records: {runs[0].resolve()}".encode(), result.stderr)
+        self.assertNotIn(b"Ticket #2 records", result.stderr)
+        self.assertNotIn(b"Ticket #3 records", result.stderr)
+        self.assertTrue((runs[0] / "attempt-1-ticket-2").is_dir())
+        self.assertEqual(state["tickets"]["2"]["state"], "closed")
+        self.assertEqual(state["tickets"]["3"]["assignees"], [])
+        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
+
     def test_failed_preclosure_read_preserves_work_and_stops_the_queue(self) -> None:
         self.add_ticket(3)
         self.state["fail_preclosure_read_after_harness"] = True
@@ -2190,6 +2357,10 @@ class LoopTests(unittest.TestCase):
                 self.state = self.default_state()
                 self.add_ticket(3)
                 self.state["claim_failure"] = failure_mode
+                self.state["claim_failure_detail"] = (
+                    f"simulated GitHub claim failure {failure_mode.replace('_', ' ')}\n"
+                    "additional stderr detail"
+                )
                 self.save_state()
 
                 result, runs = self.run_loop("--max-iterations", "2")
@@ -2197,7 +2368,28 @@ class LoopTests(unittest.TestCase):
                 state = self.load_state()
                 attempt = runs[0] / "attempt-1-ticket-2"
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn(b"simulated GitHub claim failure", result.stderr)
+                self.assertIn(
+                    (
+                        f"simulated GitHub claim failure {failure_mode.replace('_', ' ')}\n"
+                        "additional stderr detail"
+                    ).encode(),
+                    result.stderr,
+                )
+                self.assertIn(f"Run records: {runs[0].resolve()}".encode(), result.stderr)
+                self.assertIn(
+                    (
+                        f"Ticket #2 records (no harness invocation started): {attempt.resolve()}"
+                    ).encode(),
+                    result.stderr,
+                )
+                self.assertIn(
+                    b"Any existing checkout changes, commits, and assignments were left in place",
+                    result.stderr,
+                )
+                self.assertIn(
+                    b"Before rerunning, verify that any potentially running harness",
+                    result.stderr,
+                )
                 self.assertEqual(state["copilot_calls"], [])
                 self.assertEqual(state["tickets"]["2"]["state"], "open")
                 self.assertEqual(state["tickets"]["3"]["state"], "open")

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Options
-from .errors import LoopError
+from .errors import DiagnosticContext, LoopError
 from .git import (
     RepositoryLock,
     assert_checkout,
@@ -411,7 +411,7 @@ def _write_attempt_context(
     }
 
 
-def run(options: Options) -> None:
+def run(options: Options, diagnostics: DiagnosticContext) -> None:
     """Run up to the configured number of sequential harness-backed attempts."""
 
     os.umask(0o077)
@@ -430,6 +430,7 @@ def run(options: Options) -> None:
             checkout.root,
             options.records,
         )
+        diagnostics.run_records = records.run_dir
         run_metadata: dict[str, Any] = {
             "branch": checkout.branch,
             "initial_head": checkout.initial_head,
@@ -505,10 +506,14 @@ def run(options: Options) -> None:
                 return
 
             ticket_number = ticket["number"]
+            diagnostics.ticket_number = ticket_number
+            diagnostics.ticket_records = None
+            diagnostics.harness_invoked = False
             new_commit_requirement_waived = ticket_number == options.allow_no_new_commit_ticket
             attempt_number = attempts + 1
             attempt_id = str(uuid.uuid4())
             attempt_dir = records.attempt_directory(attempt_number, ticket_number)
+            diagnostics.ticket_records = attempt_dir
             result_directory, result_path = _new_result_destination(
                 checkout.root,
                 attempt_id,
@@ -589,6 +594,7 @@ def run(options: Options) -> None:
                     flush=True,
                 )
                 attempts += 1
+                diagnostics.harness_invoked = True
                 outcome = run_harness(
                     harness,
                     prompt,
@@ -695,8 +701,13 @@ def run(options: Options) -> None:
                         f"{result_directory}: {error}",
                         file=sys.stderr,
                     )
+            diagnostics.clear_ticket()
+    except (KeyboardInterrupt, LoopError, OSError):
+        diagnostics.handled_failure = True
+        raise
     finally:
         if records is not None:
             records.finish()
-            print(f"Run records: {records.run_dir}", file=sys.stderr)
+            if not diagnostics.handled_failure:
+                print(f"Run records: {records.run_dir}", file=sys.stderr)
         lock.release()
