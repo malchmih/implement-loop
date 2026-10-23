@@ -3,11 +3,9 @@ from __future__ import annotations
 import json
 import os
 import resource
-import shutil
 import signal
 import socket
 import subprocess
-import sys
 from pathlib import Path
 
 from support import (
@@ -359,12 +357,7 @@ class HarnessTests(LoopTestCase):
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
 
     def test_missing_copilot_cli_fails_before_claim(self) -> None:
-        limited_bin = self.home / "limited-bin"
-        limited_bin.mkdir()
-        (limited_bin / "python3").symlink_to(sys.executable)
-        (limited_bin / "git").symlink_to(shutil.which("git"))
-        (limited_bin / "gh").symlink_to(self.bin / "gh")
-        (limited_bin / "opencode").symlink_to(self.bin / "opencode")
+        limited_bin = self.controlled_path_directory("python3", "git", "gh", "opencode")
 
         result, runs = self.run_loop(
             harness="copilot",
@@ -375,15 +368,7 @@ class HarnessTests(LoopTestCase):
         self.assert_missing_executable_stopped_before_run(runs)
 
     def test_missing_default_opencode_cli_does_not_fall_back_to_copilot(self) -> None:
-        limited_bin = self.home / "limited-bin"
-        limited_bin.mkdir()
-        for tool, target in (
-            ("python3", sys.executable),
-            ("git", shutil.which("git")),
-            ("gh", self.bin / "gh"),
-            ("copilot", self.bin / "copilot"),
-        ):
-            (limited_bin / tool).symlink_to(target)
+        limited_bin = self.controlled_path_directory("python3", "git", "gh", "copilot")
 
         result, runs = self.run_loop(harness=None, extra_env={"PATH": str(limited_bin)})
 
@@ -391,15 +376,7 @@ class HarnessTests(LoopTestCase):
         self.assert_missing_executable_stopped_before_run(runs)
 
     def test_default_opencode_runs_without_a_copilot_executable(self) -> None:
-        limited_bin = self.home / "limited-bin"
-        limited_bin.mkdir()
-        for tool, target in (
-            ("python3", sys.executable),
-            ("git", shutil.which("git")),
-            ("gh", self.bin / "gh"),
-            ("opencode", self.bin / "opencode"),
-        ):
-            (limited_bin / tool).symlink_to(target)
+        limited_bin = self.controlled_path_directory("python3", "git", "gh", "opencode")
 
         result, _ = self.run_loop(
             "--max-iterations",
@@ -415,15 +392,7 @@ class HarnessTests(LoopTestCase):
         self.assertEqual(state["copilot_calls"], [])
 
     def test_explicit_copilot_runs_without_an_opencode_executable(self) -> None:
-        limited_bin = self.home / "limited-bin"
-        limited_bin.mkdir()
-        for tool, target in (
-            ("python3", sys.executable),
-            ("git", shutil.which("git")),
-            ("gh", self.bin / "gh"),
-            ("copilot", self.bin / "copilot"),
-        ):
-            (limited_bin / tool).symlink_to(target)
+        limited_bin = self.controlled_path_directory("python3", "git", "gh", "copilot")
 
         result, _ = self.run_loop(
             "--max-iterations",

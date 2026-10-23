@@ -380,15 +380,7 @@ class ConfigurationTests(LoopTestCase):
         self.assertEqual(run_metadata["reasoning_effort"], "high")
 
     def test_missing_git_fails_before_checkout_discovery_or_side_effects(self) -> None:
-        minimal_bin = self.home / "missing-git-bin"
-        minimal_bin.mkdir()
-        for executable, target in (
-            ("python3", sys.executable),
-            ("gh", self.bin / "gh"),
-            ("opencode", self.bin / "opencode"),
-            ("copilot", self.bin / "copilot"),
-        ):
-            (minimal_bin / executable).symlink_to(target)
+        minimal_bin = self.controlled_path_directory("python3", "gh", "opencode", "copilot")
 
         result, runs = self.run_loop(
             harness=None,
@@ -400,14 +392,7 @@ class ConfigurationTests(LoopTestCase):
         self.assert_missing_executable_stopped_before_run(runs)
 
     def test_failure_before_record_creation_does_not_print_record_paths(self) -> None:
-        minimal_bin = self.home / "minimal-bin"
-        minimal_bin.mkdir()
-        for executable in ("python3", "git"):
-            resolved = shutil.which(executable, path=self.env["PATH"])
-            self.assertIsNotNone(resolved)
-            (minimal_bin / executable).symlink_to(resolved)
-        for executable in ("opencode", "copilot"):
-            (minimal_bin / executable).symlink_to(self.bin / executable)
+        minimal_bin = self.controlled_path_directory("python3", "git", "opencode", "copilot")
 
         result, runs = self.run_loop(
             harness="copilot",

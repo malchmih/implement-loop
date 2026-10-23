@@ -9,6 +9,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -535,6 +536,23 @@ class LoopTestCase(TemporaryHomeTestCase):
         if not common_dir.is_absolute():
             common_dir = (cwd or self.repo) / common_dir
         return common_dir.resolve() / "implement-loop.lock"
+
+    def controlled_path_directory(self, *commands: str) -> Path:
+        directory = self.home / "controlled-bin"
+        directory.mkdir()
+        for command in commands:
+            if command == "python3":
+                target = Path(sys.executable)
+            elif command == "git":
+                git = shutil.which("git", path=self.env["PATH"])
+                self.assertIsNotNone(git, "test environment needs git")
+                assert git is not None
+                target = Path(git)
+            else:
+                target = self.bin / command
+                self.assertTrue(target.is_file(), f"no fake executable for {command}")
+            (directory / command).symlink_to(target)
+        return directory
 
     def git(self, *args: str, cwd: Path | None = None) -> str:
         result = subprocess.run(
