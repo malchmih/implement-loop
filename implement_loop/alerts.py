@@ -14,9 +14,13 @@ class AlertSound(Enum):
     """Native macOS cues available to loop outcome alerts."""
 
     GLASS = "Glass"
+    BASSO = "Basso"
 
 
-_MACOS_SOUND_PATHS = {AlertSound.GLASS: "/System/Library/Sounds/Glass.aiff"}
+_MACOS_SOUND_PATHS = {
+    AlertSound.GLASS: "/System/Library/Sounds/Glass.aiff",
+    AlertSound.BASSO: "/System/Library/Sounds/Basso.aiff",
+}
 
 
 def _run_delivery_command(arguments: list[str]) -> None:

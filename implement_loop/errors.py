@@ -6,8 +6,9 @@ from pathlib import Path
 
 @dataclass
 class DiagnosticContext:
-    """Existing record locations relevant to the current handled failure."""
+    """Repository and record context available when reporting a handled stop."""
 
+    repository_name: str | None = None
     run_records: Path | None = None
     ticket_number: int | None = None
     ticket_records: Path | None = None

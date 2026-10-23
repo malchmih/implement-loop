@@ -117,9 +117,15 @@ neither message claims that all tickets are complete. Ticket details, task
 descriptions, checkout paths, and agent output are not included. The queue-empty
 reason takes precedence when no eligible child remains at the attempt limit.
 
-This slice alerts only for normal exits on macOS. Handled execution failures,
-Ctrl+C, termination signals, help, and invalid arguments or configuration remain
-silent. Linux alerts and failure alerts are not supported yet.
+Handled execution failures likewise attempt one notification and one Basso sound
+after cleanup, even when no Attempt began. The notification says “Run failed” and
+does not include the exception or recovery details. Ctrl+C, termination signals,
+help, and invalid arguments or configuration remain silent. Alerts are currently
+supported on macOS only.
+
+An alert means the Loop wrapper stopped; it does not prove that a harness,
+delegated agent, or other background work has stopped. Follow the recovery guidance
+below before rerunning interrupted or failed work.
 
 Alerts are delivered on the machine running Implement Loop and are not forwarded
 over SSH. The operating system may suppress notifications because of permissions,

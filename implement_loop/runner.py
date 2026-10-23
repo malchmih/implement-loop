@@ -442,6 +442,7 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
 
         github = GitHub(checkout.root)
         repository = github.resolve_repository()
+        diagnostics.repository_name = repository.name_with_owner
         login = github.authenticated_login(repository)
         spec = github.get_spec(repository, options.spec_number)
         repository_url = spec.get("repository_url")

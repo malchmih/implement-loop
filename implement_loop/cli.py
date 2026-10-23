@@ -61,6 +61,14 @@ def _report_handled_stop(
     _print_recovery_guidance(interrupted=interrupted)
 
 
+def _alert_handled_failure(diagnostics: DiagnosticContext) -> None:
+    deliver_alert(
+        repository_name=diagnostics.repository_name,
+        reason="Run failed",
+        sound=AlertSound.BASSO,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     options = parse_args(argv)
     signal.signal(signal.SIGTERM, _handle_termination)
@@ -77,6 +85,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 130
     except LoopError as error:
         _report_handled_stop(f"Error: {error}", diagnostics, interrupted=False)
+        _alert_handled_failure(diagnostics)
         return 1
     except OSError as error:
         _report_handled_stop(
@@ -84,5 +93,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             diagnostics,
             interrupted=False,
         )
+        _alert_handled_failure(diagnostics)
         return 1
     return 0

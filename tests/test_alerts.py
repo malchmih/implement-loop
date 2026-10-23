@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 
@@ -159,20 +160,115 @@ class AlertTests(LoopTestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(self.alert_calls(), [])
 
-    def test_handled_execution_failure_is_silent_in_this_slice(self) -> None:
-        self.state["agent_exit"] = 7
+    def test_failure_before_attempt_uses_generic_identity_and_basso_after_cleanup(self) -> None:
+        self.state["repository_view_failure"] = True
         self.save_state()
 
-        result, _ = self.run_loop(
-            "--max-iterations",
-            "1",
+        result, runs = self.run_loop(
             harness="copilot",
             extra_env=self.platform_test_environment("darwin"),
         )
 
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 1, result.stderr.decode())
+        self.assertIn(b"simulated repository discovery failure", result.stderr)
+        self.assertIn(
+            b"Before rerunning, verify that any potentially running harness",
+            result.stderr,
+        )
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(self.load_state()["copilot_calls"], [])
+
+        calls = self.alert_calls()
+        self.assertEqual([call["tool"] for call in calls], ["osascript", "afplay"])
+        self.assertEqual(calls[0]["args"][-2:], ["Implement Loop", "Run failed"])
+        self.assertEqual(calls[1]["args"], ["/System/Library/Sounds/Basso.aiff"])
+        for call in calls:
+            self.assertFalse(call["lock_exists"])
+            self.assertEqual(call["active_run_markers"], [])
+        for private_value in (
+            str(self.repo),
+            "test/repo",
+            "simulated repository discovery failure",
+            "Ticket fixture: implement the requested behavior.",
+            "IMPLEMENT_LOOP_COMPLETE",
+        ):
+            self.assertNotIn(private_value, calls[0]["args"])
+
+    def test_multi_attempt_run_alerts_once_for_handled_failure_after_attempt(self) -> None:
+        self.add_ticket(3)
+        self.state["agent_exit_by_ticket"] = {"3": 7}
+        self.save_state()
+
+        result, runs = self.run_loop(
+            "--max-iterations",
+            "2",
+            harness="copilot",
+            extra_env=self.platform_test_environment("darwin"),
+        )
+
+        state = self.load_state()
+        attempt = runs[0] / "attempt-2-ticket-3"
+        self.assertEqual(result.returncode, 1, result.stderr.decode())
+        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2, 3])
+        self.assertEqual(state["tickets"]["2"]["state"], "closed")
+        self.assertEqual(state["tickets"]["3"]["state"], "open")
+        self.assertEqual(state["tickets"]["3"]["assignees"], [{"login": "tester"}])
         self.assertIn(b"Copilot exited with status 7", result.stderr)
-        self.assertEqual(self.alert_calls(), [])
+        self.assertIn(f"Run records: {runs[0].resolve()}".encode(), result.stderr)
+        self.assertIn(f"Ticket #3 records: {attempt.resolve()}".encode(), result.stderr)
+        self.assertIn(
+            b"Before rerunning, verify that any potentially running harness",
+            result.stderr,
+        )
+        self.assertEqual(json.loads((attempt / "process.json").read_text())["exit_code"], 7)
+
+        calls = self.alert_calls()
+        self.assertEqual([call["tool"] for call in calls], ["osascript", "afplay"])
+        self.assertEqual(calls[0]["args"][-2:], ["test/repo", "Run failed"])
+        self.assertEqual(calls[1]["args"], ["/System/Library/Sounds/Basso.aiff"])
+        for call in calls:
+            self.assertFalse(call["lock_exists"])
+            self.assertEqual(call["active_run_markers"], [])
+        for private_value in (
+            str(self.repo),
+            "Ticket fixture: implement the requested behavior.",
+            "IMPLEMENT_LOOP_COMPLETE",
+            "Copilot exited with status 7",
+            "implementation-3.txt",
+        ):
+            self.assertNotIn(private_value, calls[0]["args"])
+
+    def test_failed_or_timed_out_delivery_preserves_handled_failure_status(self) -> None:
+        self.state["repository_view_failure"] = True
+        self.save_state()
+
+        for failing_tool, mode in (
+            ("osascript", "fail"),
+            ("afplay", "fail"),
+            ("osascript", "hang"),
+            ("afplay", "hang"),
+        ):
+            with self.subTest(failing_tool=failing_tool, mode=mode):
+                self.clear_alert_calls()
+                started = time.monotonic()
+                result, _ = self.run_loop(
+                    harness="copilot",
+                    extra_env={
+                        **self.platform_test_environment("darwin"),
+                        f"IMPLEMENT_LOOP_TEST_{failing_tool.upper()}_MODE": mode,
+                    },
+                )
+                elapsed = time.monotonic() - started
+
+                self.assertEqual(result.returncode, 1, result.stderr.decode())
+                self.assertIn(b"simulated repository discovery failure", result.stderr)
+                self.assertNotIn(b"simulated alert", result.stdout + result.stderr)
+                if mode == "hang":
+                    self.assertLess(elapsed, 5.0)
+                calls = self.alert_calls()
+                self.assertEqual([call["tool"] for call in calls], ["osascript", "afplay"])
+                self.assertEqual(calls[0]["args"][-2:], ["Implement Loop", "Run failed"])
+                self.assertEqual(calls[1]["args"], ["/System/Library/Sounds/Basso.aiff"])
 
     def test_help_and_invalid_cli_or_configuration_do_not_alert(self) -> None:
         environment = dict(self.env)

@@ -61,6 +61,9 @@ if tool_name in ("copilot", "opencode"):
     ticket_number = int(
         re.search(r"(?:/implement|@implement) Implement only ticket #(\d+)", prompt).group(1)
     )
+    exit_status = state.get("agent_exit_by_ticket", {}).get(
+        str(ticket_number), state.get("agent_exit", 0)
+    )
     attempt_id = next(
         line.removeprefix("Attempt ID: ").strip()
         for line in prompt.splitlines() if line.startswith("Attempt ID: ")
@@ -197,9 +200,9 @@ if tool_name in ("copilot", "opencode"):
         sys.stdin.buffer.read(1)
         sys.stdout.write("\n")
         sys.stdout.flush()
-        sys.exit(int(state.get("agent_exit", 0)))
+        sys.exit(int(exit_status))
     sys.stdout.write("Agent output\n" + output + "\n")
-    sys.exit(int(state.get("agent_exit", 0)))
+    sys.exit(int(exit_status))
 
 if args[:2] == ["repo", "view"]:
     common = Path(subprocess.check_output(
