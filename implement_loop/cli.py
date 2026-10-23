@@ -7,6 +7,7 @@ import sys
 from collections.abc import Sequence
 from types import FrameType
 
+from .alerts import AlertSound, deliver_alert
 from .config import parse_args
 from .errors import DiagnosticContext, LoopError
 from .runner import run
@@ -65,7 +66,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, _handle_termination)
     diagnostics = DiagnosticContext()
     try:
-        run(options, diagnostics)
+        result = run(options, diagnostics)
+        deliver_alert(
+            identity=result.repository_name,
+            reason=result.stop_reason.value,
+            sound=AlertSound.GLASS,
+        )
     except KeyboardInterrupt:
         _report_handled_stop("Interrupted.", diagnostics, interrupted=True)
         return 130

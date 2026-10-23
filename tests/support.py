@@ -219,7 +219,11 @@ if args[:2] == ["repo", "view"]:
         sys.exit("simulated repository discovery failure")
     if "GH_REPO" in os.environ:
         state["repo_view_saw_override"] = os.environ["GH_REPO"]
-    result = {"nameWithOwner": "test/repo", "url": "https://github.com/test/repo"}
+    repository_name = state.get("repository_name", "test/repo")
+    result = {
+        "nameWithOwner": repository_name,
+        "url": f"https://github.com/{repository_name}",
+    }
 elif args[:2] == ["issue", "edit"]:
     number = int(args[2])
     ticket = ticket_for(number)
@@ -339,6 +343,37 @@ save_state()
 print(json.dumps(result))
 """
 
+FAKE_ALERT_TOOL = r"""#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+tool_name = Path(sys.argv[0]).name
+state = json.loads(Path(os.environ["IMPLEMENT_LOOP_TEST_STATE"]).read_text())
+repository = Path(os.environ["IMPLEMENT_LOOP_TEST_REPO"])
+state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+records_dir = Path(state.get("records_dir", state_home / "implement-loop"))
+event = {
+    "tool": tool_name,
+    "args": sys.argv[1:],
+    "lock_exists": (repository / ".git/implement-loop.lock").exists(),
+    "active_run_markers": sorted(str(path) for path in records_dir.glob("run-*/active.pid")),
+}
+with Path(os.environ["IMPLEMENT_LOOP_TEST_ALERT_LOG"]).open("a") as log:
+    log.write(json.dumps(event) + "\n")
+
+mode = os.environ.get(f"IMPLEMENT_LOOP_TEST_{tool_name.upper()}_MODE")
+if mode in ("fail", "hang"):
+    print("simulated alert stdout", flush=True)
+    print("simulated alert stderr", file=sys.stderr, flush=True)
+if mode == "fail":
+    sys.exit(1)
+if mode == "hang":
+    time.sleep(60)
+"""
+
 
 def _without_inherited_git_environment(environment: Mapping[str, str]) -> dict[str, str]:
     return {key: value for key, value in environment.items() if not key.startswith("GIT_")}
@@ -370,6 +405,7 @@ class TemporaryHomeTestCase(unittest.TestCase):
         self.bin.mkdir()
         self.env["PATH"] = str(self.bin) + os.pathsep + self.env["PATH"]
         self.invocation_markers: dict[str, Path] = {}
+        self.controlled_path_count = 0
 
     def add_invocation_marker(self, command: str) -> Path:
         executable = self.bin / command
@@ -421,15 +457,17 @@ class LoopTestCase(TemporaryHomeTestCase):
         super().setUp()
         self.repo = self.home / "repo"
         self.repo.mkdir()
-        for tool in ("gh", "copilot", "opencode"):
+        for tool in ("gh", "copilot", "opencode", "osascript", "afplay"):
             path = self.bin / tool
-            path.write_text(FAKE_TOOL)
+            path.write_text(FAKE_ALERT_TOOL if tool in ("osascript", "afplay") else FAKE_TOOL)
             path.chmod(0o700)
 
         self.state_path = self.home / "github-state.json"
         self.state = self.default_state()
         self.save_state()
         self.env["IMPLEMENT_LOOP_TEST_STATE"] = str(self.state_path)
+        self.env["IMPLEMENT_LOOP_TEST_REPO"] = str(self.repo)
+        self.env["IMPLEMENT_LOOP_TEST_ALERT_LOG"] = str(self.home / "alert-calls.jsonl")
 
         self.git("init", "--quiet")
         self.git("symbolic-ref", "HEAD", "refs/heads/main")
@@ -479,6 +517,15 @@ class LoopTestCase(TemporaryHomeTestCase):
     def save_state(self) -> None:
         self.state_path.write_text(json.dumps(self.state))
 
+    def set_repository_identity(self, name: str) -> None:
+        repository_url = f"https://api.github.com/repos/{name}"
+        self.state["repository_name"] = name
+        self.state["repository_url"] = repository_url
+        self.state["spec"]["repository_url"] = repository_url
+        for ticket in self.state["tickets"].values():
+            ticket["repository_url"] = repository_url
+        self.save_state()
+
     def add_ticket(
         self,
         number: int,
@@ -526,7 +573,8 @@ class LoopTestCase(TemporaryHomeTestCase):
         return common_dir.resolve() / "implement-loop.lock"
 
     def controlled_path_directory(self, *commands: str) -> Path:
-        directory = self.home / "controlled-bin"
+        self.controlled_path_count += 1
+        directory = self.home / f"controlled-bin-{self.controlled_path_count}"
         directory.mkdir()
         for command in commands:
             if command == "python3":
@@ -765,3 +813,23 @@ class LoopTestCase(TemporaryHomeTestCase):
 
     def load_state(self) -> dict[str, object]:
         return json.loads(self.state_path.read_text())
+
+    def alert_calls(self) -> list[dict[str, object]]:
+        path = Path(self.env["IMPLEMENT_LOOP_TEST_ALERT_LOG"])
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+    def clear_alert_calls(self) -> None:
+        Path(self.env["IMPLEMENT_LOOP_TEST_ALERT_LOG"]).unlink(missing_ok=True)
+
+    def platform_test_environment(self, platform: str) -> dict[str, str]:
+        """Exercise a platform adapter from CLI subprocess tests on any host OS."""
+        startup_directory = self.home / "test-python-startup"
+        startup_directory.mkdir(exist_ok=True)
+        (startup_directory / "sitecustomize.py").write_text(
+            "import sys\n"
+            "if sys.argv[0].rsplit('/', 1)[-1] == 'implement-loop':\n"
+            f"    sys.platform = {platform!r}\n"
+        )
+        return {"PYTHONPATH": str(startup_directory)}

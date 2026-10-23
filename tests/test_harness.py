@@ -57,12 +57,13 @@ class HarnessTests(LoopTestCase):
     def test_copilot_terminal_output_is_live_before_harness_exit(self) -> None:
         self._assert_live_harness_output("copilot", terminal=True)
 
-    def test_interrupt_reports_existing_run_and_ticket_records(self) -> None:
+    def _assert_signal_stops_run_without_alert(self, stop_signal: int) -> None:
         ready_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         ready_listener.bind(("127.0.0.1", 0))
         ready_listener.listen()
         ready_listener.settimeout(LIVE_READY_TIMEOUT)
         env = dict(self.env)
+        env.update(self.platform_test_environment("darwin"))
         env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT"] = LIVE_OUTPUT_FRAGMENT.decode("ascii")
         env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"] = str(ready_listener.getsockname()[1])
         process: subprocess.Popen[bytes] | None = None
@@ -102,7 +103,7 @@ class HarnessTests(LoopTestCase):
             run_directory = attempt_directories[0].parent
             attempt_directory = attempt_directories[0]
 
-            process.send_signal(signal.SIGINT)
+            process.send_signal(stop_signal)
             assert process.stdin is not None
             process.stdin.write(b"x")
             process.stdin.flush()
@@ -125,6 +126,7 @@ class HarnessTests(LoopTestCase):
             self.assertFalse((run_directory / "active.pid").exists())
             self.assertFalse(self.repository_lock_path().exists())
             self.assertEqual(len(self.load_state()["copilot_calls"]), 1)
+            self.assertEqual(self.alert_calls(), [])
         finally:
             if process is not None:
                 if process.stdin is not None and not process.stdin.closed:
@@ -148,6 +150,12 @@ class HarnessTests(LoopTestCase):
                 if process.stdout is not None:
                     process.stdout.close()
             ready_listener.close()
+
+    def test_ctrl_c_reports_existing_run_and_ticket_records_without_alert(self) -> None:
+        self._assert_signal_stops_run_without_alert(signal.SIGINT)
+
+    def test_termination_reports_existing_run_and_ticket_records_without_alert(self) -> None:
+        self._assert_signal_stops_run_without_alert(signal.SIGTERM)
 
     def test_transcript_marker_without_result_file_does_not_close_ticket(self) -> None:
         for harness, selected_calls, unselected_calls in (

@@ -9,6 +9,8 @@ import stat
 import sys
 import tempfile
 import uuid
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,21 @@ from .harness import HarnessSpec, ProcessOutcome, run_harness, select_harness
 from .records import RunRecords
 
 _MAX_PROMPT_BYTES = 100_000
+
+
+class NormalStopReason(Enum):
+    """Why a Loop run stopped without an execution failure."""
+
+    NO_ELIGIBLE_CHILDREN = "No eligible children"
+    ATTEMPT_LIMIT_REACHED = "Attempt limit reached"
+
+
+@dataclass(frozen=True)
+class RunResult:
+    """Explicit normal-stop details returned after runner cleanup."""
+
+    repository_name: str
+    stop_reason: NormalStopReason
 
 
 def _require_command(name: str, *, harness: HarnessSpec | None = None) -> None:
@@ -383,7 +400,7 @@ def _write_attempt_context(
     }
 
 
-def run(options: Options, diagnostics: DiagnosticContext) -> None:
+def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
     """Run up to the configured number of sequential harness-backed attempts."""
 
     os.umask(0o077)
@@ -472,13 +489,19 @@ def run(options: Options, diagnostics: DiagnosticContext) -> None:
                     f"{counts['open']} open candidates; {counts['blocked']} blocked; "
                     f"{counts['assigned']} otherwise assigned. Completed {completed} ticket(s)."
                 )
-                return
+                return RunResult(
+                    repository_name=repository.name_with_owner,
+                    stop_reason=NormalStopReason.NO_ELIGIBLE_CHILDREN,
+                )
             if attempts >= options.max_iterations:
                 print(
                     f"Attempt limit reached after {attempts} invocation(s); "
                     f"completed {completed} ticket(s)."
                 )
-                return
+                return RunResult(
+                    repository_name=repository.name_with_owner,
+                    stop_reason=NormalStopReason.ATTEMPT_LIMIT_REACHED,
+                )
 
             ticket_number = ticket["number"]
             diagnostics.ticket_number = ticket_number

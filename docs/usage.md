@@ -107,6 +107,26 @@ coordinate other machines or protect against unrelated editors. Rechecks stop
 the run when a change is observed, but cannot prevent an external change that
 races after a read.
 
+## End-of-run alerts
+
+On macOS, every normally stopped Loop run attempts one desktop notification and
+one Glass sound, including runs that did not start an Attempt. This behavior is
+always on and needs no configuration. The notification identifies the
+`OWNER/REPO` and says either “No eligible children” or “Attempt limit reached”;
+neither message claims that all tickets are complete. Ticket details, task
+descriptions, checkout paths, and agent output are not included. The queue-empty
+reason takes precedence when no eligible child remains at the attempt limit.
+
+This slice alerts only for normal exits on macOS. Handled execution failures,
+Ctrl+C, termination signals, help, and invalid arguments or configuration remain
+silent. Linux alerts and failure alerts are not supported yet.
+
+Alerts are delivered on the machine running Implement Loop and are not forwarded
+over SSH. The operating system may suppress notifications because of permissions,
+focus settings, or notification policy; sound may be unavailable or muted. Missing
+tools, unavailable desktop services, denied delivery, and timeouts are silent
+best-effort skips and do not change the Loop run's result.
+
 ## Harness capabilities and external skill setup
 
 The invocation contracts were checked against OpenCode CLI v2.1.3 and GitHub
