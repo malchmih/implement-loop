@@ -35,9 +35,20 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
         raise LoopError(f"Unable to run Git: {error}") from error
 
 
-def _checked_git(cwd: Path, *args: str) -> str:
+def _checked_git(
+    cwd: Path,
+    *args: str,
+    empty_failure_message: str | None = None,
+) -> str:
     result = _git(cwd, *args)
     if result.returncode != 0:
+        if (
+            empty_failure_message is not None
+            and result.returncode == 1
+            and not result.stdout.strip()
+            and not result.stderr.strip()
+        ):
+            raise LoopError(empty_failure_message)
         detail = result.stderr.strip() or f"exit status {result.returncode}"
         raise LoopError(f"Git {' '.join(args)} failed: {detail}")
     return result.stdout.strip()
@@ -48,18 +59,26 @@ def discover_checkout(cwd: Path) -> Checkout:
 
     root_text = _checked_git(cwd, "rev-parse", "--show-toplevel")
     root = Path(root_text).resolve()
-    try:
-        branch = _checked_git(root, "symbolic-ref", "--quiet", "--short", "HEAD")
-    except LoopError as error:
-        raise LoopError(
+    branch = _checked_git(
+        root,
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        "HEAD",
+        empty_failure_message=(
             "The checkout must be on an attached branch; detached HEAD is not supported."
-        ) from error
-    try:
-        initial_head = _checked_git(root, "rev-parse", "--verify", "HEAD^{commit}")
-    except LoopError as error:
-        raise LoopError(
+        ),
+    )
+    initial_head = _checked_git(
+        root,
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "HEAD^{commit}",
+        empty_failure_message=(
             "The checkout must contain an existing commit; an unborn branch is not supported."
-        ) from error
+        ),
+    )
     common_text = _checked_git(root, "rev-parse", "--git-common-dir")
     common_dir = Path(common_text)
     if not common_dir.is_absolute():

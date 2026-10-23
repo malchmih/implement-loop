@@ -402,6 +402,12 @@ class LoopTests(unittest.TestCase):
         self.git("commit", "--quiet", "-m", "Add test submodule")
         return self.repo / "nested-module"
 
+    def repository_lock_path(self, cwd: Path | None = None) -> Path:
+        common_dir = Path(self.git("rev-parse", "--git-common-dir", cwd=cwd))
+        if not common_dir.is_absolute():
+            common_dir = (cwd or self.repo) / common_dir
+        return common_dir.resolve() / "implement-loop.lock"
+
     def git(self, *args: str, cwd: Path | None = None) -> str:
         result = subprocess.run(
             ["git", *args],
@@ -1271,17 +1277,20 @@ class LoopTests(unittest.TestCase):
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
 
     def test_queue_skips_blockers_and_assignments_and_ignores_labels(self) -> None:
-        self.state["tickets"]["2"]["issue_dependencies_summary"]["blocked_by"] = 2
-        self.state["tickets"]["2"]["blocking_issues"] = [3, 99]
+        self.state["tickets"]["2"]["issue_dependencies_summary"]["blocked_by"] = 1
+        self.state["tickets"]["2"]["blocking_issues"] = [3]
         self.add_ticket(3, assignees=["tester"])
         self.add_ticket(4, assignees=["someone-else"])
-        self.add_ticket(5, labels=["wontfix"])
+        self.add_ticket(5, blocked=1, labels=["wontfix"])
+        self.state["tickets"]["5"]["blocking_issues"] = [99]
+        self.add_ticket(6, labels=["wontfix"])
         self.add_ticket(99)
         self.state["children"] = [
             {"number": 2},
             {"number": 3},
             {"number": 4},
             {"number": 5},
+            {"number": 6},
         ]
         self.save_state()
 
@@ -1289,11 +1298,12 @@ class LoopTests(unittest.TestCase):
 
         state = self.load_state()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [5])
+        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [6])
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual(state["tickets"]["3"]["state"], "open")
         self.assertEqual(state["tickets"]["4"]["state"], "open")
-        self.assertEqual(state["tickets"]["5"]["state"], "closed")
+        self.assertEqual(state["tickets"]["5"]["state"], "open")
+        self.assertEqual(state["tickets"]["6"]["state"], "closed")
         self.assertNotIn(99, [child["number"] for child in state["children"]])
 
     def test_named_exception_does_not_bypass_blockers_or_assigned_ticket_skips(self) -> None:
@@ -1418,13 +1428,53 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(self.git("branch", "--show-current"), "unborn")
         self.assertFalse((self.repo / ".git/implement-loop.lock").exists())
 
+    def test_git_discovery_read_errors_are_not_misreported_as_checkout_state(self) -> None:
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        cases = (
+            (
+                ["symbolic-ref", "--quiet", "--short", "HEAD"],
+                "simulated branch read failure",
+                "attached branch",
+            ),
+            (
+                ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+                "simulated HEAD read failure",
+                "unborn branch",
+            ),
+        )
+        for arguments, failure, misleading_state in cases:
+            with self.subTest(arguments=arguments):
+                git_bin = self.home / f"git-read-failure-{arguments[0]}"
+                git_bin.mkdir()
+                wrapper = git_bin / "git"
+                wrapper.write_text(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    f"real_git = {real_git!r}\n"
+                    f"failed_arguments = {arguments!r}\n"
+                    "actual_arguments = sys.argv[1:]\n"
+                    "if actual_arguments == failed_arguments:\n"
+                    f"    sys.stderr.write({failure!r} + '\\n')\n"
+                    "    sys.exit(128)\n"
+                    "os.execv(real_git, [real_git, *actual_arguments])\n"
+                )
+                wrapper.chmod(0o700)
+
+                result, _ = self.run_loop(
+                    extra_env={"PATH": str(git_bin) + os.pathsep + self.env["PATH"]}
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(failure.encode(), result.stderr)
+                self.assertNotIn(misleading_state.encode(), result.stderr)
+                self.assertEqual(self.load_state()["events"], [])
+                self.assertEqual(self.load_state()["copilot_calls"], [])
+
     def test_repository_common_lock_blocks_a_second_worktree(self) -> None:
         worktree = self.home / "other-worktree"
         self.git("worktree", "add", "--quiet", "-b", "other", str(worktree), "HEAD")
-        common_dir = Path(self.git("rev-parse", "--git-common-dir"))
-        if not common_dir.is_absolute():
-            common_dir = self.repo / common_dir
-        lock = common_dir.resolve() / "implement-loop.lock"
+        lock = self.repository_lock_path(worktree)
         lock.mkdir()
         (lock / "pid").write_text("another loop\n")
 
@@ -1436,10 +1486,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual((lock / "pid").read_text(), "another loop\n")
 
     def test_repository_lock_blocks_a_second_run_in_the_same_checkout(self) -> None:
-        common_dir = Path(self.git("rev-parse", "--git-common-dir"))
-        if not common_dir.is_absolute():
-            common_dir = self.repo / common_dir
-        lock = common_dir.resolve() / "implement-loop.lock"
+        lock = self.repository_lock_path()
         lock.mkdir()
         (lock / "pid").write_text("another loop\n")
 
