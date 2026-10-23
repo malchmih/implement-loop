@@ -42,7 +42,9 @@ class GitHub:
         *,
         env: Mapping[str, str] | None = None,
         operation: str,
+        failure_guidance: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        guidance_suffix = f"\n{failure_guidance}" if failure_guidance else ""
         try:
             result = subprocess.run(
                 ["gh", *args],
@@ -54,10 +56,12 @@ class GitHub:
                 errors="replace",
             )
         except OSError as error:
-            raise LoopError(f"Unable to run GitHub CLI for {operation}: {error}") from error
+            raise LoopError(
+                f"Unable to run GitHub CLI for {operation}: {error}{guidance_suffix}"
+            ) from error
         if result.returncode != 0:
             detail = result.stderr.strip() or f"exit status {result.returncode}"
-            raise LoopError(f"GitHub CLI failed during {operation}: {detail}")
+            raise LoopError(f"GitHub CLI failed during {operation}: {detail}{guidance_suffix}")
         return result
 
     def _json(
@@ -282,46 +286,40 @@ class GitHub:
         return comments
 
     def assign(self, repository: Repository, issue_number: int, login: str) -> None:
-        try:
-            self._run(
-                [
-                    "issue",
-                    "edit",
-                    str(issue_number),
-                    "--repo",
-                    repository.repo_ref,
-                    "--add-assignee",
-                    login,
-                ],
-                operation=f"assigning ticket #{issue_number}",
-            )
-        except LoopError as error:
-            raise LoopError(
-                f"{error}\n"
+        self._run(
+            [
+                "issue",
+                "edit",
+                str(issue_number),
+                "--repo",
+                repository.repo_ref,
+                "--add-assignee",
+                login,
+            ],
+            operation=f"assigning ticket #{issue_number}",
+            failure_guidance=(
                 f"Assignment of ticket #{issue_number} may have taken effect. "
                 f"Inspect ticket #{issue_number}'s live GitHub state before rerunning."
-            ) from error
+            ),
+        )
 
     def close(self, repository: Repository, issue_number: int, comment: str) -> None:
-        try:
-            self._run(
-                [
-                    "issue",
-                    "close",
-                    str(issue_number),
-                    "--repo",
-                    repository.repo_ref,
-                    "--comment",
-                    comment,
-                ],
-                operation=f"closing ticket #{issue_number}",
-            )
-        except LoopError as error:
-            raise LoopError(
-                f"{error}\n"
+        self._run(
+            [
+                "issue",
+                "close",
+                str(issue_number),
+                "--repo",
+                repository.repo_ref,
+                "--comment",
+                comment,
+            ],
+            operation=f"closing ticket #{issue_number}",
+            failure_guidance=(
                 f"The closure comment or closure of ticket #{issue_number} may have taken effect. "
                 f"Inspect ticket #{issue_number}'s live GitHub state before rerunning."
-            ) from error
+            ),
+        )
 
     @staticmethod
     def _validate_issue_identity(

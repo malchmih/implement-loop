@@ -45,11 +45,8 @@ def save_state():
 def ticket_for(number):
     return state["tickets"][str(number)]
 
-def claim_failure_message(default):
-    return state.get("claim_failure_detail", default)
-
-def closure_failure_message(default):
-    return state.get("close_failure_detail", default)
+def configured_failure_detail(key, default):
+    return state.get(key, default)
 
 def page_response(items, page_size):
     pages = [items[index:index + page_size] for index in range(0, len(items), page_size)]
@@ -242,7 +239,11 @@ elif args[:2] == ["issue", "edit"]:
         sys.exit(0)
     login = args[args.index("--add-assignee") + 1]
     if state.get("claim_failure") == "before_write":
-        sys.exit(claim_failure_message("simulated GitHub claim failure before writing"))
+        sys.exit(
+            configured_failure_detail(
+                "claim_failure_detail", "simulated GitHub claim failure before writing"
+            )
+        )
     ticket["assignees"].append({"login": login})
     if state.get("claim_conflict"):
         ticket["assignees"].append({"login": "other"})
@@ -264,7 +265,11 @@ elif args[:2] == ["issue", "edit"]:
         (attempt_dir / "agent.log").write_text("preexisting log record\n")
     save_state()
     if state.get("claim_failure") == "after_write":
-        sys.exit(claim_failure_message("simulated GitHub claim failure after writing"))
+        sys.exit(
+            configured_failure_detail(
+                "claim_failure_detail", "simulated GitHub claim failure after writing"
+            )
+        )
     sys.exit(0)
 elif args[:2] == ["issue", "close"]:
     number = int(args[2])
@@ -276,10 +281,17 @@ elif args[:2] == ["issue", "close"]:
         state.setdefault("events", []).append(["comment", number, comment])
         save_state()
         sys.exit(
-            closure_failure_message("simulated GitHub failure after posting the closure comment")
+            configured_failure_detail(
+                "close_failure_detail",
+                "simulated GitHub failure after posting the closure comment",
+            )
         )
     if state.get("close_failure"):
-        sys.exit(closure_failure_message("simulated GitHub closure failure"))
+        sys.exit(
+            configured_failure_detail(
+                "close_failure_detail", "simulated GitHub closure failure"
+            )
+        )
     ticket_for(number)["state"] = "closed"
     state.setdefault("events", []).append(["close", number, comment])
     if state.get("fail_queue_refresh_after_close"):
@@ -289,7 +301,10 @@ elif args[:2] == ["issue", "close"]:
     save_state()
     if state.get("close_failure_after_write"):
         sys.exit(
-            closure_failure_message("simulated GitHub closure failure after closing the issue")
+            configured_failure_detail(
+                "close_failure_detail",
+                "simulated GitHub closure failure after closing the issue",
+            )
         )
     sys.exit(0)
 elif args[:1] == ["api"]:
