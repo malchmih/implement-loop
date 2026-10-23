@@ -49,10 +49,15 @@ def _print_recovery_guidance(*, interrupted: bool) -> None:
     print(message, file=sys.stderr)
 
 
-def _report_failure(message: str, diagnostics: DiagnosticContext) -> None:
+def _report_handled_stop(
+    message: str,
+    diagnostics: DiagnosticContext,
+    *,
+    interrupted: bool,
+) -> None:
     print(message, file=sys.stderr)
     _print_diagnostic_context(diagnostics)
-    _print_recovery_guidance(interrupted=False)
+    _print_recovery_guidance(interrupted=interrupted)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -62,14 +67,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         run(options, diagnostics)
     except KeyboardInterrupt:
-        print("Interrupted.", file=sys.stderr)
-        _print_diagnostic_context(diagnostics)
-        _print_recovery_guidance(interrupted=True)
+        _report_handled_stop("Interrupted.", diagnostics, interrupted=True)
         return 130
     except LoopError as error:
-        _report_failure(f"Error: {error}", diagnostics)
+        _report_handled_stop(f"Error: {error}", diagnostics, interrupted=False)
         return 1
     except OSError as error:
-        _report_failure(f"Error: local file or process operation failed: {error}", diagnostics)
+        _report_handled_stop(
+            f"Error: local file or process operation failed: {error}",
+            diagnostics,
+            interrupted=False,
+        )
         return 1
     return 0
