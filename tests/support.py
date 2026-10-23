@@ -581,6 +581,26 @@ class LoopTestCase(TemporaryHomeTestCase):
         )
         return result, runs
 
+    def assert_missing_executable_guidance(
+        self,
+        result: subprocess.CompletedProcess[bytes],
+        executable: str,
+        *,
+        harness: str | None = None,
+    ) -> None:
+        self.assertNotEqual(result.returncode, 0, result.stdout.decode() + result.stderr.decode())
+        output = (result.stdout + result.stderr).lower()
+        for guidance in (
+            executable.encode(),
+            b"not found on path",
+            b"install",
+            b"add it to path",
+            b"retry",
+        ):
+            self.assertIn(guidance.lower(), output)
+        if harness is not None:
+            self.assertIn(f"selected {harness} harness".encode().lower(), output)
+
     def _read_until_output(
         self,
         descriptor: int,

@@ -379,6 +379,32 @@ class ConfigurationTests(LoopTestCase):
         self.assertEqual(run_metadata["model"], "configured-model")
         self.assertEqual(run_metadata["reasoning_effort"], "high")
 
+    def test_missing_git_fails_before_checkout_discovery_or_side_effects(self) -> None:
+        minimal_bin = self.home / "missing-git-bin"
+        minimal_bin.mkdir()
+        for executable, target in (
+            ("python3", sys.executable),
+            ("gh", self.bin / "gh"),
+            ("opencode", self.bin / "opencode"),
+            ("copilot", self.bin / "copilot"),
+        ):
+            (minimal_bin / executable).symlink_to(target)
+
+        result, runs = self.run_loop(
+            harness=None,
+            extra_env={"PATH": str(minimal_bin)},
+        )
+
+        self.assertEqual(result.returncode, 1, result.stderr.decode())
+        self.assert_missing_executable_guidance(result, "git")
+        state = self.load_state()
+        self.assertEqual(state["events"], [])
+        self.assertEqual(state["opencode_calls"], [])
+        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(runs, [])
+        self.assertFalse((self.home / ".local/state/implement-loop").exists())
+        self.assertFalse(self.repository_lock_path().exists())
+
     def test_failure_before_record_creation_does_not_print_record_paths(self) -> None:
         minimal_bin = self.home / "minimal-bin"
         minimal_bin.mkdir()
@@ -386,6 +412,8 @@ class ConfigurationTests(LoopTestCase):
             resolved = shutil.which(executable, path=self.env["PATH"])
             self.assertIsNotNone(resolved)
             (minimal_bin / executable).symlink_to(resolved)
+        for executable in ("opencode", "copilot"):
+            (minimal_bin / executable).symlink_to(self.bin / executable)
 
         result, runs = self.run_loop(
             harness="copilot",
@@ -394,10 +422,14 @@ class ConfigurationTests(LoopTestCase):
 
         output = result.stdout + result.stderr
         self.assertEqual(result.returncode, 1, result.stderr.decode())
-        self.assertIn(b"Required executable not found on PATH: gh", result.stderr)
+        self.assert_missing_executable_guidance(result, "gh")
         self.assertNotIn(b"Run records:", output)
         self.assertNotIn(b"Ticket #", output)
         self.assertEqual(runs, [])
+        state = self.load_state()
+        self.assertEqual(state["events"], [])
+        self.assertEqual(state["opencode_calls"], [])
+        self.assertEqual(state["copilot_calls"], [])
         self.assertFalse((self.home / ".local/state/implement-loop").exists())
         self.assertFalse(self.repository_lock_path().exists())
 

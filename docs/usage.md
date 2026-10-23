@@ -19,6 +19,17 @@
 - A checkout with an existing commit, an attached branch, and no staged,
   unstaged, untracked, or submodule changes.
 
+Before checkout discovery, lock acquisition, record creation, assignment, or
+harness invocation, startup checks require `git`, `gh`, and only the selected
+harness executable to be found on `PATH`. If one is missing, install it manually
+or add it to `PATH`, then retry; the runner does not install software or change
+your environment. These checks establish executable presence only. Finding an
+executable on `PATH` does not prove it can still launch later or supports the
+required flags/capabilities, and does not establish authentication, model
+availability or account access, or successful skill loading. GitHub identity
+and read checks likewise do not establish write authorization; assignment,
+comments, closure, or a later harness launch can still fail.
+
 ## Install
 
 Run the installer from the source checkout:

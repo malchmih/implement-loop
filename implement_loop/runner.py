@@ -28,9 +28,13 @@ from .records import RunRecords
 _MAX_PROMPT_BYTES = 100_000
 
 
-def _require_command(name: str) -> None:
+def _require_command(name: str, *, harness: HarnessSpec | None = None) -> None:
     if shutil.which(name) is None:
-        raise LoopError(f"Required executable not found on PATH: {name}")
+        selection = f" for the selected {harness.display_name} harness" if harness else ""
+        raise LoopError(
+            f"Required executable {name!r}{selection} was not found on PATH. "
+            f"Manually install {name!r} or add it to PATH, then retry."
+        )
 
 
 def _new_result_destination(target_root: Path, attempt_id: str) -> tuple[Path, Path]:
@@ -419,7 +423,7 @@ def run(options: Options, diagnostics: DiagnosticContext) -> None:
     _require_command("gh")
     harness_settings = options.opencode if options.harness == "opencode" else options.copilot
     harness = select_harness(options.harness, harness_settings)
-    _require_command(harness.executable)
+    _require_command(harness.executable, harness=harness)
     checkout = discover_checkout(Path.cwd())
     lock = RepositoryLock(checkout.common_dir)
     lock.acquire()

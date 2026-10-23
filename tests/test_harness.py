@@ -364,13 +364,21 @@ class HarnessTests(LoopTestCase):
         (limited_bin / "python3").symlink_to(sys.executable)
         (limited_bin / "git").symlink_to(shutil.which("git"))
         (limited_bin / "gh").symlink_to(self.bin / "gh")
+        (limited_bin / "opencode").symlink_to(self.bin / "opencode")
 
-        result, _ = self.run_loop(extra_env={"PATH": str(limited_bin)})
+        result, runs = self.run_loop(
+            harness="copilot",
+            extra_env={"PATH": str(limited_bin)},
+        )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"Required executable not found on PATH: copilot", result.stderr)
-        self.assertEqual(self.load_state()["events"], [])
+        self.assert_missing_executable_guidance(result, "copilot", harness="Copilot")
+        state = self.load_state()
+        self.assertEqual(state["events"], [])
+        self.assertEqual(state["opencode_calls"], [])
+        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(runs, [])
         self.assertFalse((self.home / ".local/state/implement-loop").exists())
+        self.assertFalse(self.repository_lock_path().exists())
 
     def test_missing_default_opencode_cli_does_not_fall_back_to_copilot(self) -> None:
         limited_bin = self.home / "limited-bin"
@@ -383,13 +391,16 @@ class HarnessTests(LoopTestCase):
         ):
             (limited_bin / tool).symlink_to(target)
 
-        result, _ = self.run_loop(harness=None, extra_env={"PATH": str(limited_bin)})
+        result, runs = self.run_loop(harness=None, extra_env={"PATH": str(limited_bin)})
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"Required executable not found on PATH: opencode", result.stderr)
-        self.assertEqual(self.load_state()["events"], [])
-        self.assertEqual(self.load_state()["copilot_calls"], [])
+        self.assert_missing_executable_guidance(result, "opencode", harness="OpenCode")
+        state = self.load_state()
+        self.assertEqual(state["events"], [])
+        self.assertEqual(state["opencode_calls"], [])
+        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(runs, [])
         self.assertFalse((self.home / ".local/state/implement-loop").exists())
+        self.assertFalse(self.repository_lock_path().exists())
 
     def test_default_opencode_runs_without_a_copilot_executable(self) -> None:
         limited_bin = self.home / "limited-bin"
