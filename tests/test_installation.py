@@ -10,6 +10,8 @@ from pathlib import Path
 
 from support import SCRIPT, LoopTestCase, TemporaryHomeTestCase
 
+_INSTALLER_SERVICE_COMMANDS = ("gh", "opencode", "copilot")
+
 
 class InstallationOnlyTests(TemporaryHomeTestCase):
     def setUp(self) -> None:
@@ -19,7 +21,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
             self.assertIsNotNone(target, f"test environment needs {utility}")
             (self.bin / utility).symlink_to(target)
         (self.bin / "python3").symlink_to(sys.executable)
-        for tool in ("gh", "opencode", "copilot"):
+        for tool in _INSTALLER_SERVICE_COMMANDS:
             self.add_invocation_marker(tool)
         self.env["PATH"] = str(self.bin)
 
@@ -50,7 +52,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
         self.assertIn(b"PATH already includes", second.stdout)
         self.assertTrue(installed.is_symlink())
         self.assertEqual(os.readlink(installed), str(source.resolve() / SCRIPT.name))
-        self.assert_commands_not_invoked("gh", "opencode", "copilot")
+        self.assert_commands_not_invoked(*_INSTALLER_SERVICE_COMMANDS)
 
     def test_installer_refuses_unrelated_file_directory_and_link_collisions(self) -> None:
         source = self.copy_source_tree()
@@ -88,7 +90,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
                 else:
                     self.assertTrue(link.is_symlink())
                     self.assertEqual(os.readlink(link), original_link)
-                self.assert_commands_not_invoked("gh", "opencode", "copilot")
+                self.assert_commands_not_invoked(*_INSTALLER_SERVICE_COMMANDS)
 
     def test_installer_reports_prerequisites_and_path_without_mutating_user_settings(self) -> None:
         source = self.copy_source_tree()
@@ -111,6 +113,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
             (limited_path / tool).symlink_to(self.bin / tool)
 
         env = dict(self.env, PATH=str(limited_path))
+        self.assertFalse((limited_path / "copilot").exists())
         existing_entries = self._home_entries()
 
         result = self.run_installer(source, env=env)
@@ -132,7 +135,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
         )
         for path, contents in profile_contents.items():
             self.assertEqual(path.read_bytes(), contents)
-        self.assert_commands_not_invoked("gh", "opencode", "copilot")
+        self.assert_commands_not_invoked("gh", "opencode")
 
     def test_installer_requires_home_when_destination_is_omitted(self) -> None:
         source = self.copy_source_tree()
@@ -150,7 +153,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
         self.assertEqual(result.stdout, b"")
         self._assert_home_entry_delta(existing_entries, set())
         self.assertFalse((self.home / ".local/bin/implement-loop").exists())
-        self.assert_commands_not_invoked("gh", "opencode", "copilot")
+        self.assert_commands_not_invoked(*_INSTALLER_SERVICE_COMMANDS)
 
     def test_installer_rejects_an_empty_destination_without_side_effects(self) -> None:
         source = self.copy_source_tree()
@@ -163,7 +166,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
         self.assertEqual(result.stdout, b"")
         self._assert_home_entry_delta(existing_entries, set())
         self.assertFalse((self.home / "implement-loop").exists())
-        self.assert_commands_not_invoked("gh", "opencode", "copilot")
+        self.assert_commands_not_invoked(*_INSTALLER_SERVICE_COMMANDS)
 
 
 class InstalledCommandIntegrationTests(LoopTestCase):
