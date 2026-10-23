@@ -26,6 +26,9 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
     def _home_entries(self) -> set[Path]:
         return {path.relative_to(self.home) for path in self.home.rglob("*")}
 
+    def _assert_no_new_home_entries(self, existing_entries: set[Path]) -> None:
+        self.assertEqual(self._home_entries() - existing_entries, set())
+
     def test_installer_custom_destination_is_created_and_repeat_safe(self) -> None:
         source = self.copy_source_tree()
         destination = self.home / "chosen executable directory" / "nested"
@@ -141,10 +144,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
             b"Error: HOME is not set; pass a destination directory explicitly.\n",
         )
         self.assertEqual(result.stdout, b"")
-        self.assertEqual(
-            self._home_entries() - existing_entries,
-            set(),
-        )
+        self._assert_no_new_home_entries(existing_entries)
         self.assertFalse((self.home / ".local/bin/implement-loop").exists())
         self.assert_commands_not_invoked("gh", "opencode", "copilot")
 
@@ -157,10 +157,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(result.stderr, b"Error: destination must be a non-empty directory path.\n")
         self.assertEqual(result.stdout, b"")
-        self.assertEqual(
-            self._home_entries() - existing_entries,
-            set(),
-        )
+        self._assert_no_new_home_entries(existing_entries)
         self.assertFalse((self.home / "implement-loop").exists())
         self.assert_commands_not_invoked("gh", "opencode", "copilot")
 
