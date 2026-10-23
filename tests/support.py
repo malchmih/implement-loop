@@ -350,11 +350,26 @@ print(json.dumps(result))
 """
 
 
+def _isolated_git_environment(home: Path) -> dict[str, str]:
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    global_config = home / ".gitconfig"
+    global_config.touch()
+    environment.update(
+        {
+            "HOME": str(home),
+            "GIT_CONFIG_GLOBAL": str(global_config),
+            "GIT_CONFIG_NOSYSTEM": "1",
+        }
+    )
+    return environment
+
+
 class LoopTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="implement-loop-test-")
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
+        self.env = _isolated_git_environment(self.home)
         self.repo = self.home / "repo"
         self.repo.mkdir()
         self.bin = self.home / "bin"
@@ -367,13 +382,12 @@ class LoopTestCase(unittest.TestCase):
         self.state_path = self.home / "github-state.json"
         self.state = self.default_state()
         self.save_state()
-        self.env = dict(os.environ, HOME=str(self.home))
         self.env.pop("GH_REPO", None)
         self.env.pop("XDG_CONFIG_HOME", None)
         self.env.pop("XDG_STATE_HOME", None)
         self.env.pop("NO_COLOR", None)
         self.env.pop("FORCE_COLOR", None)
-        self.env["PATH"] = str(self.bin) + os.pathsep + os.environ["PATH"]
+        self.env["PATH"] = str(self.bin) + os.pathsep + self.env["PATH"]
         self.env["IMPLEMENT_LOOP_TEST_STATE"] = str(self.state_path)
 
         self.git("init", "--quiet")
