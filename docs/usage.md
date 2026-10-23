@@ -1,8 +1,9 @@
-# Usage and recovery
+# Workflow and recovery
 
 ## Prerequisites
 
 - Python 3.11 or later, Git, and GitHub CLI (`gh`).
+- macOS and Linux are supported; native Windows is not a target.
 - An authenticated GitHub CLI session with permission to read native
   sub-issues/dependencies, assign issues, comment, and close issues.
 - OpenCode V2 is the default and requires its CLI, authentication, and an
@@ -71,66 +72,10 @@ than the requirement to create a new descendant commit for that named ticket.
 checkout and its configured GitHub host. A conflicting `GH_REPO` override is
 rejected. A matching override is allowed.
 
-## User configuration
+For TOML options, CLI precedence, state-directory selection, and retention
+semantics, see [configuration and private records](configuration.md).
 
-Configuration is optional. By default the command looks for
-`${XDG_CONFIG_HOME:-$HOME/.config}/implement-loop/config.toml`; a non-empty
-`XDG_CONFIG_HOME` must be an absolute path. `--config-file PATH` selects a
-different file instead of discovering the normal one. If explicitly selected,
-the file must exist and be readable. The runner never loads configuration from
-the target checkout.
-
-Settings are merged in this order: built-in defaults, the selected user TOML
-file, then options explicitly supplied on the command line. Omitted CLI options
-do not replace values from the file. For example:
-
-```toml
-[execution]
-harness = "opencode"
-max_attempts = 5
-
-[execution.harnesses.opencode]
-model = "github-copilot/gpt-6-luna"
-variant = "max"
-
-[execution.harnesses.copilot]
-model = "gpt-6-luna"
-reasoning_effort = "max"
-
-[records]
-directory = "~/.local/state/implement-loop"
-retention_days = 7
-# Set to true to disable expiry; it takes precedence over retention_days.
-# keep_forever = true
-```
-
-Supported configuration keys are `execution.harness`, positive integer
-`execution.max_attempts`, `execution.harnesses.opencode.model` and `.variant`,
-`execution.harnesses.copilot.model` and `.reasoning_effort`, and the `records`
-keys shown above. Copilot reasoning effort accepts `none`, `minimal`, `low`,
-`medium`, `high`, `xhigh`, or `max`. Unknown keys, wrong types, invalid values,
-and malformed TOML are errors before the runner claims a ticket or invokes a
-harness. Attempts must be from 1 through 999,999,999. Retention days may be from
-0 through 999,999,999; zero expires every unmarked prior run at the next startup.
-
-The corresponding one-run CLI overrides are `--harness`, `--max-iterations`,
-`--opencode-model`, `--opencode-variant`, `--copilot-model`,
-`--copilot-reasoning-effort`, `--records-dir`, and either `--retention-days N`
-or `--keep-records-forever`. The two retention flags are mutually exclusive.
-An explicit `--retention-days` overrides a file's `keep_forever = true` choice.
-The harness model/reasoning values describe the root harness invocation only;
-configured agents or subagents may select their own models.
-
-`records.directory` and `--records-dir` name the exact directory that contains
-`run-*` folders. `~` is expanded and relative paths are resolved from the
-invocation's current directory. When neither is set, records use
-`${XDG_STATE_HOME:-$HOME/.local/state}/implement-loop`; a non-empty
-`XDG_STATE_HOME` must be absolute. A missing dedicated records directory is
-created with mode `0700`; an existing one must already have that mode. The runner
-refuses to change permissions on an existing directory, which could be shared.
-Locations inside or containing the target checkout, the home directory itself,
-and filesystem root are also rejected so the runner cannot scan a parent
-containing the checkout.
+## Queue, ownership, and local locking
 
 The runner uses native same-repository direct child issues, in GitHub's returned
 order. It skips closed, blocked, or assigned tickets; assignments to the
@@ -156,7 +101,7 @@ coordinate other machines or protect against unrelated editors. Rechecks stop
 the run when a change is observed, but cannot prevent an external change that
 races after a read.
 
-## Harness capabilities and skill setup
+## Harness capabilities and external skill setup
 
 The invocation contracts were checked against OpenCode CLI v2.1.3 and GitHub
 Copilot CLI 1.0.103-0. The executable versions are not pinned at runtime; if a
@@ -269,44 +214,32 @@ used, it says the requirement was waived and, if HEAD stayed unchanged, that it
 remained at the pre-attempt commit rather than claiming a new descendant commit.
 It does not claim a push, merge, or PR.
 
-## Output and private records
+## Output and record boundaries
 
-Harness output is streamed live and stored in private per-run records. Records
-are stored in the configured records directory or, by default, under
-`${XDG_STATE_HOME:-$HOME/.local/state}/implement-loop/`. They
-include repository and user metadata, issue/comment snapshots, the full prompt,
-process outcome, raw and validated completion evidence, agent output, selected
-harness/model/reasoning settings, selected configuration-file path, retention
-policy, and successful commit references. This metadata describes the root
-harness selection, not the effective settings of every configured subagent.
-Files and directories are private. At startup, cleanup removes only identifiable
-loop-owned run directories whose encoded start time is older than the configured
-retention duration (seven days by default); recent file activity does not extend
-retention. Failed runs follow the same policy on a later startup. Marked runs
-(even with stale markers), symlinked directories, unrecognized entries, and
-legacy `copilot-ralph` data are preserved. Cleanup errors warn and do not block a
-run. `keep_forever = true` or `--keep-records-forever` disables expiry.
-
-This policy applies only to Implement Loop-owned records. It does not control
-harness-native sessions, logs, telemetry, or other harness-native storage; manage
-those separately using the harness's own settings.
+Harness output streams natively to the terminal and is persisted in private
+per-attempt records. See [configuration and private records](configuration.md)
+for record contents, file permissions, and cleanup behavior. Loop retention does
+not govern harness-native sessions, logs, telemetry, or other storage; manage
+those separately using each harness's settings.
 
 OpenCode's `--standalone` runs against a private server instead of the shared
 background service. It is **not** a sandbox, filesystem/network isolation, or a
-way to suppress session persistence. The wrapper does not manage or delete
-OpenCode or Copilot native session data.
+way to suppress session persistence or prove that an interrupted agent has
+stopped. The wrapper does not manage or delete OpenCode or Copilot native session
+data.
 
 ## Failure and manual recovery
 
 Failures stop the loop with a nonzero status. The runner does not retry, roll
 back, stash, reset, unassign, or skip ahead. It preserves assignments, commits,
-and working files. If GitHub closure partially succeeds, inspect the issue before
-restarting. A failed `gh issue close --comment` command does not prove that
-neither its comment nor the closure took effect, and a closure-confirmation read
-can fail after GitHub has closed the ticket. Check the issue itself and the
-attempt's `closure-comment.txt`, `checks.json`, and `closed-ticket.json` when
-present before deciding how to recover; the runner will not retry or repair a
-partial outcome automatically.
+and working files. A failed `gh issue edit --add-assignee` may have assigned the
+ticket before the command reported an error; inspect the issue rather than
+assuming the claim did not land. Likewise, a failed `gh issue close --comment`
+does not prove that neither its comment nor the closure took effect, and a
+closure-confirmation read can fail after GitHub has closed the ticket. Check the
+issue itself and the attempt's `closure-comment.txt`, `checks.json`, and
+`closed-ticket.json` when present before deciding how to recover. The runner does
+not retry or repair partial GitHub writes automatically.
 
 After a failure:
 
@@ -315,8 +248,9 @@ After a failure:
 2. Inspect the current branch, commit history, and working tree; resolve any
    partial work deliberately.
 3. Check whether the selected harness, delegated agents, or background work is
-   still running. An interrupt or release of the local lock does **not** confirm
-   descendant shutdown.
+   still running, and verify that they have stopped before restarting. An
+   interrupt, private-server mode, or release of the local lock does **not**
+   confirm descendant shutdown.
 4. Inspect the GitHub issue and decide whether to keep it assigned, close it
    manually, or unassign it before rerunning. A ticket still assigned to you is
    intentionally skipped on the next run.
@@ -345,7 +279,19 @@ harness conversation: each rerun starts a fresh attempt. The named ticket must
 still have a clean, committed checkout; uncommitted changes are never accepted.
 
 The local lock lives in the repository's Git common directory and coordinates
-worktrees on this machine only. If a process is killed uncatchably, verify the
-lock owner and surviving agent work before removing that specific stale lock.
+worktrees on this machine only. If a process is killed uncatchably, inspect the
+PID in that repository's `implement-loop.lock/pid` and verify that the wrapper,
+harness, delegated agents, and background work have stopped before removing that
+specific stale lock. Never remove a lock based on age alone.
+
+Each run also has an `active.pid` marker in its private record directory. Normal
+exit removes it; termination before cleanup can leave it behind. Retention deliberately
+preserves a marked run even when the marker looks stale. Do not remove a marker
+based only on its age or PID: first verify that the corresponding wrapper and any
+agent work have stopped. If they have, remove only that run's stale
+`active.pid` marker if you want a later retention pass to consider the run. Marker
+removal does not stop processes or prove that they stopped.
+
 Reliable descendant cancellation and whole-attempt timeouts are deferred. There
-is no automatic session resume or spend cap.
+is no automatic session resume or spend cap. GitHub Actions is separately tracked
+in [issue #2](https://github.com/malchmih/implement-loop/issues/2).
