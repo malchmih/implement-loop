@@ -20,7 +20,7 @@ case $0 in
 esac
 installer_path=$(absolute_path "$installer_path")
 
-if ! source_dir=$(CDPATH= cd -P "$(dirname "$installer_path")" && pwd -P); then
+if ! source_dir=$(CDPATH='' cd -P "$(dirname "$installer_path")" && pwd -P); then
     printf 'Error: cannot resolve the installer source directory.\n' >&2
     exit 1
 fi
@@ -48,7 +48,7 @@ if ! mkdir -p "$destination_path"; then
     printf 'Error: cannot create destination directory %s.\n' "$destination" >&2
     exit 1
 fi
-if ! destination=$(CDPATH= cd -P "$destination_path" && pwd -P); then
+if ! destination=$(CDPATH='' cd -P "$destination_path" && pwd -P); then
     printf 'Error: cannot resolve destination directory %s.\n' "$destination_path" >&2
     exit 1
 fi
