@@ -68,7 +68,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = run(options, diagnostics)
         deliver_alert(
-            identity=result.repository_name,
+            repository_name=result.repository_name,
             reason=result.stop_reason.value,
             sound=AlertSound.GLASS,
         )

@@ -34,13 +34,13 @@ def _run_delivery_command(arguments: list[str]) -> None:
         pass
 
 
-def deliver_alert(*, identity: str | None, reason: str, sound: AlertSound) -> None:
+def deliver_alert(*, repository_name: str | None, reason: str, sound: AlertSound) -> None:
     """Attempt one macOS notification and one sound without affecting execution."""
 
     if sys.platform != "darwin":
         return
 
-    title = identity or _GENERIC_IDENTITY
+    title = repository_name or _GENERIC_IDENTITY
     _run_delivery_command(
         [
             "osascript",
