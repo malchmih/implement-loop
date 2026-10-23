@@ -107,6 +107,65 @@ coordinate other machines or protect against unrelated editors. Rechecks stop
 the run when a change is observed, but cannot prevent an external change that
 races after a read.
 
+## End-of-run alerts
+
+Every normally stopped Loop run attempts one desktop notification and one brief
+sound, including runs that did not start an Attempt. This behavior is always on
+and needs no configuration. The notification identifies the `OWNER/REPO` (or a
+generic identity if unavailable) and says either “No eligible children” or
+“Attempt limit reached”; neither message claims that all tickets are complete.
+The queue-empty reason takes precedence when no eligible child remains at the
+attempt limit. Ticket details, task descriptions, checkout paths, agent output,
+and raw failure details are not included.
+
+On macOS, normal exits use Glass and handled execution failures use Basso. On
+Linux, delivery discovers the optional `notify-send` and `canberra-gtk-play`
+commands at alert time. It requests a notification with sound suppressed and
+separately plays the `complete` theme event for normal exits or `dialog-error`
+for handled failures. The sound identity depends on the installed desktop sound
+theme and service. Neither executable is a startup prerequisite, and the loop
+does not install packages. Desktop policy may ignore the notification's
+sound-suppression hint.
+
+Handled execution failures likewise attempt one notification and one selected
+sound after cleanup, even when no Attempt began. The notification says “Run
+failed” and does not include the exception or recovery details. Ctrl+C,
+termination signals, help, and invalid arguments or configuration remain silent.
+Unsupported platforms do not invoke platform alert tools.
+
+An alert means the Loop wrapper stopped; it does not prove that a harness,
+delegated agent, or other background work has stopped. Follow the recovery guidance
+below before rerunning interrupted or failed work.
+
+Alerts are delivered on the machine running Implement Loop and are not forwarded
+over SSH. The operating system may suppress notifications because of permissions,
+focus settings, or notification policy; sound may be unavailable or muted. Missing
+tools or theme events, unavailable desktop services, denied delivery, and
+timeouts are silent best-effort skips and do not change the Loop run's result.
+
+### Manual Linux smoke check
+
+On a disposable checkout with a working Linux desktop session:
+
+1. Arrange for the selected spec to have no eligible children, then run
+   `implement-loop SPEC_NUMBER`. Confirm a notification shows only the repository
+   identity and “No eligible children,” and that the desktop plays its `complete`
+   theme event.
+2. For the handled-failure cue without assigning a ticket, run with the selected
+   harness executable temporarily absent from `PATH` while keeping Python, Git,
+   `gh`, `notify-send`, and `canberra-gtk-play` available. Confirm the command
+   reports its handled startup failure and attempts a generic “Run failed”
+   notification plus the `dialog-error` theme event.
+3. Repeat the no-eligible-children check with either alert executable omitted
+   from `PATH`, or in a headless session with no notification/audio service.
+   Confirm the original exit status and diagnostics are unchanged and no delivery
+   error is printed.
+
+The sound-theme event names are requests, not guarantees that a sound will be
+played. No Linux desktop or headless Linux environment was available during this
+implementation, so these manual checks were not exercised; automated tests use
+fake executables and do not emit real alerts.
+
 ## Harness capabilities and external skill setup
 
 The invocation contracts were checked against OpenCode CLI v2.1.3 and GitHub

@@ -7,6 +7,7 @@ import sys
 from collections.abc import Sequence
 from types import FrameType
 
+from .alerts import AlertSound, deliver_alert
 from .config import parse_args
 from .errors import DiagnosticContext, LoopError
 from .runner import run
@@ -60,17 +61,31 @@ def _report_handled_stop(
     _print_recovery_guidance(interrupted=interrupted)
 
 
+def _alert_handled_failure(diagnostics: DiagnosticContext) -> None:
+    deliver_alert(
+        repository_name=diagnostics.repository_name,
+        reason="Run failed",
+        sound=AlertSound.BASSO,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     options = parse_args(argv)
     signal.signal(signal.SIGTERM, _handle_termination)
     diagnostics = DiagnosticContext()
     try:
-        run(options, diagnostics)
+        result = run(options, diagnostics)
+        deliver_alert(
+            repository_name=result.repository_name,
+            reason=result.stop_reason.value,
+            sound=AlertSound.GLASS,
+        )
     except KeyboardInterrupt:
         _report_handled_stop("Interrupted.", diagnostics, interrupted=True)
         return 130
     except LoopError as error:
         _report_handled_stop(f"Error: {error}", diagnostics, interrupted=False)
+        _alert_handled_failure(diagnostics)
         return 1
     except OSError as error:
         _report_handled_stop(
@@ -78,5 +93,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             diagnostics,
             interrupted=False,
         )
+        _alert_handled_failure(diagnostics)
         return 1
     return 0
