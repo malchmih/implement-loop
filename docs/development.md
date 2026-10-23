@@ -23,9 +23,56 @@ Both targets use `uv run --locked`, which prepares the development environment
 from committed `uv.lock` when needed. `make check` first runs `uv sync --locked`,
 then invokes both targets. Locked uv operations do not rewrite the lockfile; they
 fail if the project dependencies and lockfile need to be reconciled. ShellCheck
-must be installed separately. These are the public local validation commands;
-this change does not configure GitHub Actions or repository settings. The checks
-make no live model calls or GitHub writes.
+must be installed separately. These public Make targets are also the commands
+used by CI. The checks make no live model calls or GitHub writes.
+
+## GitHub Actions
+
+The `Quality checks` workflow runs for pull requests targeting `main` (including
+new commits pushed to a PR) and supports manual dispatch. It has no push,
+scheduled, privileged pull-request, or merge-queue trigger. Manual dispatch is
+available after the workflow is present on the default branch. In the Actions
+interface, select a branch to validate; the run checks its current revision.
+
+CI runs the same commands as the local targets above:
+
+| Check name | Runner | Python | Command |
+| --- | --- | --- | --- |
+| `Quality checks / Static checks` | `ubuntu-24.04` | 3.11 | `make check-static` |
+| `Quality checks / Behavioral tests (Linux, Python 3.11)` | `ubuntu-24.04` | 3.11 | `make test` |
+| `Quality checks / Behavioral tests (Linux, Python 3.15)` | `ubuntu-24.04` | 3.15 | `make test` |
+| `Quality checks / Behavioral tests (macOS, Python 3.11)` | `macos-26` (ARM64) | 3.11 | `make test` |
+| `Quality checks / Behavioral tests (macOS, Python 3.15)` | `macos-26` (ARM64) | 3.15 | `make test` |
+
+Install the Python version for the CI job you want to reproduce (3.11 or 3.15),
+uv, `make`, Git, and ShellCheck for static checks. Run `make check-static` or
+`make test` to isolate a failed job; run `make check` for the complete local
+validation. The behavioral suite uses fake GitHub and harness commands, so CI
+and local tests need no real `gh`, OpenCode, Copilot, model credentials, or
+authenticated harness session.
+
+The workflow grants only repository-content read permission and uses the
+ordinary `pull_request` security context. Checkout does not persist Git
+authentication, and no repository secrets or personal tokens are supplied to
+the jobs. Each reusable action is pinned to a full commit SHA verified against
+its official upstream release, with the release version annotated in the
+workflow. When updating an action, verify the release in its upstream
+repository and update the SHA and annotation together. The setup-uv cache is
+explicitly disabled, and uv itself is pinned to 0.13.5. The workflow uploads no
+artifacts. Dependencies are run with the committed lockfile and locked uv
+operations.
+
+Superseded runs of the same PR are cancelled. Different PRs and manual runs use
+separate concurrency groups. Matrix fail-fast is disabled so the other
+platform/Python results can finish after a failure. Every job has a 15-minute
+timeout, and ordinary Actions logs are retained using the repository's existing
+settings.
+
+The workflow uses standard GitHub-hosted `ubuntu-24.04` and `macos-26` runners
+in this public repository. Standard hosted runners are free for public
+repositories; larger runners and storage have separate billing rules and are
+not configured here. Reassess that assumption if the repository visibility or
+runner choices change.
 
 ## Behavioral tests
 
