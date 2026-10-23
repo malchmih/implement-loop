@@ -9,6 +9,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -536,6 +537,23 @@ class LoopTestCase(TemporaryHomeTestCase):
             common_dir = (cwd or self.repo) / common_dir
         return common_dir.resolve() / "implement-loop.lock"
 
+    def controlled_path_directory(self, *commands: str) -> Path:
+        directory = self.home / "controlled-bin"
+        directory.mkdir()
+        for command in commands:
+            if command == "python3":
+                target = Path(sys.executable)
+            elif command == "git":
+                git = shutil.which("git", path=self.env["PATH"])
+                self.assertIsNotNone(git, "test environment needs git")
+                assert git is not None
+                target = Path(git)
+            else:
+                target = self.bin / command
+                self.assertTrue(target.is_file(), f"no fake executable for {command}")
+            (directory / command).symlink_to(target)
+        return directory
+
     def git(self, *args: str, cwd: Path | None = None) -> str:
         result = subprocess.run(
             ["git", *args],
@@ -580,6 +598,35 @@ class LoopTestCase(TemporaryHomeTestCase):
             else []
         )
         return result, runs
+
+    def assert_missing_executable_guidance(
+        self,
+        result: subprocess.CompletedProcess[bytes],
+        executable: str,
+        *,
+        harness: str | None = None,
+    ) -> None:
+        self.assertNotEqual(result.returncode, 0, result.stdout.decode() + result.stderr.decode())
+        output = (result.stdout + result.stderr).lower()
+        for guidance in (
+            executable.encode(),
+            b"not found on path",
+            b"install",
+            b"add it to path",
+            b"retry",
+        ):
+            self.assertIn(guidance.lower(), output)
+        if harness is not None:
+            self.assertIn(f"selected {harness} harness".encode().lower(), output)
+
+    def assert_missing_executable_stopped_before_run(self, runs: list[Path]) -> None:
+        state = self.load_state()
+        self.assertEqual(state["events"], [])
+        self.assertEqual(state["opencode_calls"], [])
+        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(runs, [])
+        self.assertFalse((self.home / ".local/state/implement-loop").exists())
+        self.assertFalse(self.repository_lock_path().exists())
 
     def _read_until_output(
         self,

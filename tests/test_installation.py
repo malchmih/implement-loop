@@ -95,6 +95,8 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
 
     def test_installer_reports_prerequisites_and_path_without_mutating_user_settings(self) -> None:
         source = self.copy_source_tree()
+        # Tool names in checkout paths are not runtime prerequisite reports.
+        source = source.rename(self.home / "uv source checkout")
         profile_contents = {
             self.home / ".bashrc": b"# keep shell settings\n",
             self.home / ".zshrc": b"# keep shell settings\n",
@@ -128,7 +130,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
         self.assertIn(str(self.home / ".local/bin"), output)
         self.assertIn("optional", output.lower())
         self.assertIn("Missing: copilot", output)
-        self.assertNotIn("uv", output.lower())
+        self.assertNotRegex(output, r"(?im)^(?:Available|Missing):\s*uv\b")
         self._assert_home_entry_delta(
             existing_entries,
             {Path(".local"), Path(".local/bin"), Path(".local/bin/implement-loop")},
