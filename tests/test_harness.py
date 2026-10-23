@@ -372,13 +372,7 @@ class HarnessTests(LoopTestCase):
         )
 
         self.assert_missing_executable_guidance(result, "copilot", harness="Copilot")
-        state = self.load_state()
-        self.assertEqual(state["events"], [])
-        self.assertEqual(state["opencode_calls"], [])
-        self.assertEqual(state["copilot_calls"], [])
-        self.assertEqual(runs, [])
-        self.assertFalse((self.home / ".local/state/implement-loop").exists())
-        self.assertFalse(self.repository_lock_path().exists())
+        self.assert_missing_executable_stopped_before_run(runs)
 
     def test_missing_default_opencode_cli_does_not_fall_back_to_copilot(self) -> None:
         limited_bin = self.home / "limited-bin"
@@ -394,13 +388,7 @@ class HarnessTests(LoopTestCase):
         result, runs = self.run_loop(harness=None, extra_env={"PATH": str(limited_bin)})
 
         self.assert_missing_executable_guidance(result, "opencode", harness="OpenCode")
-        state = self.load_state()
-        self.assertEqual(state["events"], [])
-        self.assertEqual(state["opencode_calls"], [])
-        self.assertEqual(state["copilot_calls"], [])
-        self.assertEqual(runs, [])
-        self.assertFalse((self.home / ".local/state/implement-loop").exists())
-        self.assertFalse(self.repository_lock_path().exists())
+        self.assert_missing_executable_stopped_before_run(runs)
 
     def test_default_opencode_runs_without_a_copilot_executable(self) -> None:
         limited_bin = self.home / "limited-bin"

@@ -397,13 +397,7 @@ class ConfigurationTests(LoopTestCase):
 
         self.assertEqual(result.returncode, 1, result.stderr.decode())
         self.assert_missing_executable_guidance(result, "git")
-        state = self.load_state()
-        self.assertEqual(state["events"], [])
-        self.assertEqual(state["opencode_calls"], [])
-        self.assertEqual(state["copilot_calls"], [])
-        self.assertEqual(runs, [])
-        self.assertFalse((self.home / ".local/state/implement-loop").exists())
-        self.assertFalse(self.repository_lock_path().exists())
+        self.assert_missing_executable_stopped_before_run(runs)
 
     def test_failure_before_record_creation_does_not_print_record_paths(self) -> None:
         minimal_bin = self.home / "minimal-bin"
@@ -425,13 +419,7 @@ class ConfigurationTests(LoopTestCase):
         self.assert_missing_executable_guidance(result, "gh")
         self.assertNotIn(b"Run records:", output)
         self.assertNotIn(b"Ticket #", output)
-        self.assertEqual(runs, [])
-        state = self.load_state()
-        self.assertEqual(state["events"], [])
-        self.assertEqual(state["opencode_calls"], [])
-        self.assertEqual(state["copilot_calls"], [])
-        self.assertFalse((self.home / ".local/state/implement-loop").exists())
-        self.assertFalse(self.repository_lock_path().exists())
+        self.assert_missing_executable_stopped_before_run(runs)
 
     def test_invalid_cli_reasoning_effort_is_rejected_before_side_effects(self) -> None:
         result, runs = self.run_loop(

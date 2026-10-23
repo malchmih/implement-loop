@@ -601,6 +601,15 @@ class LoopTestCase(TemporaryHomeTestCase):
         if harness is not None:
             self.assertIn(f"selected {harness} harness".encode().lower(), output)
 
+    def assert_missing_executable_stopped_before_run(self, runs: list[Path]) -> None:
+        state = self.load_state()
+        self.assertEqual(state["events"], [])
+        self.assertEqual(state["opencode_calls"], [])
+        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(runs, [])
+        self.assertFalse((self.home / ".local/state/implement-loop").exists())
+        self.assertFalse(self.repository_lock_path().exists())
+
     def _read_until_output(
         self,
         descriptor: int,

@@ -30,9 +30,9 @@ _MAX_PROMPT_BYTES = 100_000
 
 def _require_command(name: str, *, harness: HarnessSpec | None = None) -> None:
     if shutil.which(name) is None:
-        selection = f" for the selected {harness.display_name} harness" if harness else ""
+        harness_context = f" for the selected {harness.display_name} harness" if harness else ""
         raise LoopError(
-            f"Required executable {name!r}{selection} was not found on PATH. "
+            f"Required executable {name!r}{harness_context} was not found on PATH. "
             f"Manually install {name!r} or add it to PATH, then retry."
         )
 
