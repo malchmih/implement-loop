@@ -38,11 +38,11 @@ CI runs the same commands as the local targets above:
 
 | Check name | Runner | Python | Command |
 | --- | --- | --- | --- |
-| `Quality checks / Static checks` | `ubuntu-24.04` | 3.11 | `make check-static` |
-| `Quality checks / Behavioral tests (Linux, Python 3.11)` | `ubuntu-24.04` | 3.11 | `make test` |
-| `Quality checks / Behavioral tests (Linux, Python 3.15)` | `ubuntu-24.04` | 3.15 | `make test` |
-| `Quality checks / Behavioral tests (macOS, Python 3.11)` | `macos-26` (ARM64) | 3.11 | `make test` |
-| `Quality checks / Behavioral tests (macOS, Python 3.15)` | `macos-26` (ARM64) | 3.15 | `make test` |
+| `Static checks` | `ubuntu-24.04` | 3.11 | `make check-static` |
+| `Behavioral tests (Linux, Python 3.11)` | `ubuntu-24.04` | 3.11 | `make test` |
+| `Behavioral tests (Linux, Python 3.15)` | `ubuntu-24.04` | 3.15 | `make test` |
+| `Behavioral tests (macOS, Python 3.11)` | `macos-26` (ARM64) | 3.11 | `make test` |
+| `Behavioral tests (macOS, Python 3.15)` | `macos-26` (ARM64) | 3.15 | `make test` |
 
 Install the Python version for the CI job you want to reproduce (3.11 or 3.15),
 uv, `make`, Git, and ShellCheck for static checks. Run `make check-static` or
