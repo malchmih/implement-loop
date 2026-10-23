@@ -2,22 +2,30 @@
 
 ## Prerequisites and local checks
 
-Python 3.11+, [uv](https://docs.astral.sh/uv/), and ShellCheck are used for
-development. ShellCheck is a separate developer prerequisite, not a Python or
-runtime dependency. The runtime executable itself uses only the Python standard
-library; Git, `gh`, and the selected OpenCode or Copilot CLI are subprocess
-integrations.
+Python 3.11+, [uv](https://docs.astral.sh/uv/), `make`, Git, and ShellCheck are
+used for development. ShellCheck is a separate developer prerequisite, not a
+Python or runtime dependency. The runtime executable itself uses only the Python
+standard library; Git, `gh`, and the selected OpenCode or Copilot CLI are
+subprocess integrations.
+
+Run either validation group independently, or use `make check` for the complete
+local validation:
 
 ```bash
+make check-static
+make test
 make check
 ```
 
-`make check` first runs `uv sync --locked`, then ShellCheck on `install.sh`, Ruff
-linting and format validation, mypy, and the behavioral unittest suite. The
-committed `uv.lock` pins the Python development environment. ShellCheck must be
-installed separately. This is the documented local check workflow; GitHub
-Actions is deferred to [issue #2](https://github.com/malchmih/implement-loop/issues/2).
-The checks make no live model calls or GitHub writes.
+`make check-static` runs ShellCheck on `install.sh`, Ruff linting and format
+validation, and mypy. `make test` runs the existing behavioral unittest suite.
+Both targets use `uv run --locked`, which prepares the development environment
+from committed `uv.lock` when needed. `make check` first runs `uv sync --locked`,
+then invokes both targets. Locked uv operations do not rewrite the lockfile; they
+fail if the project dependencies and lockfile need to be reconciled. ShellCheck
+must be installed separately. These are the public local validation commands;
+this change does not configure GitHub Actions or repository settings. The checks
+make no live model calls or GitHub writes.
 
 ## Behavioral tests
 
