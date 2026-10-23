@@ -4,8 +4,10 @@ import json
 import os
 import pty
 import resource
+import select
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -19,12 +21,16 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parents[1] / "implement-loop"
 INSTALLER = SCRIPT.parent / "install.sh"
 REPOSITORY_URL = "https://api.github.com/repos/test/repo"
+LIVE_OUTPUT_FRAGMENT = b"IMPLEMENT_LOOP_LIVE_OUTPUT_7F3A9C"
+LIVE_OUTPUT_TIMEOUT = 15.0
+LIVE_READY_TIMEOUT = 20.0
 
 FAKE_TOOL = r"""#!/usr/bin/env python3
 import json
 import os
 from pathlib import Path
 import re
+import socket
 import subprocess
 import sys
 
@@ -181,6 +187,19 @@ if tool_name in ("copilot", "opencode"):
             '"acceptance_criteria":"passed","validation":"passed"}',
         ),
     )
+    live_fragment = os.environ.get("IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT")
+    if live_fragment is not None:
+        sys.stdout.write(live_fragment)
+        sys.stdout.flush()
+        with socket.create_connection(
+            ("127.0.0.1", int(os.environ["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"])),
+            timeout=20,
+        ) as ready_connection:
+            ready_connection.sendall(b"R")
+        sys.stdin.buffer.read(1)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        sys.exit(int(state.get("agent_exit", 0)))
     sys.stdout.write("Agent output\n" + output + "\n")
     sys.exit(int(state.get("agent_exit", 0)))
 
@@ -463,6 +482,147 @@ class LoopTests(unittest.TestCase):
             else []
         )
         return result, runs
+
+    def _read_until_output(
+        self,
+        descriptor: int,
+        output: bytearray,
+        fragment: bytes,
+        *,
+        timeout: float,
+    ) -> None:
+        deadline = time.monotonic() + timeout
+        while fragment not in output:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.fail(f"Timed out waiting for {fragment!r}; received {bytes(output)!r}")
+            readable, _, _ = select.select([descriptor], [], [], remaining)
+            if not readable:
+                self.fail(f"Timed out waiting for {fragment!r}; received {bytes(output)!r}")
+            try:
+                chunk = os.read(descriptor, 4096)
+            except OSError as error:
+                self.fail(f"Caller output closed before {fragment!r} arrived: {error}")
+            if not chunk:
+                self.fail(f"Caller output closed before {fragment!r} arrived")
+            output.extend(chunk)
+
+    def _assert_live_harness_output(self, harness: str, *, terminal: bool) -> None:
+        ready_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ready_listener.bind(("127.0.0.1", 0))
+        ready_listener.listen()
+        ready_listener.settimeout(LIVE_READY_TIMEOUT)
+        master: int | None = None
+        slave: int | None = None
+        process: subprocess.Popen[bytes] | None = None
+        output = bytearray()
+
+        try:
+            env = dict(self.env)
+            env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT"] = LIVE_OUTPUT_FRAGMENT.decode("ascii")
+            env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"] = str(ready_listener.getsockname()[1])
+            if terminal:
+                master, slave = pty.openpty()
+                stdout = slave
+                stderr = slave
+            else:
+                stdout = subprocess.PIPE
+                stderr = subprocess.STDOUT
+
+            process = subprocess.Popen(
+                [
+                    str(SCRIPT),
+                    "1",
+                    "--max-iterations",
+                    "1",
+                    "--harness",
+                    harness,
+                ],
+                cwd=self.repo,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=True,
+            )
+            if slave is not None:
+                os.close(slave)
+                slave = None
+
+            with ready_listener.accept()[0] as ready_connection:
+                ready_connection.settimeout(LIVE_READY_TIMEOUT)
+                self.assertEqual(ready_connection.recv(1), b"R")
+
+            if terminal:
+                assert master is not None
+                output_descriptor = master
+            else:
+                assert process.stdout is not None
+                output_descriptor = process.stdout.fileno()
+            self._read_until_output(
+                output_descriptor,
+                output,
+                LIVE_OUTPUT_FRAGMENT,
+                timeout=LIVE_OUTPUT_TIMEOUT,
+            )
+
+            self.assertIsNone(process.poll(), "harness exited before the test released it")
+            attempt_dirs = list(
+                (self.home / ".local/state/implement-loop").glob("run-*/attempt-1-ticket-2")
+            )
+            self.assertEqual(len(attempt_dirs), 1)
+            attempt_dir = attempt_dirs[0]
+            self.assertTrue((attempt_dir.parent / "active.pid").is_file())
+            self.assertIn(LIVE_OUTPUT_FRAGMENT, output)
+            self.assertEqual((attempt_dir / "agent.log").read_bytes(), LIVE_OUTPUT_FRAGMENT)
+
+            assert process.stdin is not None
+            process.stdin.write(b"x")
+            process.stdin.flush()
+            process.stdin.close()
+            self.assertEqual(
+                process.wait(timeout=LIVE_READY_TIMEOUT),
+                0,
+                bytes(output).decode("utf-8", errors="replace"),
+            )
+
+            call = self.load_state()[f"{harness}_calls"][0]
+            self.assertEqual(call["no_color"], None if terminal else "1")
+            self.assertEqual(call["force_color"], "1" if terminal else "0")
+        finally:
+            if process is not None:
+                if process.stdin is not None and not process.stdin.closed:
+                    try:
+                        process.stdin.write(b"x")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError, ValueError):
+                        pass
+                    try:
+                        process.stdin.close()
+                    except OSError:
+                        pass
+                try:
+                    process.wait(timeout=LIVE_READY_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        process.wait(timeout=5)
+                if process.stdout is not None:
+                    process.stdout.close()
+            if slave is not None:
+                os.close(slave)
+            if master is not None:
+                os.close(master)
+            ready_listener.close()
 
     def copy_source_tree(self) -> Path:
         source = self.home / "source checkout"
@@ -1321,6 +1481,18 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(state["tickets"]["3"]["state"], "closed")
         self.assertTrue((runs[0] / "attempt-1-ticket-2/agent.log").is_file())
         self.assertTrue((runs[0] / "attempt-2-ticket-3/agent.log").is_file())
+
+    def test_opencode_redirected_output_is_live_before_harness_exit(self) -> None:
+        self._assert_live_harness_output("opencode", terminal=False)
+
+    def test_opencode_terminal_output_is_live_before_harness_exit(self) -> None:
+        self._assert_live_harness_output("opencode", terminal=True)
+
+    def test_copilot_redirected_output_is_live_before_harness_exit(self) -> None:
+        self._assert_live_harness_output("copilot", terminal=False)
+
+    def test_copilot_terminal_output_is_live_before_harness_exit(self) -> None:
+        self._assert_live_harness_output("copilot", terminal=True)
 
     def test_transcript_marker_without_result_file_does_not_close_ticket(self) -> None:
         for harness, selected_calls, unselected_calls in (

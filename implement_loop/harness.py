@@ -235,7 +235,7 @@ def _run_process(
                 log_error = f"{display_name} output stream was unavailable."
             else:
                 while True:
-                    chunk = process.stdout.read(8192)
+                    chunk = os.read(process.stdout.fileno(), 8192)
                     if not chunk:
                         break
                     if log_persisted:
