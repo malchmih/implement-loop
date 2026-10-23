@@ -594,13 +594,19 @@ def run(options: Options, diagnostics: DiagnosticContext) -> None:
                     flush=True,
                 )
                 attempts += 1
-                diagnostics.harness_invoked = True
+
+                def mark_harness_invocation_starting() -> None:
+                    diagnostics.harness_invoked = True
+
                 outcome = run_harness(
                     harness,
                     prompt,
                     checkout.root,
                     attempt_dir / "agent.log",
+                    on_invocation_starting=mark_harness_invocation_starting,
                 )
+                if outcome.spawn_error is not None:
+                    diagnostics.harness_invoked = False
                 records.write_json(attempt_dir / "process.json", outcome.as_json(), exclusive=True)
                 result, result_error = _record_result(
                     result_path,

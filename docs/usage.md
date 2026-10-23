@@ -233,9 +233,10 @@ data.
 Failures stop the loop with a nonzero status. Within its handled error boundary,
 the command prints the original error and, when available, the existing run-record
 directory and current ticket's record directory. A ticket pointer is labelled
-`(no harness invocation started)` when preparation or assignment failed before
-the harness was invoked. Ticket records can therefore exist before an attempt; a
-directory name or its existence alone does not establish that an attempt occurred.
+`(no harness invocation started)` when preparation, assignment, or harness startup
+failed before an invocation began. Ticket records can therefore exist before an
+attempt; a directory name or its existence alone does not establish that an
+attempt occurred.
 Failures before record creation do not print an invented path, and run-level
 failures after ticket processing do not point to the previously completed ticket.
 

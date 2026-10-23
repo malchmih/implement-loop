@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -172,10 +172,18 @@ def run_harness(
     prompt: str,
     cwd: Path,
     log_path: Path,
+    *,
+    on_invocation_starting: Callable[[], None] | None = None,
 ) -> ProcessOutcome:
     """Start one fresh harness process and stream/persist its native text output."""
 
-    return _run_process(harness.command(prompt), cwd, log_path, harness.display_name)
+    return _run_process(
+        harness.command(prompt),
+        cwd,
+        log_path,
+        harness.display_name,
+        on_invocation_starting=on_invocation_starting,
+    )
 
 
 def _run_process(
@@ -183,6 +191,8 @@ def _run_process(
     cwd: Path,
     log_path: Path,
     display_name: str,
+    *,
+    on_invocation_starting: Callable[[], None] | None = None,
 ) -> ProcessOutcome:
     environment = os.environ.copy()
     if "NO_COLOR" in environment or not sys.stdout.isatty():
@@ -204,6 +214,8 @@ def _run_process(
     stream_error: str | None = None
     log_persisted = True
 
+    if on_invocation_starting is not None:
+        on_invocation_starting()
     try:
         process = subprocess.Popen(
             command,

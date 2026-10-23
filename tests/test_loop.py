@@ -252,6 +252,13 @@ elif args[:2] == ["issue", "edit"]:
     if state.get("claim_remove_child"):
         state["children"] = [child for child in state["children"] if child["number"] != number]
     state.setdefault("events", []).append(["assign", number, login])
+    if state.get("remove_copilot_before_invocation"):
+        (Path(os.environ["PATH"].split(os.pathsep)[0]) / "copilot").unlink()
+    if state.get("precreate_agent_log_before_invocation"):
+        state_home = Path(os.environ.get("XDG_STATE_HOME", home / ".local/state"))
+        records_dir = Path(state.get("records_dir", state_home / "implement-loop"))
+        attempt_dir = next(records_dir.glob("run-*/attempt-1-ticket-2"))
+        (attempt_dir / "agent.log").write_text("preexisting log record\n")
     save_state()
     if state.get("claim_failure") == "after_write":
         sys.exit(claim_failure_message("simulated GitHub claim failure after writing"))
@@ -2244,6 +2251,54 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(list(attempt.iterdir()), [])
         self.assertEqual(self.load_state()["events"], [])
         self.assertEqual(self.load_state()["copilot_calls"], [])
+
+    def test_harness_log_creation_failure_reports_no_invocation_started(self) -> None:
+        self.state["precreate_agent_log_before_invocation"] = True
+        self.save_state()
+
+        result, runs = self.run_loop()
+
+        attempt = runs[0] / "attempt-1-ticket-2"
+        self.assertEqual(result.returncode, 1, result.stderr.decode())
+        self.assertIn(b"Cannot create private Copilot output log", result.stderr)
+        self.assertIn(f"Run records: {runs[0].resolve()}".encode(), result.stderr)
+        self.assertIn(
+            f"Ticket #2 records (no harness invocation started): {attempt.resolve()}".encode(),
+            result.stderr,
+        )
+        self.assertEqual(self.load_state()["copilot_calls"], [])
+        self.assertEqual(self.load_state()["tickets"]["2"]["assignees"], [{"login": "tester"}])
+        self.assertEqual((attempt / "agent.log").read_text(), "preexisting log record\n")
+
+    def test_harness_spawn_failure_reports_no_invocation_started(self) -> None:
+        self.state["remove_copilot_before_invocation"] = True
+        self.save_state()
+        spawn_bin = self.home / "spawn-failure-bin"
+        spawn_bin.mkdir()
+        for name, target in (
+            ("python3", Path(sys.executable)),
+            ("git", Path(shutil.which("git", path=self.env["PATH"]) or "")),
+            ("gh", self.bin / "gh"),
+            ("copilot", self.bin / "copilot"),
+        ):
+            self.assertTrue(target.is_file(), f"missing fixture executable: {target}")
+            (spawn_bin / name).symlink_to(target)
+
+        result, runs = self.run_loop(extra_env={"PATH": str(spawn_bin)})
+
+        attempt = runs[0] / "attempt-1-ticket-2"
+        self.assertEqual(result.returncode, 1, result.stderr.decode())
+        self.assertIn(b"Copilot could not be started", result.stderr)
+        self.assertIn(f"Run records: {runs[0].resolve()}".encode(), result.stderr)
+        self.assertIn(
+            f"Ticket #2 records (no harness invocation started): {attempt.resolve()}".encode(),
+            result.stderr,
+        )
+        self.assertEqual(self.load_state()["copilot_calls"], [])
+        self.assertEqual(self.load_state()["tickets"]["2"]["assignees"], [{"login": "tester"}])
+        process = json.loads((attempt / "process.json").read_text())
+        self.assertIsNone(process["exit_code"])
+        self.assertIn("could not be started", process["spawn_error"])
 
     def test_queue_refresh_failure_does_not_report_completed_ticket_records(self) -> None:
         self.add_ticket(3)
