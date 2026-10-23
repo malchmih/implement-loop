@@ -252,9 +252,11 @@ elif args[:1] == ["api"]:
         number = endpoint.split("/issues/")[1].split("/")[0]
         comments = state.get("comments", {}).get(number, [])
         page_size = state.get("comment_page_size", 100)
-        result = [comments[index:index + page_size] for index in range(0, len(comments), page_size)]
-        if not result:
-            result = [[]]
+        pages = [comments[index:index + page_size] for index in range(0, len(comments), page_size)]
+        if "--paginate" in args and "--slurp" in args:
+            result = pages or [[]]
+        else:
+            result = pages[0] if pages else []
     elif endpoint.endswith("/sub_issues?per_page=100"):
         children = []
         for child in state["children"]:
@@ -267,9 +269,11 @@ elif args[:1] == ["api"]:
                 "pull_request": child.get("pull_request"),
             })
         page_size = state.get("sub_issue_page_size", 100)
-        result = [children[index:index + page_size] for index in range(0, len(children), page_size)]
-        if not result:
-            result = [[]]
+        pages = [children[index:index + page_size] for index in range(0, len(children), page_size)]
+        if "--paginate" in args and "--slurp" in args:
+            result = pages or [[]]
+        else:
+            result = pages[0] if pages else []
     else:
         match = re.search(r"/issues/(\d+)$", endpoint)
         if not match:
@@ -2230,6 +2234,7 @@ class LoopTests(unittest.TestCase):
         self.add_ticket(3)
         self.state["agent_action_by_ticket"] = {"3": "rewrite_history"}
         self.save_state()
+        initial_head = self.git("rev-parse", "HEAD")
 
         result, _ = self.run_loop(
             "--max-iterations",
@@ -2245,6 +2250,11 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(state["tickets"]["3"]["state"], "open")
         self.assertEqual(state["tickets"]["3"]["assignees"], [{"login": "tester"}])
         self.assertEqual([event[0] for event in state["events"]], ["assign", "close", "assign"])
+        self.assertEqual(self.git("branch", "--show-current"), "main")
+        self.assertNotEqual(self.git("rev-parse", "HEAD"), initial_head)
+        self.assertEqual(self.git("show", "-s", "--format=%s", "HEAD"), "Rewrite fixture history")
+        self.assertEqual((self.repo / "rewritten-history.txt").read_text(), "unrelated commit\n")
+        self.assertEqual(self.git("status", "--porcelain"), "")
 
     def test_oversized_context_fails_before_claim_without_truncation(self) -> None:
         self.state["tickets"]["2"]["body"] = "x" * 101_000
