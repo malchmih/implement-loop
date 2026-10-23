@@ -7,10 +7,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from support import SCRIPT, LoopTestCase
+from support import SCRIPT, LoopTestCase, _without_inherited_git_environment
 
 _FIXTURE_ATTEMPT_PROBE = r"""
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -35,29 +36,18 @@ try:
             f"runner exited {result.returncode}\n"
             f"stdout: {result.stdout.decode(errors='replace')}\n"
             f"stderr: {result.stderr.decode(errors='replace')}"
-        )
+    )
 
     state = case.load_state()
     final_head = case.git("rev-parse", "HEAD")
-    if len(runs) != 1:
-        raise RuntimeError(f"expected one run record directory, got {runs!r}")
-    if state["tickets"]["2"]["state"] != "closed":
-        raise RuntimeError("the fake issue service did not observe ticket closure")
-    if [event[0] for event in state["events"]] != ["assign", "close"]:
-        raise RuntimeError(f"unexpected fake issue-service events: {state['events']!r}")
-    if len(state["copilot_calls"]) != 1 or state["opencode_calls"]:
-        raise RuntimeError("the PATH-injected fake Copilot command did not run exactly once")
-    if initial_head == final_head:
-        raise RuntimeError("the fake harness did not create a commit")
-    case.git("merge-base", "--is-ancestor", initial_head, final_head)
-    if case.git("status", "--porcelain"):
-        raise RuntimeError("the runner left the temporary repository dirty")
-
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", initial_head, final_head],
+        cwd=case.repo,
+        env=case.env,
+        check=False,
+        capture_output=True,
+    )
     author = case.git("show", "-s", "--format=%an <%ae>", "HEAD")
-    expected_author = scenario.get("expected_author")
-    if expected_author is not None and author != expected_author:
-        raise RuntimeError(f"expected commit author {expected_author!r}, got {author!r}")
-
     actual_root = Path(case.git("rev-parse", "--show-toplevel")).resolve()
     print(
         json.dumps(
@@ -67,10 +57,12 @@ try:
                 "events": [event[0] for event in state["events"]],
                 "copilot_calls": len(state["copilot_calls"]),
                 "opencode_calls": len(state["opencode_calls"]),
+                "run_count": len(runs),
                 "initial_head": initial_head,
                 "final_head": final_head,
+                "descendant": ancestry.returncode == 0,
                 "author": author,
-                "clean": True,
+                "clean": not case.git("status", "--porcelain"),
             }
         )
     )
@@ -86,13 +78,15 @@ class FixtureIsolationTests(LoopTestCase):
             self.git("config", "--file", str(path), key, value)
         return path
 
-    def _make_hook(self, name: str, *, exit_status: int = 1) -> tuple[Path, Path]:
+    def _write_failing_marker_program(self, executable: Path, marker: Path) -> None:
+        executable.write_text(f"#!/bin/sh\n: > {shlex.quote(str(marker))}\nexit 1\n")
+        executable.chmod(0o700)
+
+    def _make_hook(self, name: str) -> tuple[Path, Path]:
         hook_directory = self.home / f"{name}-hooks"
         hook_directory.mkdir()
         marker = self.home / f"{name}-hook-invoked"
-        hook = hook_directory / "pre-commit"
-        hook.write_text(f"#!/bin/sh\n: > {shlex.quote(str(marker))}\nexit {exit_status}\n")
-        hook.chmod(0o700)
+        self._write_failing_marker_program(hook_directory / "pre-commit", marker)
         return hook_directory, marker
 
     def _make_failing_gpg(self) -> tuple[Path, Path]:
@@ -100,8 +94,7 @@ class FixtureIsolationTests(LoopTestCase):
         gpg_directory.mkdir()
         marker = self.home / "gpg-invoked"
         gpg = gpg_directory / "gpg"
-        gpg.write_text(f"#!/bin/sh\n: > {shlex.quote(str(marker))}\nexit 1\n")
-        gpg.chmod(0o700)
+        self._write_failing_marker_program(gpg, marker)
         return gpg, marker
 
     def _run_fixture_attempt(
@@ -110,9 +103,7 @@ class FixtureIsolationTests(LoopTestCase):
         *,
         scenario: dict[str, object] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        environment = {
-            key: value for key, value in os.environ.items() if not key.startswith("GIT_")
-        }
+        environment = _without_inherited_git_environment(os.environ)
         environment["HOME"] = str(self.home / "probe-home")
         environment.update(inherited_git_environment)
         return subprocess.run(
@@ -148,7 +139,9 @@ class FixtureIsolationTests(LoopTestCase):
         self.assertEqual(report["events"], ["assign", "close"])
         self.assertEqual(report["copilot_calls"], 1)
         self.assertEqual(report["opencode_calls"], 0)
+        self.assertEqual(report["run_count"], 1)
         self.assertNotEqual(report["initial_head"], report["final_head"])
+        self.assertTrue(report["descendant"])
         self.assertTrue(report["clean"])
         return report
 
@@ -257,7 +250,6 @@ class FixtureIsolationTests(LoopTestCase):
                     "user.name": "Repository Local Writer",
                     "user.email": "local@example.invalid",
                 },
-                "expected_author": expected_author,
             },
         )
 
@@ -276,7 +268,6 @@ class FixtureIsolationTests(LoopTestCase):
                     "GIT_CONFIG_KEY_1": "user.email",
                     "GIT_CONFIG_VALUE_1": "override@example.invalid",
                 },
-                "expected_author": expected_author,
             },
         )
 

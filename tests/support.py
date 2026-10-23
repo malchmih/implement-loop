@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import time
 import unittest
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "implement-loop"
@@ -350,8 +350,12 @@ print(json.dumps(result))
 """
 
 
+def _without_inherited_git_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    return {key: value for key, value in environment.items() if not key.startswith("GIT_")}
+
+
 def _isolated_git_environment(home: Path) -> dict[str, str]:
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment = _without_inherited_git_environment(os.environ)
     global_config = home / ".gitconfig"
     global_config.touch()
     environment.update(
