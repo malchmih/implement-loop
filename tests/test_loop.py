@@ -45,6 +45,9 @@ def save_state():
 def ticket_for(number):
     return state["tickets"][str(number)]
 
+def claim_failure_message(default):
+    return state.get("claim_failure_detail", default)
+
 def page_response(items, page_size):
     pages = [items[index:index + page_size] for index in range(0, len(items), page_size)]
     if "--paginate" in args and "--slurp" in args:
@@ -236,10 +239,7 @@ elif args[:2] == ["issue", "edit"]:
         sys.exit(0)
     login = args[args.index("--add-assignee") + 1]
     if state.get("claim_failure") == "before_write":
-        sys.exit(state.get(
-            "claim_failure_detail",
-            "simulated GitHub claim failure before writing",
-        ))
+        sys.exit(claim_failure_message("simulated GitHub claim failure before writing"))
     ticket["assignees"].append({"login": login})
     if state.get("claim_conflict"):
         ticket["assignees"].append({"login": "other"})
@@ -254,10 +254,7 @@ elif args[:2] == ["issue", "edit"]:
     state.setdefault("events", []).append(["assign", number, login])
     save_state()
     if state.get("claim_failure") == "after_write":
-        sys.exit(state.get(
-            "claim_failure_detail",
-            "simulated GitHub claim failure after writing",
-        ))
+        sys.exit(claim_failure_message("simulated GitHub claim failure after writing"))
     sys.exit(0)
 elif args[:2] == ["issue", "close"]:
     number = int(args[2])
