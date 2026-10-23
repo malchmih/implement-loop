@@ -63,9 +63,7 @@ The equivalent per-run options are:
 ```
 
 The retention flags are mutually exclusive. An explicit `--retention-days N`
-overrides a file's `keep_forever = true`. The named-ticket
-`--allow-no-new-commit TICKET_NUMBER` exception is invocation-only and cannot be
-stored in TOML; see [workflow and recovery](usage.md#finalize-already-committed-work-after-approval).
+overrides a file's `keep_forever = true`.
 
 Model and reasoning settings describe the root harness invocation. Configured
 agents or subagents may choose different models; the setting does not force one

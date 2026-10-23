@@ -228,7 +228,7 @@ class IssueLifecycleTests(LoopTestCase):
         self.state["claim_conflict"] = True
         self.save_state()
 
-        result, _ = self.run_loop("--allow-no-new-commit", "2")
+        result, _ = self.run_loop()
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
@@ -303,7 +303,7 @@ class IssueLifecycleTests(LoopTestCase):
         self.state["claim_blocker"] = True
         self.save_state()
 
-        result, _ = self.run_loop("--allow-no-new-commit", "2")
+        result, _ = self.run_loop()
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
@@ -316,7 +316,7 @@ class IssueLifecycleTests(LoopTestCase):
         self.state["claim_remove_child"] = True
         self.save_state()
 
-        result, _ = self.run_loop("--allow-no-new-commit", "2")
+        result, _ = self.run_loop()
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
@@ -350,31 +350,26 @@ class IssueLifecycleTests(LoopTestCase):
                     "closed" if changed_issue == "parent" else "open",
                 )
 
-    def test_ownership_change_after_harness_is_rejected_even_with_named_exception(self) -> None:
+    def test_ownership_change_after_harness_is_rejected(self) -> None:
         self.state["agent_action"] = "change_owner"
-        self.state["make_commit"] = False
         self.save_state()
         existing_head = self.git("rev-parse", "HEAD")
 
-        result, _ = self.run_loop(
-            "--max-iterations",
-            "1",
-            "--allow-no-new-commit",
-            "2",
-        )
+        result, _ = self.run_loop("--max-iterations", "1")
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"no longer open, unblocked, and exclusively assigned", result.stderr)
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual(
             state["tickets"]["2"]["assignees"],
             [{"login": "tester"}, {"login": "other"}],
         )
-        self.assertEqual(self.git("rev-parse", "HEAD"), existing_head)
+        self.assertNotEqual(self.git("rev-parse", "HEAD"), existing_head)
         self.assertEqual(self.git("status", "--porcelain"), "")
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
 
-    def test_ticket_blocker_and_membership_are_rechecked_with_named_exception(self) -> None:
+    def test_ticket_blocker_and_membership_are_rechecked_after_harness(self) -> None:
         cases = (
             ("add_blocker", b"no longer open, unblocked"),
             ("remove_child", b"no longer an open direct child"),
@@ -383,15 +378,9 @@ class IssueLifecycleTests(LoopTestCase):
             with self.subTest(action=action):
                 self.state = self.default_state()
                 self.state["agent_action"] = action
-                self.state["make_commit"] = False
                 self.save_state()
 
-                result, _ = self.run_loop(
-                    "--max-iterations",
-                    "1",
-                    "--allow-no-new-commit",
-                    "2",
-                )
+                result, _ = self.run_loop("--max-iterations", "1")
 
                 state = self.load_state()
                 self.assertNotEqual(result.returncode, 0)
@@ -400,17 +389,11 @@ class IssueLifecycleTests(LoopTestCase):
                 self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
                 self.assertEqual([event[0] for event in state["events"]], ["assign"])
 
-    def test_parent_must_remain_open_even_with_named_exception(self) -> None:
+    def test_parent_must_remain_open_after_harness(self) -> None:
         self.state["agent_action"] = "close_parent"
-        self.state["make_commit"] = False
         self.save_state()
 
-        result, _ = self.run_loop(
-            "--max-iterations",
-            "1",
-            "--allow-no-new-commit",
-            "2",
-        )
+        result, _ = self.run_loop("--max-iterations", "1")
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)

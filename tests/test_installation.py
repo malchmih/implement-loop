@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 import stat
-import subprocess
 import sys
 from pathlib import Path
 
@@ -285,7 +284,6 @@ class InstalledCommandIntegrationTests(LoopTestCase):
             attempt = run_dir / f"attempt-{attempt_number}-ticket-{ticket_number}"
             attempt_metadata = json.loads((attempt / "attempt.json").read_text())
             self.assertEqual(attempt_metadata["harness"], "opencode")
-            self.assertFalse(attempt_metadata["new_commit_requirement_waived"])
             self.assertEqual(
                 json.loads((attempt / "completion-evidence.json").read_text())["status"],
                 "valid",
@@ -308,10 +306,8 @@ class InstalledCommandIntegrationTests(LoopTestCase):
             self.assertFalse((source / f"implementation-{ticket_number}.txt").exists())
         self.assertEqual(self.git("status", "--porcelain"), "")
 
-    def test_installed_copilot_finalizes_after_manual_unassignment_then_requires_new_commit(
-        self,
-    ) -> None:
-        source, installed = self.install_test_command()
+    def test_installed_copilot_requires_new_commit_for_already_committed_work(self) -> None:
+        _, installed = self.install_test_command()
 
         existing_implementation = self.repo / "implementation-2.txt"
         existing_implementation.write_text("implementation committed before approval\n")
@@ -335,27 +331,14 @@ class InstalledCommandIntegrationTests(LoopTestCase):
             "retention_days = 30\n"
         )
         self.add_ticket(3)
-        self.state["tickets"]["2"]["assignees"] = [{"login": "tester"}]
         self.state["comments"]["2"].append(
             {"user": {"login": "reviewer"}, "body": "Human approval received."}
         )
-        self.state["make_commit_by_ticket"] = {"2": False, "3": False}
+        self.state["make_commit"] = False
         self.state["records_dir"] = str(records_dir)
         self.save_state()
 
-        unassign = subprocess.run(
-            [str(self.bin / "gh"), "issue", "edit", "2", "--remove-assignee", "@me"],
-            cwd=self.repo,
-            env=self.env,
-            capture_output=True,
-            timeout=30,
-        )
-        self.assertEqual(unassign.returncode, 0, unassign.stderr.decode())
-        self.assertEqual(self.load_state()["tickets"]["2"]["assignees"], [])
-
         result, _ = self.run_loop(
-            "--allow-no-new-commit",
-            "2",
             harness="copilot",
             executable=installed,
             extra_env={"XDG_CONFIG_HOME": str(config_home)},
@@ -364,16 +347,17 @@ class InstalledCommandIntegrationTests(LoopTestCase):
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"No new commit was made", result.stderr)
-        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2, 3])
+        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
         self.assertEqual(state["opencode_calls"], [])
-        self.assertEqual(state["tickets"]["2"]["state"], "closed")
+        self.assertEqual(state["tickets"]["2"]["state"], "open")
+        self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
         self.assertEqual(state["tickets"]["3"]["state"], "open")
-        self.assertEqual(state["tickets"]["3"]["assignees"], [{"login": "tester"}])
+        self.assertEqual(state["tickets"]["3"]["assignees"], [])
         self.assertEqual(
             [event[:2] for event in state["events"]],
-            [["unassign", 2], ["assign", 2], ["close", 2], ["assign", 3]],
+            [["assign", 2]],
         )
-        self.assertEqual(result.stdout.count(b"Agent output"), 2)
+        self.assertEqual(result.stdout.count(b"Agent output"), 1)
         self.assertEqual(self.git("rev-parse", "HEAD"), existing_head)
         self.assertEqual(self.git("status", "--porcelain"), "")
         self.assertEqual(
@@ -392,12 +376,6 @@ class InstalledCommandIntegrationTests(LoopTestCase):
             )
             self.assertTrue(call["result_initially_absent"])
 
-        first_comment = next(event[2] for event in state["events"] if event[0] == "close")
-        self.assertIn(f"branch main at commit {existing_head}", first_comment)
-        self.assertIn("new-commit requirement was waived for ticket #2", first_comment)
-        self.assertIn(f"HEAD remained at the pre-attempt commit {existing_head}", first_comment)
-        self.assertNotIn("a new descendant commit was produced", first_comment)
-
         run_directories = sorted(records_dir.glob("run-*"))
         self.assertEqual(len(run_directories), 1)
         run_dir = run_directories[0]
@@ -408,26 +386,13 @@ class InstalledCommandIntegrationTests(LoopTestCase):
         self.assertEqual(run_metadata["max_iterations"], 2)
         self.assertEqual(run_metadata["retention_days"], 30)
 
-        finalized_attempt = run_dir / "attempt-1-ticket-2"
-        finalized_metadata = json.loads((finalized_attempt / "attempt.json").read_text())
-        self.assertTrue(finalized_metadata["new_commit_requirement_waived"])
-        self.assertIn(
-            "assess the existing committed implementation", state["copilot_calls"][0]["prompt"]
-        )
+        attempt = run_dir / "attempt-1-ticket-2"
+        self.assertIn("requires a new local descendant commit", state["copilot_calls"][0]["prompt"])
         self.assertIn("Human approval received.", state["copilot_calls"][0]["prompt"])
-        self.assertTrue((finalized_attempt / "completion.json").is_file())
-        self.assertTrue((finalized_attempt / "checks.json").is_file())
+        self.assertTrue((attempt / "completion.json").is_file())
+        self.assertFalse((attempt / "checks.json").exists())
         self.assertEqual(
-            json.loads((finalized_attempt / "completion-evidence.json").read_text())["status"],
+            json.loads((attempt / "completion-evidence.json").read_text())["status"],
             "valid",
         )
-
-        later_attempt = run_dir / "attempt-2-ticket-3"
-        later_metadata = json.loads((later_attempt / "attempt.json").read_text())
-        self.assertFalse(later_metadata["new_commit_requirement_waived"])
-        self.assertIn(
-            "requires a new local descendant commit",
-            state["copilot_calls"][1]["prompt"],
-        )
-        self.assertTrue((later_attempt / "completion.json").is_file())
-        self.assertFalse((later_attempt / "checks.json").exists())
+        self.assertFalse((run_dir / "attempt-2-ticket-3").exists())
