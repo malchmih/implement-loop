@@ -11,12 +11,13 @@ from pathlib import Path
 from support import SCRIPT, LoopTestCase, TemporaryHomeTestCase
 
 _INSTALLER_SERVICE_COMMANDS = ("gh", "opencode", "copilot")
+_INSTALLER_UTILITIES = ("dirname", "mkdir", "ln", "readlink", "git")
 
 
 class InstallationOnlyTests(TemporaryHomeTestCase):
     def setUp(self) -> None:
         super().setUp()
-        for utility in ("dirname", "mkdir", "ln", "readlink", "git"):
+        for utility in _INSTALLER_UTILITIES:
             target = shutil.which(utility)
             self.assertIsNotNone(target, f"test environment needs {utility}")
             (self.bin / utility).symlink_to(target)
@@ -106,8 +107,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
 
         limited_path = self.home / "installer-prerequisites"
         limited_path.mkdir()
-        utilities = ("dirname", "mkdir", "ln", "readlink", "git")
-        for utility in utilities:
+        for utility in _INSTALLER_UTILITIES:
             (limited_path / utility).symlink_to(self.bin / utility)
         for tool in ("python3", "gh", "opencode"):
             (limited_path / tool).symlink_to(self.bin / tool)
