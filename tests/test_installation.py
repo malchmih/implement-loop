@@ -8,10 +8,21 @@ import subprocess
 import sys
 from pathlib import Path
 
-from support import SCRIPT, LoopTestCase
+from support import SCRIPT, LoopTestCase, TemporaryHomeTestCase
 
 
-class InstallationTests(LoopTestCase):
+class InstallationOnlyTests(TemporaryHomeTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        for utility in ("dirname", "mkdir", "ln", "readlink", "git"):
+            target = shutil.which(utility)
+            self.assertIsNotNone(target, f"test environment needs {utility}")
+            (self.bin / utility).symlink_to(target)
+        (self.bin / "python3").symlink_to(sys.executable)
+        for tool in ("gh", "opencode", "copilot"):
+            self.add_invocation_marker(tool)
+        self.env["PATH"] = str(self.bin)
+
     def test_installer_custom_destination_is_created_and_repeat_safe(self) -> None:
         source = self.copy_source_tree()
         destination = self.home / "chosen executable directory" / "nested"
@@ -29,6 +40,7 @@ class InstallationTests(LoopTestCase):
         self.assertIn(b"PATH already includes", second.stdout)
         self.assertTrue(installed.is_symlink())
         self.assertEqual(os.readlink(installed), str(source.resolve() / SCRIPT.name))
+        self.assert_commands_not_invoked("gh", "opencode", "copilot")
 
     def test_installer_refuses_unrelated_file_directory_and_link_collisions(self) -> None:
         source = self.copy_source_tree()
@@ -66,6 +78,7 @@ class InstallationTests(LoopTestCase):
                 else:
                     self.assertTrue(link.is_symlink())
                     self.assertEqual(os.readlink(link), original_link)
+                self.assert_commands_not_invoked("gh", "opencode", "copilot")
 
     def test_installer_reports_prerequisites_and_path_without_mutating_user_settings(self) -> None:
         source = self.copy_source_tree()
@@ -83,15 +96,9 @@ class InstallationTests(LoopTestCase):
         limited_path.mkdir()
         utilities = ("dirname", "mkdir", "ln", "readlink", "git")
         for utility in utilities:
-            target = shutil.which(utility)
-            self.assertIsNotNone(target, f"test environment needs {utility}")
-            (limited_path / utility).symlink_to(target)
-        for tool, target in (
-            ("python3", sys.executable),
-            ("gh", self.bin / "gh"),
-            ("opencode", self.bin / "opencode"),
-        ):
-            (limited_path / tool).symlink_to(target)
+            (limited_path / utility).symlink_to(self.bin / utility)
+        for tool in ("python3", "gh", "opencode"):
+            (limited_path / tool).symlink_to(self.bin / tool)
 
         env = dict(self.env, PATH=str(limited_path))
         existing_entries = {path.relative_to(self.home) for path in self.home.rglob("*")}
@@ -115,11 +122,47 @@ class InstallationTests(LoopTestCase):
         )
         for path, contents in profile_contents.items():
             self.assertEqual(path.read_bytes(), contents)
-        state = self.load_state()
-        self.assertEqual(state["events"], [])
-        self.assertEqual(state["opencode_calls"], [])
-        self.assertEqual(state["copilot_calls"], [])
+        self.assert_commands_not_invoked("gh", "opencode", "copilot")
 
+    def test_installer_requires_home_when_destination_is_omitted(self) -> None:
+        source = self.copy_source_tree()
+        env = dict(self.env)
+        env.pop("HOME")
+        existing_entries = {path.relative_to(self.home) for path in self.home.rglob("*")}
+
+        result = self.run_installer(source, env=env)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            b"Error: HOME is not set; pass a destination directory explicitly.\n",
+        )
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(
+            {path.relative_to(self.home) for path in self.home.rglob("*")} - existing_entries,
+            set(),
+        )
+        self.assertFalse((self.home / ".local/bin/implement-loop").exists())
+        self.assert_commands_not_invoked("gh", "opencode", "copilot")
+
+    def test_installer_rejects_an_empty_destination_without_side_effects(self) -> None:
+        source = self.copy_source_tree()
+        existing_entries = {path.relative_to(self.home) for path in self.home.rglob("*")}
+
+        result = self.run_installer(source, "")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stderr, b"Error: destination must be a non-empty directory path.\n")
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(
+            {path.relative_to(self.home) for path in self.home.rglob("*")} - existing_entries,
+            set(),
+        )
+        self.assertFalse((self.home / "implement-loop").exists())
+        self.assert_commands_not_invoked("gh", "opencode", "copilot")
+
+
+class InstalledCommandIntegrationTests(LoopTestCase):
     def test_installed_command_runs_from_a_target_checkout_subdirectory(self) -> None:
         source, installed = self.install_test_command()
         self.assertTrue(installed.is_symlink())

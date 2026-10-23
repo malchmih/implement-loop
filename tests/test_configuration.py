@@ -3,12 +3,20 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
-from support import SCRIPT, LoopTestCase
+from support import SCRIPT, LoopTestCase, TemporaryHomeTestCase
 
 
-class ConfigurationTests(LoopTestCase):
+class HelpSmokeTests(TemporaryHomeTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        (self.bin / "python3").symlink_to(sys.executable)
+        for tool in ("git", "gh", "opencode", "copilot"):
+            self.add_invocation_marker(tool)
+        self.env["PATH"] = str(self.bin)
+
     def test_help_works_without_locking_or_contacting_services(self) -> None:
         result = subprocess.run(
             [str(SCRIPT), "--help"],
@@ -30,10 +38,13 @@ class ConfigurationTests(LoopTestCase):
         self.assertIn(b"--keep-records-forever", result.stdout)
         self.assertIn(b"opencode", result.stdout)
         self.assertIn(b"copilot", result.stdout)
-        self.assertEqual(self.load_state()["events"], [])
-        self.assertFalse((self.repo / ".git/implement-loop.lock").exists())
+        self.assertFalse((self.home / ".git").exists())
+        self.assertFalse((self.home / ".git/implement-loop.lock").exists())
         self.assertFalse((self.home / ".local/state/implement-loop").exists())
+        self.assert_commands_not_invoked("git", "gh", "opencode", "copilot")
 
+
+class ConfigurationTests(LoopTestCase):
     def test_default_selection_uses_opencode_and_native_skill_reference(self) -> None:
         result, runs = self.run_loop(
             "--max-iterations",

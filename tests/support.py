@@ -4,6 +4,7 @@ import json
 import os
 import pty
 import select
+import shlex
 import shutil
 import signal
 import socket
@@ -368,16 +369,67 @@ def _isolated_git_environment(home: Path) -> dict[str, str]:
     return environment
 
 
-class LoopTestCase(unittest.TestCase):
+class TemporaryHomeTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="implement-loop-test-")
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
         self.env = _isolated_git_environment(self.home)
-        self.repo = self.home / "repo"
-        self.repo.mkdir()
         self.bin = self.home / "bin"
         self.bin.mkdir()
+        self.env["PATH"] = str(self.bin) + os.pathsep + self.env["PATH"]
+        self.invocation_markers: dict[str, Path] = {}
+
+    def add_invocation_marker(self, command: str, *, directory: Path | None = None) -> Path:
+        executable = (directory or self.bin) / command
+        marker = self.home / f"{command}.invoked"
+        executable.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(marker))}\n")
+        executable.chmod(0o700)
+        self.invocation_markers[command] = marker
+        return marker
+
+    def assert_commands_not_invoked(self, *commands: str) -> None:
+        for command in commands:
+            marker = self.invocation_markers.get(command)
+            self.assertIsNotNone(marker, f"no invocation marker configured for {command}")
+            assert marker is not None
+            self.assertFalse(marker.exists(), f"{command} was invoked; marker: {marker}")
+
+    def copy_source_tree(self) -> Path:
+        source = self.home / "source checkout"
+        shutil.copytree(
+            SCRIPT.parent,
+            source,
+            ignore=shutil.ignore_patterns(
+                ".git", "__pycache__", ".venv", ".mypy_cache", ".ruff_cache"
+            ),
+        )
+        return source
+
+    def run_installer(
+        self,
+        source: Path,
+        destination: Path | str | None = None,
+        *,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        command = [str(source / INSTALLER.name)]
+        if destination is not None:
+            command.append(os.fspath(destination))
+        return subprocess.run(
+            command,
+            cwd=self.home,
+            env=env if env is not None else self.env,
+            capture_output=True,
+            timeout=30,
+        )
+
+
+class LoopTestCase(TemporaryHomeTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.repo = self.home / "repo"
+        self.repo.mkdir()
         for tool in ("gh", "copilot", "opencode"):
             path = self.bin / tool
             path.write_text(FAKE_TOOL)
@@ -391,7 +443,6 @@ class LoopTestCase(unittest.TestCase):
         self.env.pop("XDG_STATE_HOME", None)
         self.env.pop("NO_COLOR", None)
         self.env.pop("FORCE_COLOR", None)
-        self.env["PATH"] = str(self.bin) + os.pathsep + self.env["PATH"]
         self.env["IMPLEMENT_LOOP_TEST_STATE"] = str(self.state_path)
 
         self.git("init", "--quiet")
@@ -673,35 +724,6 @@ class LoopTestCase(unittest.TestCase):
             if master is not None:
                 os.close(master)
             ready_listener.close()
-
-    def copy_source_tree(self) -> Path:
-        source = self.home / "source checkout"
-        shutil.copytree(
-            SCRIPT.parent,
-            source,
-            ignore=shutil.ignore_patterns(
-                ".git", "__pycache__", ".venv", ".mypy_cache", ".ruff_cache"
-            ),
-        )
-        return source
-
-    def run_installer(
-        self,
-        source: Path,
-        destination: Path | None = None,
-        *,
-        env: dict[str, str] | None = None,
-    ) -> subprocess.CompletedProcess[bytes]:
-        command = [str(source / INSTALLER.name)]
-        if destination is not None:
-            command.append(str(destination))
-        return subprocess.run(
-            command,
-            cwd=self.repo,
-            env=env if env is not None else self.env,
-            capture_output=True,
-            timeout=30,
-        )
 
     def install_test_command(self) -> tuple[Path, Path]:
         source = self.copy_source_tree()
