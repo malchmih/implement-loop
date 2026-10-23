@@ -380,8 +380,8 @@ class TemporaryHomeTestCase(unittest.TestCase):
         self.env["PATH"] = str(self.bin) + os.pathsep + self.env["PATH"]
         self.invocation_markers: dict[str, Path] = {}
 
-    def add_invocation_marker(self, command: str, *, directory: Path | None = None) -> Path:
-        executable = (directory or self.bin) / command
+    def add_invocation_marker(self, command: str) -> Path:
+        executable = self.bin / command
         marker = self.home / f"{command}.invoked"
         executable.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(marker))}\n")
         executable.chmod(0o700)

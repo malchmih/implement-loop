@@ -23,6 +23,9 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
             self.add_invocation_marker(tool)
         self.env["PATH"] = str(self.bin)
 
+    def _home_entries(self) -> set[Path]:
+        return {path.relative_to(self.home) for path in self.home.rglob("*")}
+
     def test_installer_custom_destination_is_created_and_repeat_safe(self) -> None:
         source = self.copy_source_tree()
         destination = self.home / "chosen executable directory" / "nested"
@@ -101,7 +104,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
             (limited_path / tool).symlink_to(self.bin / tool)
 
         env = dict(self.env, PATH=str(limited_path))
-        existing_entries = {path.relative_to(self.home) for path in self.home.rglob("*")}
+        existing_entries = self._home_entries()
 
         result = self.run_installer(source, env=env)
 
@@ -117,7 +120,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
         self.assertIn("Missing: copilot", output)
         self.assertNotIn("uv", output.lower())
         self.assertEqual(
-            {path.relative_to(self.home) for path in self.home.rglob("*")} - existing_entries,
+            self._home_entries() - existing_entries,
             {Path(".local"), Path(".local/bin"), Path(".local/bin/implement-loop")},
         )
         for path, contents in profile_contents.items():
@@ -128,7 +131,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
         source = self.copy_source_tree()
         env = dict(self.env)
         env.pop("HOME")
-        existing_entries = {path.relative_to(self.home) for path in self.home.rglob("*")}
+        existing_entries = self._home_entries()
 
         result = self.run_installer(source, env=env)
 
@@ -139,7 +142,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
         )
         self.assertEqual(result.stdout, b"")
         self.assertEqual(
-            {path.relative_to(self.home) for path in self.home.rglob("*")} - existing_entries,
+            self._home_entries() - existing_entries,
             set(),
         )
         self.assertFalse((self.home / ".local/bin/implement-loop").exists())
@@ -147,7 +150,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
 
     def test_installer_rejects_an_empty_destination_without_side_effects(self) -> None:
         source = self.copy_source_tree()
-        existing_entries = {path.relative_to(self.home) for path in self.home.rglob("*")}
+        existing_entries = self._home_entries()
 
         result = self.run_installer(source, "")
 
@@ -155,7 +158,7 @@ class InstallationOnlyTests(TemporaryHomeTestCase):
         self.assertEqual(result.stderr, b"Error: destination must be a non-empty directory path.\n")
         self.assertEqual(result.stdout, b"")
         self.assertEqual(
-            {path.relative_to(self.home) for path in self.home.rglob("*")} - existing_entries,
+            self._home_entries() - existing_entries,
             set(),
         )
         self.assertFalse((self.home / "implement-loop").exists())
