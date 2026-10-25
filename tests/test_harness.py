@@ -106,6 +106,13 @@ class HarnessTests(LoopTestCase):
             + '{"type":"step_finish","part":{"type":"unexpected"}}\n'
             + '{"type":"reasoning","part":{"type":"reasoning","text":"secret reasoning"}}\n'
             + '{"type":"reasoning"}\n'
+            + json.dumps(
+                {
+                    "type": "text",
+                    "part": {"type": "text", "text": "before\ud800after"},
+                }
+            )
+            + "\n"
         )
         self.state["opencode_raw_output"] = raw_output
         self.save_state()
@@ -125,6 +132,7 @@ class HarnessTests(LoopTestCase):
         self.assertIn(b"OpenCode step_finish event", result.stdout)
         self.assertIn(b"OpenCode reasoning event", result.stdout)
         self.assertNotIn(b"secret reasoning", result.stdout)
+        self.assertIn(b"before?after", result.stdout)
         self.assertNotIn(b"Traceback", result.stdout + result.stderr)
         attempt = runs[0] / "attempt-1-ticket-2"
         self.assertEqual((attempt / "agent.log").read_bytes(), raw_output.encode("utf-8"))
@@ -223,47 +231,6 @@ class HarnessTests(LoopTestCase):
         self.assertIn("Run-level failure detail.", visible)
         attempt = runs[0] / "attempt-1-ticket-2"
         self.assertEqual((attempt / "agent.log").read_bytes(), raw_output.encode("utf-8"))
-
-    def test_opencode_identifies_delegation_only_when_the_tool_exposes_an_agent(self) -> None:
-        events = [
-            {
-                "type": "tool_use",
-                "timestamp": 1,
-                "sessionID": "ses_delegation",
-                "part": {
-                    "type": "tool",
-                    "tool": "generic_work_tool",
-                    "state": {
-                        "status": "completed",
-                        "title": "Review implementation",
-                        "input": {"agent": "reviewer", "task": "Review the change"},
-                        "output": "Review result",
-                    },
-                },
-            },
-            {
-                "type": "tool_use",
-                "timestamp": 2,
-                "sessionID": "ses_delegation",
-                "part": {
-                    "type": "tool",
-                    "tool": "ordinary_tool",
-                    "state": {"status": "completed", "title": "Ordinary result", "output": "Done"},
-                },
-            },
-        ]
-        raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
-        self.state["opencode_raw_output"] = raw_output
-        self.save_state()
-
-        result, _ = self.run_loop("--max-iterations", "1", harness=None)
-
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        visible = result.stdout.decode("utf-8")
-        self.assertIn("delegated result", visible)
-        self.assertIn("delegated agent: reviewer", visible)
-        ordinary = visible.split("Ordinary result", maxsplit=1)[1]
-        self.assertNotIn("delegated result", ordinary)
 
     def test_opencode_stream_handles_split_unicode_multiple_records_and_final_line(self) -> None:
         first_event = {
@@ -389,6 +356,117 @@ class HarnessTests(LoopTestCase):
                     process.wait(timeout=5)
                 if process.stdout is not None:
                     process.stdout.close()
+            ready_listener.close()
+
+    def test_opencode_final_unterminated_write_failure_does_not_fail_raw_logging(self) -> None:
+        events = [
+            {
+                "type": "text",
+                "timestamp": 1,
+                "sessionID": "ses_pipe",
+                "part": {"type": "text", "text": "Completed block before pipe closes"},
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_pipe",
+                "part": {
+                    "type": "tool",
+                    "tool": "final_tool",
+                    "state": {
+                        "status": "completed",
+                        "title": "Final unterminated result",
+                        "output": "This block cannot reach the closed pipe.",
+                    },
+                },
+            },
+        ]
+        raw_output = (
+            json.dumps(events[0], ensure_ascii=False, separators=(",", ":"))
+            + "\n"
+            + json.dumps(events[1], ensure_ascii=False, separators=(",", ":"))
+        )
+        raw_bytes = raw_output.encode("utf-8")
+        self.state["opencode_raw_output"] = raw_output
+        self.save_state()
+
+        ready_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ready_listener.bind(("127.0.0.1", 0))
+        ready_listener.listen()
+        ready_listener.settimeout(LIVE_READY_TIMEOUT)
+        env = dict(self.env)
+        env["IMPLEMENT_LOOP_TEST_OPENCODE_SPLIT_BYTES"] = str(len(raw_bytes))
+        env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"] = str(ready_listener.getsockname()[1])
+        env["IMPLEMENT_LOOP_TEST_RESULT_MODE"] = "missing"
+        process: subprocess.Popen[bytes] | None = None
+        visible = bytearray()
+        try:
+            process = subprocess.Popen(
+                [str(SCRIPT), "1", "--max-iterations", "1"],
+                cwd=self.repo,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            assert process.stdout is not None
+            with ready_listener.accept()[0] as ready_connection:
+                ready_connection.settimeout(LIVE_READY_TIMEOUT)
+                self.assertEqual(ready_connection.recv(1), b"R")
+            self._read_until_output(
+                process.stdout.fileno(),
+                visible,
+                b"Completed block before pipe closes",
+                timeout=LIVE_OUTPUT_TIMEOUT,
+            )
+            self.assertIsNone(process.poll(), "harness exited before the fake released its stream")
+            attempts = list(
+                (self.home / ".local/state/implement-loop").glob("run-*/attempt-1-ticket-2")
+            )
+            self.assertEqual(len(attempts), 1)
+            agent_log = attempts[0] / "agent.log"
+            self.assertEqual(agent_log.read_bytes(), raw_bytes)
+
+            process.stdout.close()
+            process.stdout = None
+            assert process.stdin is not None
+            process.stdin.write(b"x")
+            process.stdin.flush()
+            process.stdin.close()
+            process.stdin = None
+            _, stderr = process.communicate(timeout=LIVE_READY_TIMEOUT)
+            self.assertNotEqual(process.returncode, 0)
+            self.assertIn(b"did not write the required per-attempt result file", stderr or b"")
+            self.assertNotIn(b"Unable to persist the complete OpenCode output log", stderr or b"")
+            process_record = json.loads((attempts[0] / "process.json").read_text())
+            self.assertTrue(process_record["log_persisted"])
+            self.assertIsNotNone(process_record["stream_error"])
+            self.assertEqual(agent_log.read_bytes(), raw_bytes)
+        finally:
+            if process is not None:
+                if process.stdin is not None and not process.stdin.closed:
+                    try:
+                        process.stdin.write(b"x")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError, ValueError):
+                        pass
+                    try:
+                        process.stdin.close()
+                    except OSError:
+                        pass
+                try:
+                    process.wait(timeout=LIVE_READY_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    process.wait(timeout=5)
+                if process.stdout is not None:
+                    process.stdout.close()
+                if process.stderr is not None:
+                    process.stderr.close()
             ready_listener.close()
 
     def test_opencode_redirected_output_is_live_before_harness_exit(self) -> None:

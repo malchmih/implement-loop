@@ -33,6 +33,7 @@ class HarnessSpec:
     name: HarnessName
     executable: str
     display_name: str
+    output_format: Literal["text", "json"]
     model: str
     model_variant: str | None
     reasoning_effort: str | None
@@ -70,7 +71,7 @@ class HarnessSpec:
                 "--model",
                 self.model_selector,
                 "--format",
-                "json",
+                self.output_format,
                 prompt,
             ]
 
@@ -87,7 +88,7 @@ class HarnessSpec:
             "--stream",
             "on",
             "--output-format",
-            "text",
+            self.output_format,
             "--allow-all-tools",
         ]
 
@@ -97,6 +98,7 @@ _HARNESS_SPECS: dict[str, HarnessSpec] = {
         name="opencode",
         executable="opencode",
         display_name="OpenCode",
+        output_format="json",
         model="github-copilot/gpt-6-luna",
         model_variant="max",
         reasoning_effort=None,
@@ -106,6 +108,7 @@ _HARNESS_SPECS: dict[str, HarnessSpec] = {
         name="copilot",
         executable="copilot",
         display_name="Copilot",
+        output_format="text",
         model="gpt-6-luna",
         model_variant=None,
         reasoning_effort="max",
@@ -143,6 +146,7 @@ def select_harness(name: str, settings: HarnessSettings | None = None) -> Harnes
         name=spec.name,
         executable=spec.executable,
         display_name=spec.display_name,
+        output_format=spec.output_format,
         model=selected.model,
         model_variant=selected.model_variant,
         reasoning_effort=selected.reasoning_effort,
@@ -309,10 +313,6 @@ class _OpenCodeRenderer:
         marker_color = "31" if failed else "32"
         lines = [f"{self._style(marker, marker_color)} {self._style(title, '1')}"]
         lines.append(f"  {self._style(f'tool: {tool_name}', '2')}")
-        delegated_agent = self._delegated_agent(input_value, state.get("metadata"))
-        if delegated_agent is not None:
-            lines.append("  delegated result")
-            lines.append(f"  delegated agent: {delegated_agent}")
         if input_value is not None:
             input_text = self._compact(input_value)
             if len(input_text) > 240:
@@ -377,18 +377,6 @@ class _OpenCodeRenderer:
     def _style(self, text: str, code: str) -> str:
         return f"\x1b[{code}m{text}\x1b[0m" if self._color else text
 
-    @staticmethod
-    def _delegated_agent(input_value: Any, metadata: Any) -> str | None:
-        for source in (input_value, metadata):
-            if not isinstance(source, dict):
-                continue
-            value = source.get("agent")
-            if isinstance(value, dict):
-                value = value.get("name")
-            if isinstance(value, str) and value.strip():
-                return " ".join(value.splitlines()).strip()
-        return None
-
 
 def run_harness(
     harness: HarnessSpec,
@@ -405,7 +393,7 @@ def run_harness(
         cwd,
         log_path,
         harness.display_name,
-        render_opencode=harness.name == "opencode",
+        render_opencode=harness.output_format == "json",
         on_invocation_starting=on_invocation_starting,
     )
 
@@ -469,10 +457,12 @@ def _run_process(
 
     def write_text(value: str) -> None:
         if output is None:
-            sys.stdout.write(value)
+            encoding = sys.stdout.encoding or "utf-8"
+            safe_value = value.encode(encoding, errors="replace").decode(encoding, errors="replace")
+            sys.stdout.write(safe_value)
             sys.stdout.flush()
         else:
-            output.write(value.encode("utf-8"))
+            output.write(value.encode("utf-8", errors="replace"))
             output.flush()
 
     renderer = _OpenCodeRenderer(write_text, color=color) if render_opencode else None
@@ -505,7 +495,10 @@ def _run_process(
                         except (BrokenPipeError, OSError) as error:
                             stream_error = str(error)
                 if renderer is not None and stream_error is None:
-                    renderer.finish()
+                    try:
+                        renderer.finish()
+                    except (BrokenPipeError, OSError) as error:
+                        stream_error = str(error)
                 process.stdout.close()
     except OSError as error:
         log_persisted = False
