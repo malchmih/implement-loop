@@ -236,6 +236,20 @@ documentation before using it. OpenCode V1 is not supported.
   presentation. The renderer does not subscribe to child sessions or display
   delegated agents' internal tools, starts, progress, or nested transcripts.
   No semantic command outcome is inferred from a successful tool state.
+
+  Successful `patch`, `edit`, and `write` results show up to five returned lines
+  with their wording intact. The recognized patch header
+  `Success. Updated the following files:` is removed before preview selection;
+  other tools' first lines are not discarded. Successful modification blocks do
+  not show patch text, replacement text, full written contents, or metadata
+  diffs. A diff already present in returned output is previewed as ordinary
+  output. Successful `webfetch` blocks show the requested URL and up to five
+  returned content lines. Both families use the shared omission notice and
+  `No output` indication. If a tailored input shape is unavailable, the renderer
+  keeps the result intelligible through its bounded fallback without guessing
+  file or URL semantics. Failures bypass successful-output cleanup and limits,
+  retaining all available errors and output.
+
 - OpenCode's private per-attempt `agent.log` retains the complete emitted JSON
   event stream before display filtering or truncation. It is raw evidence, not a
   copy of the rendered transcript. Copilot keeps its existing native-text
@@ -253,6 +267,7 @@ Official references for these contracts:
 - [OpenCode V2 permissions](https://opencode.ai/v2/docs/permissions/)
 - [OpenCode 2.1.4 noninteractive JSON renderer](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/cli/src/run/noninteractive.ts)
 - [OpenCode 2.1.4 noninteractive tests](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/cli/test/run/noninteractive.test.ts)
+- OpenCode 2.1.4 built-in [patch](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/patch.ts), [edit](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/edit.ts), [write](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/write.ts), and [webfetch](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/webfetch.ts) tool schemas and outputs
 - [Copilot CLI command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
 - [Copilot CLI programmatic reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference)
 - [Copilot CLI skill setup](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills)
@@ -335,6 +350,15 @@ diagnostics remain visible through readable fallbacks. The renderer does not
 infer completion from tool markers, step-finish events, or the absence of an
 error event. Process status and the separate completion-result file remain
 authoritative for Attempt completion.
+
+Successful `patch`, `edit`, and `write` blocks preview up to five returned result
+lines; only the recognized patch success header is removed, and modification
+inputs or metadata diffs are not added to successful blocks. `webfetch` blocks
+show the requested URL and up to five returned content lines. Both use the same
+omission notice and empty-output indication. Failure blocks preserve available
+error details and output without success-only filtering or limits. These
+family-specific displays do not alter incremental delivery, raw-log bytes, or
+the independent process/result-file completion evidence.
 
 OpenCode's private per-attempt `agent.log` preserves every emitted byte before
 rendering, filtering, or truncation, so it contains raw JSON events rather than

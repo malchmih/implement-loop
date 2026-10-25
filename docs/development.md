@@ -96,6 +96,11 @@ sequences. They also verify that successful read/search results and identifiable
 parent-level delegation retain their current summaries without losing their full
 raw events, while unfamiliar tools use the generic fallback. Copilot fixtures
 continue to verify its native byte relay and record format.
+File-modification and web-fetch fixtures follow the verified OpenCode 2.1.4
+schemas for `patch`, `edit`, `write`, and `webfetch`. Their integration tests
+cover result previews, patch-only success-header removal, first-line
+preservation, unsupported-shape fallback, full failures, tool-supplied colors,
+and raw-log retention of filtered or omitted content.
 CLI references and locally verified versions for native skill loading and
 invocation flags are recorded in [workflow and recovery](usage.md); fake
 executables do not prove that a live model loads a user's skill.

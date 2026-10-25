@@ -411,6 +411,386 @@ class HarnessTests(LoopTestCase):
         )
         self.assertIn(b"\\u001b[31mred first line", raw_output.encode("utf-8"))
 
+    def test_opencode_file_modification_results_hide_inputs_and_strip_patch_header(self) -> None:
+        patch_input = (
+            "*** Begin Patch\n*** Update File: src/settings.py\n+SECRET_PATCH_INPUT\n*** End Patch"
+        )
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_file_changes",
+                "part": {
+                    "id": "call_patch",
+                    "type": "tool",
+                    "tool": "patch",
+                    "state": {
+                        "status": "completed",
+                        "title": "patch",
+                        "input": {"patchText": patch_input},
+                        "output": "Success. Updated the following files:\n"
+                        "M src/settings.py\nA tests/test_settings.py\n"
+                        "M src/config.py\nD src/old_config.py\n"
+                        "A docs/settings.md\nM sixth-result.py",
+                        "metadata": {
+                            "metadata": {
+                                "files": [
+                                    {
+                                        "file": "src/settings.py",
+                                        "patch": "SECRET_PATCH_DIFF",
+                                    }
+                                ]
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_file_changes",
+                "part": {
+                    "id": "call_returned_diff",
+                    "type": "tool",
+                    "tool": "patch",
+                    "state": {
+                        "status": "completed",
+                        "title": "Show returned change",
+                        "input": {"patchText": "SECRET_PATCH_FOR_RETURNED_DIFF"},
+                        "output": "--- a/src/returned.py\n+++ b/src/returned.py\n"
+                        "@@ -1 +1 @@\n-old\n+new",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_file_changes",
+                "part": {
+                    "id": "call_edit",
+                    "type": "tool",
+                    "tool": "edit",
+                    "state": {
+                        "status": "completed",
+                        "title": "edit",
+                        "input": {
+                            "path": "src/app.py",
+                            "oldString": "SECRET_OLD_CONTENT",
+                            "newString": "SECRET_NEW_CONTENT",
+                        },
+                        "output": "Edited src/app.py (1 replacement)",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 4,
+                "sessionID": "ses_file_changes",
+                "part": {
+                    "id": "call_write",
+                    "type": "tool",
+                    "tool": "write",
+                    "state": {
+                        "status": "completed",
+                        "title": "write",
+                        "input": {"path": "src/new.py", "content": "SECRET_FILE_CONTENT"},
+                        "output": "Wrote file successfully: src/new.py",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn("✓ Apply patch (patch)", visible)
+        patch_block = next(block for block in visible.split("\n\n") if "(patch)" in block)
+        for result_line in (
+            "M src/settings.py",
+            "A tests/test_settings.py",
+            "M src/config.py",
+            "D src/old_config.py",
+            "A docs/settings.md",
+        ):
+            self.assertIn(result_line, patch_block)
+        self.assertNotIn("Success. Updated the following files:", patch_block)
+        self.assertNotIn("sixth-result.py", patch_block)
+        self.assertIn("... 1 additional line(s) omitted", patch_block)
+        diff_block = next(
+            block for block in visible.split("\n\n") if "Show returned change" in block
+        )
+        for diff_line in (
+            "--- a/src/returned.py",
+            "+++ b/src/returned.py",
+            "@@ -1 +1 @@",
+            "-old",
+            "+new",
+        ):
+            self.assertIn(diff_line, diff_block)
+        self.assertIn("✓ Edit src/app.py (edit)", visible)
+        self.assertIn("Edited src/app.py (1 replacement)", visible)
+        self.assertIn("✓ Write src/new.py (write)", visible)
+        self.assertIn("Wrote file successfully: src/new.py", visible)
+        for private_input in (
+            "SECRET_PATCH_INPUT",
+            "SECRET_PATCH_DIFF",
+            "SECRET_PATCH_FOR_RETURNED_DIFF",
+            "SECRET_OLD_CONTENT",
+            "SECRET_NEW_CONTENT",
+            "SECRET_FILE_CONTENT",
+        ):
+            self.assertNotIn(private_input, visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+        for private_input in (
+            "SECRET_PATCH_INPUT",
+            "SECRET_PATCH_DIFF",
+            "SECRET_OLD_CONTENT",
+            "SECRET_NEW_CONTENT",
+            "SECRET_FILE_CONTENT",
+        ):
+            self.assertIn(private_input.encode("utf-8"), log.read_bytes())
+
+    def test_opencode_file_and_webfetch_previews_preserve_supplied_ansi(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_colored_previews",
+                "part": {
+                    "type": "tool",
+                    "tool": "patch",
+                    "state": {
+                        "status": "completed",
+                        "title": "Update colored file",
+                        "input": {"patchText": "*** Begin Patch\n+line\n*** End Patch"},
+                        "output": "Success. Updated the following files:\n"
+                        "\x1b[35m+src/colored.py\x1b[0m",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_colored_previews",
+                "part": {
+                    "type": "tool",
+                    "tool": "webfetch",
+                    "state": {
+                        "status": "completed",
+                        "title": "Fetch colored docs",
+                        "input": {"url": "https://example.test/colored"},
+                        "output": "\x1b[36m# Colored web title\x1b[0m",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events, extra_env={"NO_COLOR": ""})
+
+        self.assertIn("✓ Update colored file (patch)", visible)
+        self.assertIn("  └ \x1b[35m+src/colored.py\x1b[0m", visible)
+        self.assertIn("✓ Fetch colored docs (webfetch)", visible)
+        self.assertIn("  │ https://example.test/colored", visible)
+        self.assertIn("  └ \x1b[36m# Colored web title\x1b[0m", visible)
+        self.assertNotIn("\x1b[32m", visible)
+        self.assertNotIn("\x1b[1m", visible)
+        agent_log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(agent_log.read_bytes(), raw_output.encode("utf-8"))
+        self.assertIn(b"\\u001b[35m", agent_log.read_bytes())
+        self.assertIn(b"\\u001b[36m", agent_log.read_bytes())
+
+    def test_opencode_webfetch_shows_url_and_bounded_content_preview(self) -> None:
+        url = "https://docs.python.org/3/library/asyncio.html"
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_webfetch",
+                "part": {
+                    "id": "call_webfetch",
+                    "type": "tool",
+                    "tool": "webfetch",
+                    "state": {
+                        "status": "completed",
+                        "title": "webfetch",
+                        "input": {"url": url, "format": "markdown", "timeout": 20},
+                        "output": "# asyncio — Asynchronous I/O\n"
+                        "Retrieved content line two\n"
+                        "Retrieved content line three\n"
+                        "Retrieved content line four\n"
+                        "Retrieved content line five\n"
+                        "sixth content line",
+                        "metadata": {"metadata": {"contentType": "text/markdown"}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_webfetch",
+                "part": {
+                    "id": "call_empty_webfetch",
+                    "type": "tool",
+                    "tool": "webfetch",
+                    "state": {
+                        "status": "completed",
+                        "title": "webfetch",
+                        "input": {"url": "https://example.test/empty", "format": "text"},
+                        "output": "",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        block = next(block for block in visible.split("\n\n") if "(webfetch)" in block)
+        self.assertIn("✓ Fetch web content (webfetch)", block)
+        self.assertIn(f"  │ {url}", block)
+        for line in (
+            "# asyncio — Asynchronous I/O",
+            "Retrieved content line two",
+            "Retrieved content line three",
+            "Retrieved content line four",
+            "Retrieved content line five",
+        ):
+            self.assertIn(line, block)
+        self.assertNotIn("sixth content line", block)
+        self.assertIn("... 1 additional line(s) omitted", block)
+        self.assertIn("✓ Fetch web content (webfetch)", visible)
+        self.assertIn("  │ https://example.test/empty\n  └ No output", visible)
+        self.assertNotIn('"url":', visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+        self.assertIn(b"sixth content line", log.read_bytes())
+
+    def test_opencode_file_and_webfetch_fallbacks_keep_results_without_guessing(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_family_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "edit",
+                    "state": {
+                        "status": "completed",
+                        "title": "edit",
+                        "input": {
+                            "path": "src/partial.py",
+                            "oldString": 42,
+                            "newString": "SECRET_UNSUPPORTED_REPLACEMENT",
+                        },
+                        "output": "Meaningful first edit result\nSecond edit result",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_family_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "webfetch",
+                    "state": {
+                        "status": "completed",
+                        "title": "webfetch",
+                        "input": {"url": 42, "format": "markdown"},
+                        "output": {"message": "Unsupported structured response remains visible"},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_family_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "patch_extension",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect extension output",
+                        "input": {"mode": "preview"},
+                        "output": "Success. Updated the following files:\n"
+                        "Keep this unrelated first line",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn('✓ Edit src/partial.py (edit)\n  │ {"path":"src/partial.py"}', visible)
+        self.assertIn("Meaningful first edit result", visible)
+        self.assertNotIn("SECRET_UNSUPPORTED_REPLACEMENT", visible)
+        self.assertIn('  │ {"url":42,"format":"markdown"}', visible)
+        self.assertIn('{"message":"Unsupported structured response remains visible"}', visible)
+        self.assertNotIn("  │ 42", visible)
+        extension_block = next(
+            block for block in visible.split("\n\n") if "Inspect extension output" in block
+        )
+        self.assertIn("Success. Updated the following files:", extension_block)
+        self.assertIn("Keep this unrelated first line", extension_block)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+
+    def test_opencode_file_and_webfetch_failures_keep_full_error_and_output(self) -> None:
+        failed_tools = (
+            ("patch", {"patchText": "SECRET_FAILURE_PATCH_INPUT"}),
+            (
+                "edit",
+                {"path": "src/edit.py", "oldString": "old", "newString": "new"},
+            ),
+            ("write", {"path": "src/write.py", "content": "new file contents"}),
+            ("webfetch", {"url": "https://example.test/failure", "format": "markdown"}),
+        )
+        events = []
+        for timestamp, (tool_name, input_value) in enumerate(failed_tools, start=1):
+            output = "\n".join(f"{tool_name}_output_{line}" for line in range(1, 7))
+            if tool_name == "patch":
+                output = f"Success. Updated the following files:\n{output}"
+            events.append(
+                {
+                    "type": "tool_use",
+                    "timestamp": timestamp,
+                    "sessionID": "ses_failed_file_tools",
+                    "part": {
+                        "id": f"call_{tool_name}",
+                        "type": "tool",
+                        "tool": tool_name,
+                        "state": {
+                            "status": "error",
+                            "title": tool_name,
+                            "input": input_value,
+                            "error": "\n".join(f"{tool_name}_error_{line}" for line in range(1, 7)),
+                            "output": output,
+                        },
+                    },
+                }
+            )
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        action_titles = {
+            "patch": "Apply patch",
+            "edit": "Edit src/edit.py",
+            "write": "Write src/write.py",
+            "webfetch": "Fetch web content",
+        }
+        for tool_name, _ in failed_tools:
+            block = next(block for block in visible.split("\n\n") if f"({tool_name})" in block)
+            self.assertIn(f"✗ {action_titles[tool_name]} ({tool_name})", block)
+            self.assertNotIn(f"✓ {action_titles[tool_name]}", block)
+            for line in range(1, 7):
+                self.assertIn(f"{tool_name}_error_{line}", block)
+                self.assertIn(f"{tool_name}_output_{line}", block)
+            self.assertNotIn("additional line(s) omitted", block)
+        self.assertIn("Success. Updated the following files:", visible)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+
     def test_opencode_successful_file_reads_summarize_target_without_displaying_contents(
         self,
     ) -> None:

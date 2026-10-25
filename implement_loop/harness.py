@@ -367,6 +367,14 @@ class _OpenCodeRenderer:
             self._render_search(title, tool_name, input_value, metadata)
             return
 
+        if self._is_file_modification_tool(tool_name):
+            self._render_file_modification(title, tool_name, input_value, output)
+            return
+
+        if tool_name.casefold() == "webfetch":
+            self._render_webfetch(title, tool_name, input_value, output)
+            return
+
         action_details: list[tuple[str, str]] = []
         if shell_command is not None:
             action_details.append(("│", shell_command))
@@ -389,6 +397,16 @@ class _OpenCodeRenderer:
                 input_value, ("filePath", "file_path", "path", "file", "target")
             )
             return f"Read {target}" if target is not None else "Read file"
+        if normalized_tool == "patch":
+            return "Apply patch"
+        if normalized_tool == "edit":
+            target = self._input_string(input_value, "path")
+            return f"Edit {target}" if target is not None else "Edit file"
+        if normalized_tool == "write":
+            target = self._input_string(input_value, "path")
+            return f"Write {target}" if target is not None else "Write file"
+        if normalized_tool == "webfetch":
+            return "Fetch web content"
         if self._is_search_tool(tool_name):
             return "Search"
         if self._is_delegated_result(tool_name, input_value, metadata):
@@ -428,6 +446,15 @@ class _OpenCodeRenderer:
         summary = self._compact(input_value)
         return summary if len(summary) <= 240 else summary[:237] + "..."
 
+    @staticmethod
+    def _input_string(input_value: Any, key: str) -> str | None:
+        if not isinstance(input_value, dict) or not isinstance(input_value.get(key), str):
+            return None
+        value = " ".join(input_value[key].split())
+        if not value:
+            return None
+        return value if len(value) <= 240 else value[:237] + "..."
+
     def _failure_detail(self, error: Any, output: Any) -> str:
         error_text = self._display_value(error) if error is not None else ""
         if not error_text:
@@ -451,6 +478,71 @@ class _OpenCodeRenderer:
                 ("└", f"... {omitted} additional line(s) omitted"),
             ]
         return [("└", preview)]
+
+    def _render_file_modification(
+        self, title: str, tool_name: str, input_value: Any, output: Any
+    ) -> None:
+        details: list[tuple[str, str]] = []
+        if not self._has_file_modification_input(tool_name, input_value):
+            input_summary = self._file_modification_input_summary(tool_name, input_value)
+            if input_summary is not None:
+                details.append(("│", input_summary))
+        details.extend(self._file_modification_preview(tool_name, output))
+        self._render_action_block(title, tool_name, failed=False, details=details)
+
+    @staticmethod
+    def _is_file_modification_tool(tool_name: str) -> bool:
+        return tool_name.casefold() in {"patch", "edit", "write"}
+
+    @staticmethod
+    def _has_file_modification_input(tool_name: str, input_value: Any) -> bool:
+        if not isinstance(input_value, dict):
+            return False
+        fields = {
+            "patch": ("patchText",),
+            "edit": ("path", "oldString", "newString"),
+            "write": ("path", "content"),
+        }.get(tool_name.casefold())
+        if fields is None or not all(isinstance(input_value.get(key), str) for key in fields):
+            return False
+        return (
+            tool_name.casefold() != "edit"
+            or "replaceAll" not in input_value
+            or isinstance(input_value["replaceAll"], bool)
+        )
+
+    def _file_modification_input_summary(self, tool_name: str, input_value: Any) -> str | None:
+        if not isinstance(input_value, dict):
+            return None
+        normalized_tool = tool_name.casefold()
+        safe_input: dict[str, Any] = {}
+        path = input_value.get("path")
+        if normalized_tool in {"edit", "write"} and isinstance(path, str):
+            safe_input["path"] = path
+        replace_all = input_value.get("replaceAll")
+        if normalized_tool == "edit" and isinstance(replace_all, bool):
+            safe_input["replaceAll"] = replace_all
+        return self._input_summary(safe_input) if safe_input else None
+
+    def _file_modification_preview(self, tool_name: str, output: Any) -> list[tuple[str, str]]:
+        if tool_name.casefold() == "patch" and isinstance(output, str):
+            lines = output.splitlines()
+            if lines and lines[0] == "Success. Updated the following files:":
+                output = "\n".join(lines[1:])
+        return self._success_preview(output)
+
+    def _render_webfetch(self, title: str, tool_name: str, input_value: Any, output: Any) -> None:
+        details: list[tuple[str, str]] = []
+        url = self._webfetch_url(input_value)
+        if url is not None:
+            details.append(("│", url))
+        elif input_value is not None:
+            details.append(("│", self._input_summary(input_value)))
+        details.extend(self._success_preview(output))
+        self._render_action_block(title, tool_name, failed=False, details=details)
+
+    def _webfetch_url(self, input_value: Any) -> str | None:
+        return self._input_string(input_value, "url")
 
     @staticmethod
     def _shell_command(tool_name: str, input_value: Any) -> str | None:
