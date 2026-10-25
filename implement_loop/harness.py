@@ -170,6 +170,24 @@ class ProcessOutcome:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class _FileModificationContract:
+    required_strings: tuple[str, ...]
+    safe_strings: tuple[str, ...]
+    safe_booleans: tuple[str, ...]
+    fallback_title: str
+    title_prefix: str | None = None
+
+
+_FILE_MODIFICATION_CONTRACTS = {
+    "patch": _FileModificationContract(("patchText",), (), (), "Apply patch"),
+    "edit": _FileModificationContract(
+        ("path", "oldString", "newString"), ("path",), ("replaceAll",), "Edit file", "Edit"
+    ),
+    "write": _FileModificationContract(("path", "content"), ("path",), (), "Write file", "Write"),
+}
+
+
 def _timestamp() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -397,14 +415,12 @@ class _OpenCodeRenderer:
                 input_value, ("filePath", "file_path", "path", "file", "target")
             )
             return f"Read {target}" if target is not None else "Read file"
-        if normalized_tool == "patch":
-            return "Apply patch"
-        if normalized_tool == "edit":
+        modification = _FILE_MODIFICATION_CONTRACTS.get(normalized_tool)
+        if modification is not None:
             target = self._input_string(input_value, "path")
-            return f"Edit {target}" if target is not None else "Edit file"
-        if normalized_tool == "write":
-            target = self._input_string(input_value, "path")
-            return f"Write {target}" if target is not None else "Write file"
+            if modification.title_prefix is not None and target is not None:
+                return f"{modification.title_prefix} {target}"
+            return modification.fallback_title
         if normalized_tool == "webfetch":
             return "Fetch web content"
         if self._is_search_tool(tool_name):
@@ -492,36 +508,41 @@ class _OpenCodeRenderer:
 
     @staticmethod
     def _is_file_modification_tool(tool_name: str) -> bool:
-        return tool_name.casefold() in {"patch", "edit", "write"}
+        return tool_name.casefold() in _FILE_MODIFICATION_CONTRACTS
 
     @staticmethod
     def _has_file_modification_input(tool_name: str, input_value: Any) -> bool:
         if not isinstance(input_value, dict):
             return False
-        fields = {
-            "patch": ("patchText",),
-            "edit": ("path", "oldString", "newString"),
-            "write": ("path", "content"),
-        }.get(tool_name.casefold())
-        if fields is None or not all(isinstance(input_value.get(key), str) for key in fields):
+        contract = _FILE_MODIFICATION_CONTRACTS.get(tool_name.casefold())
+        if contract is None or not all(
+            isinstance(input_value.get(key), str) for key in contract.required_strings
+        ):
             return False
-        return (
-            tool_name.casefold() != "edit"
-            or "replaceAll" not in input_value
-            or isinstance(input_value["replaceAll"], bool)
+        return all(
+            key not in input_value or isinstance(input_value[key], bool)
+            for key in contract.safe_booleans
         )
 
     def _file_modification_input_summary(self, tool_name: str, input_value: Any) -> str | None:
-        if not isinstance(input_value, dict):
+        contract = _FILE_MODIFICATION_CONTRACTS.get(tool_name.casefold())
+        if contract is None or not isinstance(input_value, dict):
             return None
-        normalized_tool = tool_name.casefold()
         safe_input: dict[str, Any] = {}
-        path = input_value.get("path")
-        if normalized_tool in {"edit", "write"} and isinstance(path, str):
-            safe_input["path"] = path
-        replace_all = input_value.get("replaceAll")
-        if normalized_tool == "edit" and isinstance(replace_all, bool):
-            safe_input["replaceAll"] = replace_all
+        safe_input.update(
+            {
+                key: input_value[key]
+                for key in contract.safe_strings
+                if isinstance(input_value.get(key), str)
+            }
+        )
+        safe_input.update(
+            {
+                key: input_value[key]
+                for key in contract.safe_booleans
+                if isinstance(input_value.get(key), bool)
+            }
+        )
         return self._input_summary(safe_input) if safe_input else None
 
     def _file_modification_preview(self, tool_name: str, output: Any) -> list[tuple[str, str]]:
@@ -533,16 +554,13 @@ class _OpenCodeRenderer:
 
     def _render_webfetch(self, title: str, tool_name: str, input_value: Any, output: Any) -> None:
         details: list[tuple[str, str]] = []
-        url = self._webfetch_url(input_value)
+        url = self._input_string(input_value, "url")
         if url is not None:
             details.append(("│", url))
         elif input_value is not None:
             details.append(("│", self._input_summary(input_value)))
         details.extend(self._success_preview(output))
         self._render_action_block(title, tool_name, failed=False, details=details)
-
-    def _webfetch_url(self, input_value: Any) -> str | None:
-        return self._input_string(input_value, "url")
 
     @staticmethod
     def _shell_command(tool_name: str, input_value: Any) -> str | None:

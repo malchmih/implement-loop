@@ -735,7 +735,7 @@ class HarnessTests(LoopTestCase):
             (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
         )
 
-    def test_opencode_file_and_webfetch_failures_keep_full_error_and_output(self) -> None:
+    def test_opencode_file_and_webfetch_failures_keep_full_error_details(self) -> None:
         failed_tools = (
             ("patch", {"patchText": "SECRET_FAILURE_PATCH_INPUT"}),
             (
@@ -747,24 +747,28 @@ class HarnessTests(LoopTestCase):
         )
         events = []
         for timestamp, (tool_name, input_value) in enumerate(failed_tools, start=1):
-            output = "\n".join(f"{tool_name}_output_{line}" for line in range(1, 7))
-            if tool_name == "patch":
-                output = f"Success. Updated the following files:\n{output}"
             events.append(
                 {
                     "type": "tool_use",
                     "timestamp": timestamp,
                     "sessionID": "ses_failed_file_tools",
                     "part": {
+                        "partID": f"prt_{tool_name}",
+                        "sessionID": "ses_failed_file_tools",
+                        "messageID": "msg_failed_file_tools",
                         "id": f"call_{tool_name}",
                         "type": "tool",
                         "tool": tool_name,
                         "state": {
                             "status": "error",
-                            "title": tool_name,
                             "input": input_value,
                             "error": "\n".join(f"{tool_name}_error_{line}" for line in range(1, 7)),
-                            "output": output,
+                            "metadata": {
+                                "providerCall": {"executed": True},
+                                "providerResult": {"executed": True},
+                                "rawInput": json.dumps(input_value),
+                            },
+                            "time": {"start": timestamp, "end": timestamp + 1},
                         },
                     },
                 }
@@ -784,9 +788,42 @@ class HarnessTests(LoopTestCase):
             self.assertNotIn(f"✓ {action_titles[tool_name]}", block)
             for line in range(1, 7):
                 self.assertIn(f"{tool_name}_error_{line}", block)
-                self.assertIn(f"{tool_name}_output_{line}", block)
             self.assertNotIn("additional line(s) omitted", block)
-        self.assertIn("Success. Updated the following files:", visible)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+
+    def test_opencode_failed_patch_keeps_any_available_output_unfiltered(self) -> None:
+        # OpenCode 2.1.4 failures carry error details; retain output too if an
+        # adapter includes it in a failed tool state.
+        output = "Success. Updated the following files:\n" + "\n".join(
+            f"partial-result-{line}" for line in range(1, 7)
+        )
+        event = {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_failed_patch_output",
+            "part": {
+                "type": "tool",
+                "tool": "patch",
+                "state": {
+                    "status": "error",
+                    "input": {"patchText": "SECRET_FAILED_PATCH_INPUT"},
+                    "error": "Patch failed after a partial application.",
+                    "output": output,
+                },
+            },
+        }
+
+        raw_output, visible, runs = self._run_opencode_events([event])
+
+        block = next(block for block in visible.split("\n\n") if "(patch)" in block)
+        self.assertIn("✗ Apply patch (patch)", block)
+        self.assertIn("Patch failed after a partial application.", block)
+        self.assertIn("Success. Updated the following files:", block)
+        for line in range(1, 7):
+            self.assertIn(f"partial-result-{line}", block)
+        self.assertNotIn("additional line(s) omitted", block)
         self.assertEqual(
             (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
         )
