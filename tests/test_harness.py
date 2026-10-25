@@ -105,6 +105,20 @@ class HarnessTests(LoopTestCase):
                     "part": {"type": "step-start"},
                 }
             ),
+            json.dumps(
+                {
+                    "type": "step_start",
+                    "timestamp": 1,
+                    "sessionID": "ses",
+                    "part": {
+                        "id": "prt_step",
+                        "sessionID": "ses",
+                        "messageID": "msg_step",
+                        "type": "step-start",
+                        "snapshot": "not-an-object",
+                    },
+                }
+            ),
             '{"type":"step_finish","part":{"type":"unexpected"}}',
             json.dumps(
                 {
@@ -112,6 +126,20 @@ class HarnessTests(LoopTestCase):
                     "timestamp": 1,
                     "sessionID": "ses",
                     "part": {"type": "step-finish"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "step_finish",
+                    "timestamp": 1,
+                    "sessionID": "ses",
+                    "part": {
+                        "id": "prt_step",
+                        "sessionID": "ses",
+                        "messageID": "msg_step",
+                        "type": "step-finish",
+                        "reason": None,
+                    },
                 }
             ),
             json.dumps(
@@ -123,6 +151,21 @@ class HarnessTests(LoopTestCase):
                     "timestamp": 1,
                     "sessionID": "ses",
                     "part": {"type": "reasoning", "text": "secret reasoning"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "reasoning",
+                    "timestamp": 1,
+                    "sessionID": "ses",
+                    "part": {
+                        "id": "prt_reasoning",
+                        "sessionID": "ses",
+                        "messageID": "msg_reasoning",
+                        "type": "reasoning",
+                        "text": "secret reasoning",
+                        "time": {},
+                    },
                 }
             ),
             '{"type":"reasoning"}',
@@ -143,9 +186,9 @@ class HarnessTests(LoopTestCase):
         self.assertIn(b"Tool result", result.stdout)
         self.assertIn(b"tool: unknown tool", result.stdout)
         self.assertIn(b"(no output)", result.stdout)
-        self.assertEqual(result.stdout.count(b"OpenCode step_start event"), 2)
-        self.assertEqual(result.stdout.count(b"OpenCode step_finish event"), 2)
-        self.assertEqual(result.stdout.count(b"OpenCode reasoning event"), 3)
+        self.assertEqual(result.stdout.count(b"OpenCode step_start event"), 3)
+        self.assertEqual(result.stdout.count(b"OpenCode step_finish event"), 3)
+        self.assertEqual(result.stdout.count(b"OpenCode reasoning event"), 4)
         self.assertNotIn(b"secret reasoning", result.stdout)
         self.assertIn(b"before?after", result.stdout)
         self.assertNotIn(b"Traceback", result.stdout + result.stderr)
@@ -285,10 +328,25 @@ class HarnessTests(LoopTestCase):
                 "time": {"start": 0, "end": 0},
             },
         }
+        finish_event = {
+            "type": "step_finish",
+            "timestamp": 3,
+            "sessionID": "ses_split",
+            "part": {
+                "id": "prt_finish",
+                "sessionID": "ses_split",
+                "messageID": "msg_split",
+                "type": "step-finish",
+                "reason": "stop",
+                "snapshot": {},
+                "cost": 0,
+                "tokens": {},
+            },
+        }
 
         def encode_stream(text: str) -> bytes:
             large_event["part"]["text"] = text
-            records = [step_event, reasoning_event, first_event, large_event]
+            records = [step_event, reasoning_event, finish_event, first_event, large_event]
             lines = [
                 json.dumps(event, ensure_ascii=False, separators=(",", ":")) for event in records
             ]
@@ -372,6 +430,7 @@ class HarnessTests(LoopTestCase):
             self.assertIn("雪".encode(), visible)
             self.assertNotIn(b"hidden reasoning", visible)
             self.assertNotIn(b"OpenCode step_start event", visible)
+            self.assertNotIn(b"OpenCode step_finish event", visible)
             self.assertIn(b"Final unterminated event", visible)
             self.assertIn(b"unterminated result rendered", visible)
             self.assertEqual((attempts[0] / "agent.log").read_bytes(), raw_bytes)

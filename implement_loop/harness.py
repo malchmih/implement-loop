@@ -228,7 +228,9 @@ class _OpenCodeRenderer:
             part = payload.get("part")
             expected_part_type = "step-start" if event_type == "step_start" else "step-finish"
             has_terminal_detail = isinstance(part, dict) and (
-                "snapshot" in part if event_type == "step_start" else "reason" in part
+                isinstance(part.get("snapshot"), dict)
+                if event_type == "step_start"
+                else isinstance(part.get("reason"), str)
             )
             if (
                 self._has_event_envelope(record)
@@ -241,12 +243,15 @@ class _OpenCodeRenderer:
             return
         if event_type == "reasoning":
             part = payload.get("part")
+            timing = part.get("time") if isinstance(part, dict) else None
             if (
                 self._has_event_envelope(record)
                 and isinstance(part, dict)
                 and self._has_part_identity(part, "reasoning")
                 and isinstance(part.get("text"), str)
-                and isinstance(part.get("time"), dict)
+                and isinstance(timing, dict)
+                and self._is_timestamp(timing.get("start"))
+                and self._is_timestamp(timing.get("end"))
             ):
                 return
             self._render_fallback("OpenCode reasoning event", "Reasoning content is not displayed.")
@@ -389,13 +394,15 @@ class _OpenCodeRenderer:
 
     @staticmethod
     def _has_event_envelope(record: dict[str, Any]) -> bool:
-        timestamp = record.get("timestamp")
         return (
-            isinstance(timestamp, (int, float))
-            and not isinstance(timestamp, bool)
+            _OpenCodeRenderer._is_timestamp(record.get("timestamp"))
             and isinstance(record.get("sessionID"), str)
             and bool(record["sessionID"])
         )
+
+    @staticmethod
+    def _is_timestamp(value: Any) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
 
     @staticmethod
     def _has_part_identity(part: dict[str, Any], expected_type: str) -> bool:
