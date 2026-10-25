@@ -311,6 +311,14 @@ class HarnessTests(LoopTestCase):
         self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
         self.assertIn(b"seven-6", log.read_bytes())
 
+    def _run_opencode_events(self, events: list[dict[str, object]]) -> tuple[str, str, list[Path]]:
+        raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
+        self.state["opencode_raw_output"] = raw_output
+        self.save_state()
+        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        return raw_output, result.stdout.decode("utf-8"), runs
+
     def test_opencode_shell_success_shows_command_and_compact_output(self) -> None:
         outputs = (
             ("Empty result", "printf ''", ""),
@@ -344,14 +352,7 @@ class HarnessTests(LoopTestCase):
             }
             for index, (title, command, output) in enumerate(outputs, start=1)
         ]
-        raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
-        self.state["opencode_raw_output"] = raw_output
-        self.save_state()
-
-        result, runs = self.run_loop("--max-iterations", "1", harness=None)
-
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        visible = result.stdout.decode("utf-8")
+        raw_output, visible, runs = self._run_opencode_events(events)
         for title, command, _ in outputs:
             self.assertIn(f"✓ {title}", visible)
             self.assertIn("tool: shell", visible)
@@ -412,14 +413,7 @@ class HarnessTests(LoopTestCase):
                 },
             },
         ]
-        raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
-        self.state["opencode_raw_output"] = raw_output
-        self.save_state()
-
-        result, runs = self.run_loop("--max-iterations", "1", harness=None)
-
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        visible = result.stdout.decode("utf-8")
+        raw_output, visible, runs = self._run_opencode_events(events)
         self.assertIn("✗ Failed shell command", visible)
         self.assertIn("tool: shell", visible)
         self.assertIn("command:\n    git status --short", visible)
