@@ -311,6 +311,129 @@ class HarnessTests(LoopTestCase):
         self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
         self.assertIn(b"seven-6", log.read_bytes())
 
+    def test_opencode_shell_success_shows_command_and_compact_output(self) -> None:
+        outputs = (
+            ("Empty result", "printf ''", ""),
+            ("Short result", "printf short", "short-1\nshort-2\nshort-3"),
+            (
+                "Five-line result",
+                "printf five",
+                "five-1\nfive-2\nfive-3\nfive-4\nfive-5",
+            ),
+            (
+                "Long result",
+                "printf long",
+                "long-1\nlong-2\nlong-3\nlong-4\nlong-5\nlong-6\nlong-7",
+            ),
+        )
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": index,
+                "sessionID": "ses_shell",
+                "part": {
+                    "type": "tool",
+                    "tool": "shell",
+                    "state": {
+                        "status": "completed",
+                        "title": title,
+                        "input": {"command": command},
+                        "output": output,
+                    },
+                },
+            }
+            for index, (title, command, output) in enumerate(outputs, start=1)
+        ]
+        raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
+        self.state["opencode_raw_output"] = raw_output
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        visible = result.stdout.decode("utf-8")
+        for title, command, _ in outputs:
+            self.assertIn(f"✓ {title}", visible)
+            self.assertIn("tool: shell", visible)
+            self.assertIn(f"command:\n    {command}", visible)
+        self.assertIn("(no output)", visible)
+        for line in ("short-1", "short-2", "short-3", "five-1", "five-5"):
+            self.assertIn(line, visible)
+        for line in ("long-1", "long-5"):
+            self.assertIn(line, visible)
+        self.assertNotIn("long-6", visible)
+        self.assertNotIn("long-7", visible)
+        self.assertEqual(visible.count("additional line(s) omitted"), 1)
+        self.assertIn("... 2 additional line(s) omitted", visible)
+        self.assertNotIn('"command":', visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+        self.assertIn(b"long-6", log.read_bytes())
+
+    def test_opencode_shell_failures_show_full_details_and_generic_fallbacks(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_shell_failure",
+                "part": {
+                    "type": "tool",
+                    "tool": "shell",
+                    "state": {
+                        "status": "error",
+                        "title": "Failed shell command",
+                        "input": {"command": "git status --short"},
+                        "error": "failure-1\nfailure-2\nfailure-3\nfailure-4\nfailure-5\nfailure-6",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_shell_failure",
+                "part": {
+                    "type": "tool",
+                    "tool": "shell",
+                    "state": {
+                        "status": "error",
+                        "input": {"workdir": "/workspace"},
+                        "error": "No command field is available.",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_shell_failure",
+                "part": {
+                    "type": "tool",
+                    "tool": "shell",
+                    "state": {"status": "error", "error": "No input details are available."},
+                },
+            },
+        ]
+        raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
+        self.state["opencode_raw_output"] = raw_output
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        visible = result.stdout.decode("utf-8")
+        self.assertIn("✗ Failed shell command", visible)
+        self.assertIn("tool: shell", visible)
+        self.assertIn("command:\n    git status --short", visible)
+        for line in range(1, 7):
+            self.assertIn(f"failure-{line}", visible)
+        self.assertIn('input: {"workdir":"/workspace"}', visible)
+        self.assertIn("No command field is available.", visible)
+        self.assertIn("Tool result", visible)
+        self.assertIn("No input details are available.", visible)
+        self.assertNotIn("command:\n", visible[visible.index("No command field is available.") :])
+        self.assertNotIn("additional line(s) omitted", visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+
     def test_opencode_failed_tools_and_run_errors_show_available_details(self) -> None:
         events = [
             {

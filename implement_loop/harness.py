@@ -332,7 +332,11 @@ class _OpenCodeRenderer:
         marker_color = "31" if failed else "32"
         lines = [f"{self._style(marker, marker_color)} {self._style(title, '1')}"]
         lines.append(f"  {self._style(f'tool: {tool_name}', '2')}")
-        if input_value is not None:
+        shell_command = self._shell_command(tool_name, input_value)
+        if shell_command is not None:
+            lines.append("  command:")
+            lines.extend(self._indented(shell_command, prefix="    "))
+        elif input_value is not None:
             input_text = self._compact(input_value)
             if len(input_text) > 240:
                 input_text = input_text[:237] + "..."
@@ -352,18 +356,27 @@ class _OpenCodeRenderer:
             return
 
         if output is None or output == "":
-            lines.append("  (no output)")
+            lines.append("  output: (no output)" if shell_command is not None else "  (no output)")
             self._render_block(lines)
             return
         output_lines = self._display_value(output).splitlines()
         if not output_lines:
-            lines.append("  (no output)")
+            lines.append("  output: (no output)" if shell_command is not None else "  (no output)")
         else:
+            if shell_command is not None:
+                lines.append("  output:")
             lines.extend(f"    {line}" for line in output_lines[:5])
             omitted = len(output_lines) - 5
             if omitted > 0:
                 lines.append(f"    ... {omitted} additional line(s) omitted")
         self._render_block(lines)
+
+    @staticmethod
+    def _shell_command(tool_name: str, input_value: Any) -> str | None:
+        if tool_name != "shell" or not isinstance(input_value, dict):
+            return None
+        command = input_value.get("command")
+        return command if isinstance(command, str) else None
 
     def _render_error(self, title: str, error: Any) -> None:
         lines = [f"{self._style('✗', '31')} {self._style(title, '1')}"]

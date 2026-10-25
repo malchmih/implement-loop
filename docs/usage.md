@@ -207,10 +207,13 @@ documentation before using it. OpenCode V1 is not supported.
   results as separate scrolling blocks. Well-formed step-start and step-finish
   bookkeeping is omitted, reasoning content is not displayed, and malformed
   records receive visible fallbacks. The renderer does not promise text deltas,
-  live tool starts, or tool progress. Successful generic tool output is previewed
-  to five lines with an omitted-line count; failures retain their available
-  details. This first slice uses a generic tool presentation rather than
-  specialized shell or exploration summaries.
+  live tool starts, or tool progress. The supported shell tool (`shell`) shows
+  its available command as a detail beneath the tool title. Successful shell
+  output is previewed to five lines, with an omitted-line count when truncated;
+  empty output is identified explicitly. Failed shell results show their
+  available command or input and full error details, even when no output field is
+  present. Other successful tools retain the generic five-line preview. No
+  semantic command outcome is inferred from a successful tool state.
 - OpenCode's private per-attempt `agent.log` retains the complete emitted JSON
   event stream before display filtering or truncation. It is raw evidence, not a
   copy of the rendered transcript. Copilot keeps its existing native-text
@@ -286,13 +289,17 @@ not claim a push, merge, or PR. Already-committed work can instead be
 
 OpenCode's `--format json` stream is parsed incrementally at the existing harness
 output boundary. Completed assistant text and tool results appear promptly in
-separate blocks, before the process exits. Successful generic tool output is
-limited to five preview lines and reports how many additional lines were omitted;
-available failure details are not preview-limited. Unknown or malformed records
-and merged-stream diagnostics remain visible through readable fallbacks. The
-renderer does not infer completion from tool markers, step-finish events, or the
-absence of an error event. Process status and the separate completion-result file
-remain authoritative for Attempt completion.
+separate blocks, before the process exits. Shell blocks show the actual command
+from the available tool input separately from the result. Successful shell output
+and other generic successful tool output are limited to five preview lines and
+report how many additional lines were omitted; empty shell output is marked
+`(no output)`. Available failure details are not preview-limited. To inspect
+omitted output or the complete command/result events, read the private raw
+`agent.log` in the Attempt records. Unknown or malformed records and merged-stream
+diagnostics remain visible through readable fallbacks. The renderer does not infer
+completion from tool markers, step-finish events, or the absence of an error
+event. Process status and the separate completion-result file remain authoritative
+for Attempt completion.
 
 OpenCode's private per-attempt `agent.log` preserves every emitted byte before
 rendering, filtering, or truncation, so it contains raw JSON events rather than
@@ -341,9 +348,10 @@ After a failure:
 1. Start with the original error and the printed record pointers. Inspect the
    run's `agent.log`, `process.json`, context snapshots, prompt, result evidence,
    and `checks.json` when present. OpenCode's `agent.log` is the complete raw
-   JSON event stream, including details omitted from the terminal preview;
-   Copilot's log remains native text. Use the current ticket's record directory
-   when printed; its presence does not prove that the harness ran.
+   JSON event stream, including shell output omitted after the five-line preview
+   and other details not shown in the terminal transcript; Copilot's log remains
+   native text. Use the current ticket's record directory when printed; its
+   presence does not prove that the harness ran.
 2. Inspect the current branch, commit history, and working tree; resolve any
    partial work deliberately.
 3. Before rerunning, verify that any potentially running harness, delegated
