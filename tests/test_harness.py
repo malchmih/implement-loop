@@ -482,6 +482,7 @@ class HarnessTests(LoopTestCase):
         self.assertIn("matches: 2", visible)
         self.assertIn("src/**/*.py", visible)
         self.assertIn("workspace", visible)
+        self.assertIn("count: not provided", visible)
         self.assertNotIn("Found 17 matches", visible)
         self.assertNotIn("results: 17", visible)
         for match in (

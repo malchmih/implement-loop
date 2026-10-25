@@ -211,9 +211,11 @@ documentation before using it. OpenCode V1 is not supported.
   target and reliable, explicit counts when emitted; file contents are omitted.
   Searches such as `grep` and `glob` show available query and scope details plus
   explicit metadata counts when present, rather than individual matches. Counts
-  are not inferred from output text. Parent-level delegated results are identified
-  from a delegation tool identity or explicit emitted agent/delegation data, and
-  show available task/agent identity with a five-line returned-result preview.
+  are not inferred from output text; when supported count metadata is absent, the
+  transcript says the count was not provided. Parent-level delegated results are
+  identified from a delegation tool identity or explicit emitted agent/delegation
+  data, and show available task/agent identity with a five-line returned-result
+  preview.
   If delegation is not identifiable, the tool uses the ordinary generic
   presentation. The renderer does not subscribe to child sessions or display
   delegated agents' internal tools, starts, progress, or nested transcripts. The
@@ -304,10 +306,11 @@ and other generic successful tool output are limited to five preview lines and
 report how many additional lines were omitted; empty shell output is marked
 `(no output)`. Successful reads show target details and only reliable emitted
 counts, not file contents. Search results show available query/scope details and
-explicit metadata counts, not the matches themselves. Identifiable
-parent-level delegation shows available task/agent identity and the same bounded
-five-line result preview; otherwise the generic tool fallback is used. There are
-no delegated-agent start/progress blocks or child-session transcripts. Available
+explicit metadata counts, not the matches themselves; missing count metadata is
+identified without deriving a number from output text. Identifiable parent-level
+delegation shows available task/agent identity and the same bounded five-line
+result preview; otherwise the generic tool fallback is used. There are no
+delegated-agent start/progress blocks or child-session transcripts. Available
 failure details are not preview-limited. To inspect omitted output or the complete
 command/result events, read the private raw `agent.log` in the Attempt records.
 Unknown or malformed records and merged-stream diagnostics remain visible through

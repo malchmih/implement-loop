@@ -442,6 +442,12 @@ class _OpenCodeRenderer:
         return None
 
     @staticmethod
+    def _count_value(value: Any) -> int | None:
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        return None
+
+    @staticmethod
     def _read_count(metadata: Any) -> tuple[str, int] | None:
         layers = _OpenCodeRenderer._metadata_layers(metadata)
         if any(
@@ -456,20 +462,20 @@ class _OpenCodeRenderer:
             display = layer.get("display")
             if isinstance(display, dict):
                 if display.get("type") == "file":
-                    count = display.get("totalLines")
-                    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                    count = _OpenCodeRenderer._count_value(display.get("totalLines"))
+                    if count is not None:
                         return "lines", count
                 if display.get("type") == "directory":
-                    count = display.get("totalEntries")
-                    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                    count = _OpenCodeRenderer._count_value(display.get("totalEntries"))
+                    if count is not None:
                         return "entries", count
             for label, keys in (
                 ("lines", ("totalLines", "lineCount")),
                 ("entries", ("totalEntries", "entryCount")),
             ):
                 for key in keys:
-                    count = layer.get(key)
-                    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                    count = _OpenCodeRenderer._count_value(layer.get(key))
+                    if count is not None:
                         return label, count
         return None
 
@@ -604,18 +610,20 @@ class _OpenCodeRenderer:
         if count is not None:
             label, value = count
             lines.append(f"  {label}: {value}")
+        else:
+            lines.append("  count: not provided")
         self._render_block(lines)
 
     @staticmethod
     def _search_count(metadata: Any) -> tuple[str, int] | None:
         for layer in _OpenCodeRenderer._metadata_layers(metadata):
             for key in ("matches", "matchCount", "totalMatches"):
-                count = layer.get(key)
-                if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                count = _OpenCodeRenderer._count_value(layer.get(key))
+                if count is not None:
                     return "matches", count
             for key in ("count", "resultCount", "totalResults", "numResults"):
-                count = layer.get(key)
-                if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                count = _OpenCodeRenderer._count_value(layer.get(key))
+                if count is not None:
                     return "results", count
         return None
 
