@@ -204,12 +204,13 @@ documentation before using it. OpenCode V1 is not supported.
   permission, or clarification can be handled unattended.
 - OpenCode V2.1.4 JSON output is a newline-delimited stream of event records.
   Implement Loop renders completed assistant text and completed or failed tool
-  results as separate scrolling blocks. It omits step-start, step-finish, and
-  reasoning events, and does not promise text deltas, live tool starts, or tool
-  progress. Successful generic tool output is previewed to five lines with an
-  omitted-line count; failures retain their available details. This first slice
-  uses a generic tool presentation rather than specialized shell or exploration
-  summaries.
+  results as separate scrolling blocks. Well-formed step-start and step-finish
+  bookkeeping is omitted, reasoning content is not displayed, and malformed
+  records receive visible fallbacks. The renderer does not promise text deltas,
+  live tool starts, or tool progress. Successful generic tool output is previewed
+  to five lines with an omitted-line count; failures retain their available
+  details. This first slice uses a generic tool presentation rather than
+  specialized shell or exploration summaries.
 - OpenCode's private per-attempt `agent.log` retains the complete emitted JSON
   event stream before display filtering or truncation. It is raw evidence, not a
   copy of the rendered transcript. Copilot keeps its existing native-text

@@ -102,6 +102,10 @@ class HarnessTests(LoopTestCase):
                 }
             )
             + "\n"
+            + '{"type":"step_start"}\n'
+            + '{"type":"step_finish","part":{"type":"unexpected"}}\n'
+            + '{"type":"reasoning","part":{"type":"reasoning","text":"secret reasoning"}}\n'
+            + '{"type":"reasoning"}\n'
         )
         self.state["opencode_raw_output"] = raw_output
         self.save_state()
@@ -117,6 +121,10 @@ class HarnessTests(LoopTestCase):
         self.assertIn(b"Tool result", result.stdout)
         self.assertIn(b"tool: unknown tool", result.stdout)
         self.assertIn(b"(no output)", result.stdout)
+        self.assertIn(b"OpenCode step_start event", result.stdout)
+        self.assertIn(b"OpenCode step_finish event", result.stdout)
+        self.assertIn(b"OpenCode reasoning event", result.stdout)
+        self.assertNotIn(b"secret reasoning", result.stdout)
         self.assertNotIn(b"Traceback", result.stdout + result.stderr)
         attempt = runs[0] / "attempt-1-ticket-2"
         self.assertEqual((attempt / "agent.log").read_bytes(), raw_output.encode("utf-8"))
@@ -399,7 +407,7 @@ class HarnessTests(LoopTestCase):
         self._assert_live_harness_output("copilot", terminal=True)
 
     def _assert_signal_stops_run_without_alert(
-        self, stop_signal: int, *, platform: str = "darwin"
+        self, stop_signal: int, *, platform: str = "darwin", harness: str = "copilot"
     ) -> None:
         ready_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         ready_listener.bind(("127.0.0.1", 0))
@@ -420,7 +428,7 @@ class HarnessTests(LoopTestCase):
                     "--max-iterations",
                     "1",
                     "--harness",
-                    "copilot",
+                    harness,
                 ],
                 cwd=self.repo,
                 env=env,
@@ -468,7 +476,16 @@ class HarnessTests(LoopTestCase):
             self.assertTrue(attempt_directory.is_dir())
             self.assertFalse((run_directory / "active.pid").exists())
             self.assertFalse(self.repository_lock_path().exists())
-            self.assertEqual(len(self.load_state()["copilot_calls"]), 1)
+            state = self.load_state()
+            self.assertEqual(len(state[f"{harness}_calls"]), 1)
+            other_harness = "opencode" if harness == "copilot" else "copilot"
+            self.assertEqual(state[f"{other_harness}_calls"], [])
+            agent_log = (attempt_directory / "agent.log").read_bytes()
+            if harness == "opencode":
+                self.assertEqual(json.loads(agent_log)["type"], "tool_use")
+                self.assertIn(LIVE_OUTPUT_FRAGMENT, agent_log)
+            else:
+                self.assertEqual(agent_log, LIVE_OUTPUT_FRAGMENT)
             self.assertEqual(self.alert_calls(), [])
         finally:
             if process is not None:
@@ -499,6 +516,12 @@ class HarnessTests(LoopTestCase):
 
     def test_termination_reports_existing_run_and_ticket_records_without_alert(self) -> None:
         self._assert_signal_stops_run_without_alert(signal.SIGTERM)
+
+    def test_opencode_ctrl_c_preserves_interrupt_recovery_without_alert(self) -> None:
+        self._assert_signal_stops_run_without_alert(signal.SIGINT, harness="opencode")
+
+    def test_opencode_termination_preserves_interrupt_recovery_without_alert(self) -> None:
+        self._assert_signal_stops_run_without_alert(signal.SIGTERM, harness="opencode")
 
     def test_linux_ctrl_c_reports_existing_records_without_alert(self) -> None:
         self._assert_signal_stops_run_without_alert(signal.SIGINT, platform="linux")

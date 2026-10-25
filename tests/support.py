@@ -52,6 +52,19 @@ def page_response(items, page_size):
         return pages or [[]]
     return pages[0] if pages else []
 
+def write_opencode_event(event):
+    encoded = json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+    sys.stdout.buffer.write(encoded.encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+def write_opencode_text_event(text, session_id):
+    write_opencode_event({
+        "type": "text",
+        "timestamp": 1,
+        "sessionID": session_id,
+        "part": {"type": "text", "text": text},
+    })
+
 tool_name = Path(sys.argv[0]).name
 if tool_name in ("copilot", "opencode"):
     if tool_name == "opencode":
@@ -214,15 +227,21 @@ if tool_name in ("copilot", "opencode"):
     live_fragment = os.environ.get("IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT")
     if live_fragment is not None:
         if tool_name == "opencode":
-            event = {
-                "type": "text",
+            write_opencode_event({
+                "type": "tool_use",
                 "timestamp": 1,
                 "sessionID": "ses_live_fixture",
-                "part": {"type": "text", "text": live_fragment},
-            }
-            encoded_event = json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
-            sys.stdout.buffer.write(encoded_event.encode("utf-8"))
-            sys.stdout.buffer.flush()
+                "part": {
+                    "type": "tool",
+                    "tool": "live_tool",
+                    "state": {
+                        "status": "completed",
+                        "title": "Live completed tool",
+                        "input": {"fixture": "live"},
+                        "output": live_fragment,
+                    },
+                },
+            })
         else:
             sys.stdout.write(live_fragment)
             sys.stdout.flush()
@@ -237,15 +256,7 @@ if tool_name in ("copilot", "opencode"):
             sys.stdout.flush()
         sys.exit(int(exit_status))
     if tool_name == "opencode":
-        event = {
-            "type": "text",
-            "timestamp": 1,
-            "sessionID": "ses_fixture",
-            "part": {"type": "text", "text": "Agent output\n" + output},
-        }
-        encoded_event = json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
-        sys.stdout.buffer.write(encoded_event.encode("utf-8"))
-        sys.stdout.buffer.flush()
+        write_opencode_text_event("Agent output\n" + output, "ses_fixture")
     else:
         sys.stdout.write("Agent output\n" + output + "\n")
     sys.exit(int(exit_status))
@@ -823,16 +834,27 @@ class LoopTestCase(TemporaryHomeTestCase):
             self.assertTrue((attempt_dir.parent / "active.pid").is_file())
             self.assertIn(LIVE_OUTPUT_FRAGMENT, output)
             if harness == "opencode":
-                self.assertIn(b"Assistant", output)
+                self.assertIn(b"tool: live_tool", output)
                 if terminal and not no_color:
-                    self.assertIn(b"\x1b[1mAssistant", output)
+                    self.assertIn(b"\x1b[32m\xe2\x9c\x93\x1b[0m \x1b[1mLive completed tool", output)
+                    self.assertIn(b"\x1b[1mLive completed tool", output)
                 else:
+                    self.assertIn(b"\xe2\x9c\x93 Live completed tool", output)
                     self.assertNotIn(b"\x1b[", output)
                 expected_event = {
-                    "type": "text",
+                    "type": "tool_use",
                     "timestamp": 1,
                     "sessionID": "ses_live_fixture",
-                    "part": {"type": "text", "text": LIVE_OUTPUT_FRAGMENT.decode("ascii")},
+                    "part": {
+                        "type": "tool",
+                        "tool": "live_tool",
+                        "state": {
+                            "status": "completed",
+                            "title": "Live completed tool",
+                            "input": {"fixture": "live"},
+                            "output": LIVE_OUTPUT_FRAGMENT.decode("ascii"),
+                        },
+                    },
                 }
                 expected_log = (
                     json.dumps(expected_event, ensure_ascii=False, separators=(",", ":")) + "\n"

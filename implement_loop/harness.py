@@ -220,7 +220,22 @@ class _OpenCodeRenderer:
         payload = record.get("data")
         if not isinstance(payload, dict) or not payload:
             payload = record
-        if event_type in {"step_start", "step_finish", "reasoning"}:
+        if event_type in {"step_start", "step_finish"}:
+            part = payload.get("part")
+            expected_part_type = "step-start" if event_type == "step_start" else "step-finish"
+            if isinstance(part, dict) and part.get("type") == expected_part_type:
+                return
+            self._render_fallback(f"OpenCode {event_type} event", self._compact(record))
+            return
+        if event_type == "reasoning":
+            part = payload.get("part")
+            if (
+                isinstance(part, dict)
+                and part.get("type") == "reasoning"
+                and isinstance(part.get("text"), str)
+            ):
+                return
+            self._render_fallback("OpenCode reasoning event", "Reasoning content is not displayed.")
             return
         if event_type == "text":
             part = payload.get("part")
@@ -364,25 +379,14 @@ class _OpenCodeRenderer:
 
     @staticmethod
     def _delegated_agent(input_value: Any, metadata: Any) -> str | None:
-        keys = (
-            "agent",
-            "agent_name",
-            "agentName",
-            "subagent",
-            "subagent_name",
-            "subagentName",
-            "subagent_type",
-            "subagentType",
-        )
         for source in (input_value, metadata):
             if not isinstance(source, dict):
                 continue
-            for key in keys:
-                value = source.get(key)
-                if isinstance(value, dict):
-                    value = value.get("name")
-                if isinstance(value, str) and value.strip():
-                    return " ".join(value.splitlines()).strip()
+            value = source.get("agent")
+            if isinstance(value, dict):
+                value = value.get("name")
+            if isinstance(value, str) and value.strip():
+                return " ".join(value.splitlines()).strip()
         return None
 
 
