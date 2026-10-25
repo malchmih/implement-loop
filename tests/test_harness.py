@@ -102,7 +102,12 @@ class HarnessTests(LoopTestCase):
                     "type": "step_start",
                     "timestamp": 1,
                     "sessionID": "ses",
-                    "part": {"type": "step-start"},
+                    "part": {
+                        "id": "prt_step",
+                        "sessionID": "ses",
+                        "messageID": "msg_step",
+                        "type": "step-start",
+                    },
                 }
             ),
             json.dumps(
@@ -115,7 +120,37 @@ class HarnessTests(LoopTestCase):
                         "sessionID": "ses",
                         "messageID": "msg_step",
                         "type": "step-start",
-                        "snapshot": "not-an-object",
+                        "snapshot": "snapshot token",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "step_start",
+                    "timestamp": 1,
+                    "sessionID": "ses",
+                    "part": {
+                        "id": "prt_step",
+                        "sessionID": "ses",
+                        "messageID": "msg_step",
+                        "type": "step-start",
+                        "snapshot": {"unexpected": "object"},
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "step_start",
+                    "timestamp": 1,
+                    "sessionID": "ses",
+                    "data": {
+                        "part": {
+                            "id": "prt_step",
+                            "sessionID": "ses",
+                            "messageID": "msg_step",
+                            "type": "step-start",
+                            "snapshot": "snapshot token",
+                        }
                     },
                 }
             ),
@@ -139,6 +174,20 @@ class HarnessTests(LoopTestCase):
                         "messageID": "msg_step",
                         "type": "step-finish",
                         "reason": None,
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "step_finish",
+                    "timestamp": 1,
+                    "sessionID": "ses",
+                    "part": {
+                        "id": "prt_step",
+                        "sessionID": "ses",
+                        "messageID": "msg_step",
+                        "type": "step-finish",
+                        "reason": "stop",
                     },
                 }
             ),
@@ -168,6 +217,21 @@ class HarnessTests(LoopTestCase):
                     },
                 }
             ),
+            json.dumps(
+                {
+                    "type": "reasoning",
+                    "timestamp": 1,
+                    "sessionID": "ses",
+                    "part": {
+                        "id": "prt_reasoning",
+                        "sessionID": "ses-other",
+                        "messageID": "msg_reasoning",
+                        "type": "reasoning",
+                        "text": "secret reasoning",
+                        "time": {"start": 1, "end": 2},
+                    },
+                }
+            ),
             '{"type":"reasoning"}',
             json.dumps({"type": "text", "part": {"type": "text", "text": "before\ud800after"}}),
         ]
@@ -187,8 +251,8 @@ class HarnessTests(LoopTestCase):
         self.assertIn(b"tool: unknown tool", result.stdout)
         self.assertIn(b"(no output)", result.stdout)
         self.assertEqual(result.stdout.count(b"OpenCode step_start event"), 3)
-        self.assertEqual(result.stdout.count(b"OpenCode step_finish event"), 3)
-        self.assertEqual(result.stdout.count(b"OpenCode reasoning event"), 4)
+        self.assertEqual(result.stdout.count(b"OpenCode step_finish event"), 4)
+        self.assertEqual(result.stdout.count(b"OpenCode reasoning event"), 5)
         self.assertNotIn(b"secret reasoning", result.stdout)
         self.assertIn(b"before?after", result.stdout)
         self.assertNotIn(b"Traceback", result.stdout + result.stderr)
@@ -312,7 +376,7 @@ class HarnessTests(LoopTestCase):
                 "sessionID": "ses_split",
                 "messageID": "msg_split",
                 "type": "step-start",
-                "snapshot": {},
+                "snapshot": "step snapshot",
             },
         }
         reasoning_event = {
@@ -338,7 +402,7 @@ class HarnessTests(LoopTestCase):
                 "messageID": "msg_split",
                 "type": "step-finish",
                 "reason": "stop",
-                "snapshot": {},
+                "snapshot": "step snapshot",
                 "cost": 0,
                 "tokens": {},
             },

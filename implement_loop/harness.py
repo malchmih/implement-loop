@@ -221,21 +221,25 @@ class _OpenCodeRenderer:
             self._render_fallback("OpenCode output", self._compact(record))
             return
 
-        payload = record.get("data")
-        if not isinstance(payload, dict) or not payload:
-            payload = record
+        payload = record
         if event_type in {"step_start", "step_finish"}:
             part = payload.get("part")
             expected_part_type = "step-start" if event_type == "step_start" else "step-finish"
-            has_terminal_detail = isinstance(part, dict) and (
-                isinstance(part.get("snapshot"), dict)
-                if event_type == "step_start"
-                else isinstance(part.get("reason"), str)
-            )
+            if event_type == "step_start":
+                has_terminal_detail = isinstance(part, dict) and (
+                    "snapshot" not in part or isinstance(part.get("snapshot"), str)
+                )
+            else:
+                has_terminal_detail = isinstance(part, dict) and (
+                    isinstance(part.get("reason"), str)
+                    and self._is_timestamp(part.get("cost"))
+                    and isinstance(part.get("tokens"), dict)
+                    and ("snapshot" not in part or isinstance(part.get("snapshot"), str))
+                )
             if (
                 self._has_event_envelope(record)
                 and isinstance(part, dict)
-                and self._has_part_identity(part, expected_part_type)
+                and self._has_part_identity(part, expected_part_type, record.get("sessionID"))
                 and has_terminal_detail
             ):
                 return
@@ -247,7 +251,7 @@ class _OpenCodeRenderer:
             if (
                 self._has_event_envelope(record)
                 and isinstance(part, dict)
-                and self._has_part_identity(part, "reasoning")
+                and self._has_part_identity(part, "reasoning", record.get("sessionID"))
                 and isinstance(part.get("text"), str)
                 and isinstance(timing, dict)
                 and self._is_timestamp(timing.get("start"))
@@ -405,10 +409,15 @@ class _OpenCodeRenderer:
         return isinstance(value, (int, float)) and not isinstance(value, bool)
 
     @staticmethod
-    def _has_part_identity(part: dict[str, Any], expected_type: str) -> bool:
-        return part.get("type") == expected_type and all(
-            isinstance(part.get(key), str) and bool(part[key])
-            for key in ("id", "sessionID", "messageID")
+    def _has_part_identity(
+        part: dict[str, Any], expected_type: str, expected_session_id: Any
+    ) -> bool:
+        return (
+            part.get("type") == expected_type
+            and part.get("sessionID") == expected_session_id
+            and all(
+                isinstance(part.get(key), str) and bool(part[key]) for key in ("id", "messageID")
+            )
         )
 
 
