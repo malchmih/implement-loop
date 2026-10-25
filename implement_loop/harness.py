@@ -397,20 +397,7 @@ class _OpenCodeRenderer:
             )
             return
 
-        if output is None or output == "":
-            lines.append("  output: (no output)" if shell_command is not None else "  (no output)")
-            self._render_block(lines)
-            return
-        output_lines = self._display_value(output).splitlines()
-        if not output_lines:
-            lines.append("  output: (no output)" if shell_command is not None else "  (no output)")
-        else:
-            if shell_command is not None:
-                lines.append("  output:")
-            lines.extend(f"    {line}" for line in output_lines[:5])
-            omitted = len(output_lines) - 5
-            if omitted > 0:
-                lines.append(f"    ... {omitted} additional line(s) omitted")
+        self._append_success_preview(lines, output, include_output_label=shell_command is not None)
         self._render_block(lines)
 
     @staticmethod
@@ -419,6 +406,28 @@ class _OpenCodeRenderer:
             return None
         command = input_value.get("command")
         return command if isinstance(command, str) else None
+
+    def _append_success_preview(
+        self,
+        lines: list[str],
+        output: Any,
+        *,
+        include_output_label: bool,
+    ) -> None:
+        no_output = "  output: (no output)" if include_output_label else "  (no output)"
+        if output is None or output == "":
+            lines.append(no_output)
+            return
+        output_lines = self._display_value(output).splitlines()
+        if not output_lines:
+            lines.append(no_output)
+            return
+        if include_output_label:
+            lines.append("  output:")
+        lines.extend(f"    {line}" for line in output_lines[:5])
+        omitted = len(output_lines) - 5
+        if omitted > 0:
+            lines.append(f"    ... {omitted} additional line(s) omitted")
 
     @staticmethod
     def _input_value(input_value: Any, keys: tuple[str, ...]) -> str | None:
@@ -558,18 +567,7 @@ class _OpenCodeRenderer:
             if session_id is not None:
                 lines.append(f"  session: {session_id}")
 
-        if output is None or output == "":
-            lines.append("  output: (no output)")
-        else:
-            output_lines = self._display_value(output).splitlines()
-            if not output_lines:
-                lines.append("  output: (no output)")
-            else:
-                lines.append("  output:")
-                lines.extend(f"    {line}" for line in output_lines[:5])
-                omitted = len(output_lines) - 5
-                if omitted > 0:
-                    lines.append(f"    ... {omitted} additional line(s) omitted")
+        self._append_success_preview(lines, output, include_output_label=True)
         self._render_block(lines)
 
     @staticmethod
