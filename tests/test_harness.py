@@ -311,6 +311,338 @@ class HarnessTests(LoopTestCase):
         self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
         self.assertIn(b"seven-6", log.read_bytes())
 
+    def test_opencode_successful_file_reads_summarize_target_without_displaying_contents(
+        self,
+    ) -> None:
+        event = {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_read",
+            "part": {
+                "type": "tool",
+                "tool": "read",
+                "state": {
+                    "status": "completed",
+                    "title": "read",
+                    "input": {"filePath": "src/private.py", "offset": 4, "limit": 3},
+                    "output": "SECRET_FILE_CONTENT\nmore private contents",
+                    "metadata": {
+                        "metadata": {
+                            "display": {
+                                "type": "file",
+                                "totalLines": 120,
+                                "truncated": False,
+                            }
+                        }
+                    },
+                },
+            },
+        }
+
+        direct_metadata_event = {
+            "type": "tool_use",
+            "timestamp": 2,
+            "sessionID": "ses_read",
+            "part": {
+                "type": "tool",
+                "tool": "read",
+                "state": {
+                    "status": "completed",
+                    "title": "read",
+                    "input": {"filePath": "src/summary.py"},
+                    "output": "SECRET_DIRECT_COUNT_CONTENT",
+                    "metadata": {"metadata": {"lineCount": 12, "truncated": False}},
+                },
+            },
+        }
+
+        raw_output, visible, runs = self._run_opencode_events([event, direct_metadata_event])
+
+        self.assertIn("src/private.py", visible)
+        self.assertIn("lines: 120", visible)
+        self.assertIn("src/summary.py", visible)
+        self.assertIn("lines: 12", visible)
+        self.assertNotIn("SECRET_FILE_CONTENT", visible)
+        self.assertNotIn("more private contents", visible)
+        self.assertNotIn("SECRET_DIRECT_COUNT_CONTENT", visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+        self.assertIn(b"SECRET_FILE_CONTENT", log.read_bytes())
+        self.assertIn(b"SECRET_DIRECT_COUNT_CONTENT", log.read_bytes())
+
+    def test_opencode_reads_without_reliable_counts_still_hide_file_contents(self) -> None:
+        event = {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_read_without_metadata",
+            "part": {
+                "type": "tool",
+                "tool": "read",
+                "state": {
+                    "status": "completed",
+                    "title": "read",
+                    "input": {"filePath": "src/no-count.py"},
+                    "output": "SECRET_CONTENT_WITHOUT_METADATA",
+                },
+            },
+        }
+
+        raw_output, visible, runs = self._run_opencode_events([event])
+
+        self.assertIn("src/no-count.py", visible)
+        self.assertNotIn("SECRET_CONTENT_WITHOUT_METADATA", visible)
+        self.assertNotIn("lines:", visible)
+        self.assertIn(b"SECRET_CONTENT_WITHOUT_METADATA", raw_output.encode("utf-8"))
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(),
+            raw_output.encode("utf-8"),
+        )
+
+    def test_opencode_does_not_present_a_truncated_read_count_as_a_total(self) -> None:
+        event = {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_truncated_read",
+            "part": {
+                "type": "tool",
+                "tool": "read",
+                "state": {
+                    "status": "completed",
+                    "title": "read",
+                    "input": {"filePath": "src/large.py"},
+                    "output": "SECRET_TRUNCATED_READ_CONTENT",
+                    "metadata": {
+                        "metadata": {
+                            "display": {
+                                "type": "file",
+                                "totalLines": 999,
+                                "truncated": True,
+                            }
+                        }
+                    },
+                },
+            },
+        }
+
+        raw_output, visible, runs = self._run_opencode_events([event])
+
+        self.assertIn("src/large.py", visible)
+        self.assertNotIn("lines: 999", visible)
+        self.assertNotIn("SECRET_TRUNCATED_READ_CONTENT", visible)
+        self.assertIn(b"SECRET_TRUNCATED_READ_CONTENT", raw_output.encode("utf-8"))
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(),
+            raw_output.encode("utf-8"),
+        )
+
+    def test_opencode_successful_searches_show_query_scope_and_only_emitted_counts(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_search",
+                "part": {
+                    "type": "tool",
+                    "tool": "grep",
+                    "state": {
+                        "status": "completed",
+                        "title": "grep",
+                        "input": {
+                            "pattern": "NEEDLE_QUERY",
+                            "path": "lib/",
+                            "include": "*.py",
+                            "limit": 10,
+                        },
+                        "output": "Found 2 matches\nSECRET_MATCH_ONE\nSECRET_MATCH_TWO",
+                        "metadata": {"metadata": {"matches": 2}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_search",
+                "part": {
+                    "type": "tool",
+                    "tool": "glob",
+                    "state": {
+                        "status": "completed",
+                        "title": "glob",
+                        "input": {"pattern": "src/**/*.py", "path": "workspace"},
+                        "output": "Found 17 matches\nSECRET_GLOB_MATCH_ONE\nSECRET_GLOB_MATCH_TWO",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn("NEEDLE_QUERY", visible)
+        self.assertIn("lib/", visible)
+        self.assertIn("matches: 2", visible)
+        self.assertIn("src/**/*.py", visible)
+        self.assertIn("workspace", visible)
+        self.assertNotIn("Found 17 matches", visible)
+        self.assertNotIn("results: 17", visible)
+        for match in (
+            "SECRET_MATCH_ONE",
+            "SECRET_MATCH_TWO",
+            "SECRET_GLOB_MATCH_ONE",
+            "SECRET_GLOB_MATCH_TWO",
+        ):
+            self.assertNotIn(match, visible)
+            self.assertIn(match.encode("utf-8"), raw_output.encode("utf-8"))
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+
+    def test_opencode_identifies_parent_level_delegation_and_bounds_returned_results(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "task",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect parser behavior",
+                        "input": {
+                            "description": "Inspect parser behavior",
+                            "subagent_type": "explore",
+                            "task_id": "ses_child_123",
+                            "prompt": "A private task prompt that must not be displayed",
+                        },
+                        "output": "finding-1\nfinding-2\nfinding-3\nfinding-4\n"
+                        "finding-5\nfinding-6\nfinding-7",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "invoke_worker",
+                    "state": {
+                        "status": "completed",
+                        "title": "Review the failure path",
+                        "input": {"description": "Review the failure path"},
+                        "output": "A second parent-level delegated result.",
+                        "metadata": {
+                            "metadata": {
+                                "agent_type": "reviewer",
+                                "sessionId": "ses_review_child",
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "workflow_runner",
+                    "state": {
+                        "status": "completed",
+                        "title": "Run a task",
+                        "input": {"description": "Run a task", "task_id": "not-enough-evidence"},
+                        "output": "Ordinary generic output.",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn("Delegated: Inspect parser behavior", visible)
+        self.assertIn("agent: explore", visible)
+        self.assertIn("task id: ses_child_123", visible)
+        self.assertIn("finding-1", visible)
+        self.assertIn("finding-5", visible)
+        self.assertNotIn("finding-6", visible)
+        self.assertNotIn("finding-7", visible)
+        self.assertIn("... 2 additional line(s) omitted", visible)
+        self.assertIn("Delegated: Review the failure path", visible)
+        self.assertIn("agent: reviewer", visible)
+        self.assertIn("session: ses_review_child", visible)
+        self.assertIn("A second parent-level delegated result.", visible)
+        self.assertIn("✓ Run a task", visible)
+        self.assertIn("tool: workflow_runner", visible)
+        self.assertNotIn("Delegated: Run a task", visible)
+        self.assertNotIn("A private task prompt", visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+        self.assertIn(b"finding-7", log.read_bytes())
+        self.assertIn(b"A private task prompt", log.read_bytes())
+
+    def test_opencode_exploration_and_delegation_failures_keep_full_error_details(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_failed_exploration",
+                "part": {
+                    "type": "tool",
+                    "tool": "read",
+                    "state": {
+                        "status": "error",
+                        "title": "Read failed",
+                        "input": {"filePath": "src/unavailable.py"},
+                        "error": "READ_ERROR_DETAIL",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_failed_exploration",
+                "part": {
+                    "type": "tool",
+                    "tool": "grep",
+                    "state": {
+                        "status": "error",
+                        "title": "Search failed",
+                        "input": {"pattern": "private-pattern", "path": "src"},
+                        "error": "SEARCH_ERROR_DETAIL",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_failed_exploration",
+                "part": {
+                    "type": "tool",
+                    "tool": "task",
+                    "state": {
+                        "status": "error",
+                        "title": "Delegated task failed",
+                        "input": {"subagent_type": "explore"},
+                        "error": "DELEGATION_ERROR_LINE_1\nDELEGATION_ERROR_LINE_2\n"
+                        "DELEGATION_ERROR_LINE_3\nDELEGATION_ERROR_LINE_4\n"
+                        "DELEGATION_ERROR_LINE_5\nDELEGATION_ERROR_LINE_6",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn("✗ Read failed", visible)
+        self.assertIn("READ_ERROR_DETAIL", visible)
+        self.assertIn("✗ Search failed", visible)
+        self.assertIn("SEARCH_ERROR_DETAIL", visible)
+        self.assertIn("✗ Delegated task failed", visible)
+        for line in range(1, 7):
+            self.assertIn(f"DELEGATION_ERROR_LINE_{line}", visible)
+        self.assertNotIn("additional line(s) omitted", visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+
     def _run_opencode_events(self, events: list[dict[str, object]]) -> tuple[str, str, list[Path]]:
         raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
         self.state["opencode_raw_output"] = raw_output
