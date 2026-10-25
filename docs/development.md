@@ -89,11 +89,13 @@ from a target-checkout subdirectory.
 The OpenCode fake emits representative JSON-lines records from the inspected
 2.1.4 contract, including split-stream and malformed-output cases. Acceptance
 checks observe the rendered CLI output, raw private `agent.log`, and output
-delivered before the fake process exits. Fixtures also check that successful
-read/search results and identifiable parent-level delegation are summarized
-without losing their full raw events, while ambiguous tools keep the generic
-fallback. Copilot fixtures continue to verify its native byte relay and record
-format.
+delivered before the fake process exits. CLI fixtures cover unchanged assistant
+text, the shared tool-block layout, bounded shell and generic previews, full
+failure details, wrapper styling policy, and pass-through of tool-supplied ANSI
+sequences. They also verify that successful read/search results and identifiable
+parent-level delegation retain their current summaries without losing their full
+raw events, while unfamiliar tools use the generic fallback. Copilot fixtures
+continue to verify its native byte relay and record format.
 CLI references and locally verified versions for native skill loading and
 invocation flags are recorded in [workflow and recovery](usage.md); fake
 executables do not prove that a live model loads a user's skill.

@@ -281,11 +281,9 @@ class _OpenCodeRenderer:
         self._render_fallback(f"OpenCode event: {event_type}", self._compact(record))
 
     def _render_text(self, text: str) -> None:
-        label = self._style("Assistant", "1")
         if not text:
-            self._render_block([label, "(empty assistant text)"])
             return
-        rendered = f"{label}\n{text}"
+        rendered = text
         if not text.endswith("\n"):
             rendered += "\n"
         if not text.endswith("\n\n"):
@@ -316,50 +314,31 @@ class _OpenCodeRenderer:
         tool = part.get("tool", part.get("name", payload.get("tool")))
         if isinstance(tool, dict):
             tool = tool.get("name")
-        tool_name = tool.strip() if isinstance(tool, str) and tool.strip() else "unknown tool"
+        tool_name = (
+            " ".join(tool.split()) if isinstance(tool, str) and tool.strip() else "unknown tool"
+        )
         input_value = state.get("input", part.get("input", payload.get("input")))
-        title = state.get("title", part.get("title", payload.get("title")))
-        if (
-            not isinstance(title, str)
-            or not title.strip()
-            or title.strip().casefold() == tool_name.casefold()
-        ):
-            title = "Tool result"
-        else:
-            title = " ".join(title.splitlines()).strip()
-
-        marker = "✗" if failed else "✓"
-        marker_color = "31" if failed else "32"
-        lines = [f"{self._style(marker, marker_color)} {self._style(title, '1')}"]
-        lines.append(f"  {self._style(f'tool: {tool_name}', '2')}")
+        title = self._action_title(
+            tool_name,
+            input_value,
+            state.get("title", part.get("title", payload.get("title"))),
+            state.get("metadata"),
+        )
         shell_command = self._shell_command(tool_name, input_value)
-        if shell_command is not None:
-            lines.append("  command:")
-            lines.extend(self._indented(shell_command, prefix="    "))
-        elif input_value is not None:
-            input_text = self._compact(input_value)
-            if len(input_text) > 240:
-                input_text = input_text[:237] + "..."
-            lines.append(f"  input: {input_text}")
-
         output = state.get("output")
         if failed:
-            error_text = (
-                self._display_value(error) if error is not None else "No error details available."
-            )
-            lines.append("  error:")
-            lines.extend(self._indented(error_text, prefix="    "))
-            if output is not None:
-                lines.append("  output:")
-                lines.extend(self._indented(self._display_value(output), prefix="    "))
-            self._render_block(lines)
+            failure_details: list[tuple[str, str]] = []
+            if shell_command is not None:
+                failure_details.append(("│", shell_command))
+            elif input_value is not None:
+                failure_details.append(("│", self._input_summary(input_value)))
+            failure_details.append(("└", self._failure_detail(error, output)))
+            self._render_action_block(title, tool_name, failed=True, details=failure_details)
             return
 
         metadata = state.get("metadata")
         if self._is_delegated_result(tool_name, input_value, metadata):
             self._render_delegated_result(
-                marker,
-                marker_color,
                 title,
                 tool_name,
                 input_value,
@@ -372,62 +351,113 @@ class _OpenCodeRenderer:
             target = self._input_value(
                 input_value, ("filePath", "file_path", "path", "file", "target")
             )
-            read_title = title
-            if read_title == "Tool result":
-                read_title = f"Read {target}" if target is not None else "File read"
-            lines = [f"{self._style(marker, marker_color)} {self._style(read_title, '1')}"]
-            lines.append(f"  {self._style(f'tool: {tool_name}', '2')}")
+            read_details: list[str] = []
             if target is not None:
-                lines.append(f"  target: {target}")
+                read_details.append(f"target: {target}")
             count = self._read_count(metadata)
             if count is not None:
                 label, value = count
-                lines.append(f"  {label}: {value}")
-            self._render_block(lines)
-            return
-
-        if self._is_search_tool(tool_name):
-            self._render_search(
-                marker,
-                marker_color,
-                title,
-                tool_name,
-                input_value,
-                metadata,
+                read_details.append(f"{label}: {value}")
+            self._render_action_block(
+                title, tool_name, failed=False, details=self._tree_details(read_details)
             )
             return
 
-        self._append_success_preview(lines, output, include_output_label=shell_command is not None)
+        if self._is_search_tool(tool_name):
+            self._render_search(title, tool_name, input_value, metadata)
+            return
+
+        action_details: list[tuple[str, str]] = []
+        if shell_command is not None:
+            action_details.append(("│", shell_command))
+        elif input_value is not None:
+            action_details.append(("│", self._input_summary(input_value)))
+        action_details.extend(self._success_preview(output))
+        self._render_action_block(title, tool_name, failed=False, details=action_details)
+
+    def _action_title(self, tool_name: str, input_value: Any, supplied: Any, metadata: Any) -> str:
+        if isinstance(supplied, str):
+            title = " ".join(supplied.split())
+            if title and title.casefold() != tool_name.casefold():
+                return title
+
+        normalized_tool = tool_name.casefold()
+        if normalized_tool == "shell":
+            return "Run command"
+        if normalized_tool == "read":
+            target = self._input_value(
+                input_value, ("filePath", "file_path", "path", "file", "target")
+            )
+            return f"Read {target}" if target is not None else "Read file"
+        if self._is_search_tool(tool_name):
+            return "Search"
+        if self._is_delegated_result(tool_name, input_value, metadata):
+            description = self._input_value(
+                input_value, ("description", "task_description", "taskDescription")
+            )
+            return f"Delegated: {description}" if description else "Delegated agent result"
+        return "Use tool"
+
+    def _render_action_block(
+        self,
+        title: str,
+        tool_name: str,
+        *,
+        failed: bool,
+        details: list[tuple[str, str]],
+    ) -> None:
+        marker = "✗" if failed else "✓"
+        marker_color = "31" if failed else "32"
+        lines = [
+            f"{self._style(marker, marker_color)} {self._style(title, '1')} "
+            f"{self._style(f'({tool_name})', '2')}"
+        ]
+        for connector, detail in details:
+            detail_lines = detail.splitlines() or [""]
+            lines.append(f"  {self._style(connector, '2')} {detail_lines[0]}")
+            lines.extend(f"    {line}" for line in detail_lines[1:])
         self._render_block(lines)
 
     @staticmethod
+    def _tree_details(values: list[str]) -> list[tuple[str, str]]:
+        return [
+            ("└" if index == len(values) - 1 else "├", value) for index, value in enumerate(values)
+        ]
+
+    def _input_summary(self, input_value: Any) -> str:
+        summary = self._compact(input_value)
+        return summary if len(summary) <= 240 else summary[:237] + "..."
+
+    def _failure_detail(self, error: Any, output: Any) -> str:
+        error_text = self._display_value(error) if error is not None else ""
+        if not error_text:
+            error_text = "No error details available."
+        if not error_text.casefold().startswith("error:"):
+            error_text = f"Error: {error_text}"
+        output_text = self._display_value(output) if output is not None else ""
+        return f"{error_text}\n{output_text}" if output_text else error_text
+
+    def _success_preview(self, output: Any) -> list[tuple[str, str]]:
+        if output is None or output == "":
+            return [("└", "No output")]
+        output_lines = self._display_value(output).splitlines()
+        if not output_lines or not any(output_lines):
+            return [("└", "No output")]
+        preview = "\n".join(output_lines[:5])
+        omitted = len(output_lines) - 5
+        if omitted > 0:
+            return [
+                ("├", preview),
+                ("└", f"... {omitted} additional line(s) omitted"),
+            ]
+        return [("└", preview)]
+
+    @staticmethod
     def _shell_command(tool_name: str, input_value: Any) -> str | None:
-        if tool_name != "shell" or not isinstance(input_value, dict):
+        if tool_name.casefold() != "shell" or not isinstance(input_value, dict):
             return None
         command = input_value.get("command")
         return command if isinstance(command, str) else None
-
-    def _append_success_preview(
-        self,
-        lines: list[str],
-        output: Any,
-        *,
-        include_output_label: bool,
-    ) -> None:
-        no_output = "  output: (no output)" if include_output_label else "  (no output)"
-        if output is None or output == "":
-            lines.append(no_output)
-            return
-        output_lines = self._display_value(output).splitlines()
-        if not output_lines:
-            lines.append(no_output)
-            return
-        if include_output_label:
-            lines.append("  output:")
-        lines.extend(f"    {line}" for line in output_lines[:5])
-        omitted = len(output_lines) - 5
-        if omitted > 0:
-            lines.append(f"    ... {omitted} additional line(s) omitted")
 
     @staticmethod
     def _input_value(input_value: Any, keys: tuple[str, ...]) -> str | None:
@@ -546,8 +576,6 @@ class _OpenCodeRenderer:
 
     def _render_delegated_result(
         self,
-        marker: str,
-        marker_color: str,
         title: str,
         tool_name: str,
         input_value: Any,
@@ -557,24 +585,22 @@ class _OpenCodeRenderer:
         description = self._input_value(
             input_value, ("description", "task_description", "taskDescription")
         )
-        if description is None and title != "Tool result":
-            description = title
-        heading = f"Delegated: {description}" if description else "Delegated agent result"
-        lines = [f"{self._style(marker, marker_color)} {self._style(heading, '1')}"]
-        lines.append(f"  {self._style(f'tool: {tool_name}', '2')}")
+        heading = f"Delegated: {description}" if description else title
+        detail_values = []
         agent = self._delegated_agent(input_value, metadata)
         if agent is not None:
-            lines.append(f"  agent: {agent}")
+            detail_values.append(f"agent: {agent}")
         task_id = self._input_value(input_value, ("task_id", "taskId"))
         if task_id is not None:
-            lines.append(f"  task id: {task_id}")
+            detail_values.append(f"task id: {task_id}")
         else:
             session_id = self._metadata_value(metadata, ("sessionId", "sessionID", "session_id"))
             if session_id is not None:
-                lines.append(f"  session: {session_id}")
+                detail_values.append(f"session: {session_id}")
 
-        self._append_success_preview(lines, output, include_output_label=True)
-        self._render_block(lines)
+        details = [("│", value) for value in detail_values]
+        details.extend(self._success_preview(output))
+        self._render_action_block(heading, tool_name, failed=False, details=details)
 
     @staticmethod
     def _metadata_value(metadata: Any, keys: tuple[str, ...]) -> str | None:
@@ -586,33 +612,30 @@ class _OpenCodeRenderer:
 
     def _render_search(
         self,
-        marker: str,
-        marker_color: str,
         title: str,
         tool_name: str,
         input_value: Any,
         metadata: Any,
     ) -> None:
-        if title == "Tool result":
-            title = "Search result"
-        lines = [f"{self._style(marker, marker_color)} {self._style(title, '1')}"]
-        lines.append(f"  {self._style(f'tool: {tool_name}', '2')}")
+        details = []
         query = self._input_value(input_value, ("pattern", "query", "term", "searchTerm"))
         if query is not None:
-            lines.append(f"  query: {query}")
+            details.append(f"query: {query}")
         scope = self._input_value(input_value, ("path", "directory", "root", "scope", "url"))
         if scope is not None:
-            lines.append(f"  scope: {scope}")
+            details.append(f"scope: {scope}")
         include = self._input_value(input_value, ("include", "filePattern", "file_pattern"))
         if include is not None:
-            lines.append(f"  include: {include}")
+            details.append(f"include: {include}")
         count = self._search_count(metadata)
         if count is not None:
             label, value = count
-            lines.append(f"  {label}: {value}")
+            details.append(f"{label}: {value}")
         else:
-            lines.append("  count: not provided")
-        self._render_block(lines)
+            details.append("count: not provided")
+        self._render_action_block(
+            title, tool_name, failed=False, details=self._tree_details(details)
+        )
 
     @staticmethod
     def _search_count(metadata: Any) -> tuple[str, int] | None:

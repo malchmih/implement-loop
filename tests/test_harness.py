@@ -48,12 +48,15 @@ class HarnessTests(LoopTestCase):
         self.assertTrue((runs[0] / "attempt-2-ticket-3/agent.log").is_file())
 
     def test_opencode_renders_completed_text_and_generic_tool_blocks(self) -> None:
+        assistant_text = (
+            "Assistant wording stays unchanged.\n\n**Assistant Markdown stays unchanged.**"
+        )
         events = [
             {
                 "type": "text",
                 "timestamp": 1,
                 "sessionID": "ses_fixture",
-                "part": {"type": "text", "text": "Assistant wording stays unchanged."},
+                "part": {"type": "text", "text": assistant_text},
             },
             {
                 "type": "tool_use",
@@ -78,11 +81,13 @@ class HarnessTests(LoopTestCase):
         result, runs = self.run_loop("--max-iterations", "1", harness=None)
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertIn(b"Assistant wording stays unchanged.", result.stdout)
-        self.assertIn(b"Assistant\nAssistant wording stays unchanged.\n\n", result.stdout)
-        self.assertIn(b"\xe2\x9c\x93 Inspect fixture", result.stdout)
-        self.assertIn(b"tool: example_tool", result.stdout)
-        self.assertIn(b"result line", result.stdout)
+        expected_tool_block = (
+            '✓ Inspect fixture (example_tool)\n  │ {"target":"the fixture"}\n  └ result line'
+        )
+        self.assertIn((assistant_text + "\n\n" + expected_tool_block).encode(), result.stdout)
+        self.assertNotIn(b"Assistant\n", result.stdout)
+        self.assertNotIn(b"tool: example_tool", result.stdout)
+        self.assertNotIn(b"input:", result.stdout)
         self.assertNotIn(b"\x1b[", result.stdout)
         self.assertNotIn(b'"type": "tool_use"', result.stdout)
         self.assertEqual(result.stdout.count(b"OpenCode: github-copilot"), 1)
@@ -93,6 +98,28 @@ class HarnessTests(LoopTestCase):
         raw_lines = [
             '{"type":"future_event","value":"future details"}',
             '{"type":"tool_use","part":{"tool":"odd_tool","state":{"status":[]}}}',
+            json.dumps(
+                {
+                    "type": "tool_use",
+                    "part": {
+                        "tool": "running_tool",
+                        "state": {
+                            "status": "running",
+                            "title": "Running action",
+                            "output": "not a completed result",
+                        },
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "tool_use",
+                    "part": {
+                        "tool": "pending_tool",
+                        "state": {"status": "pending", "title": "Pending action"},
+                    },
+                }
+            ),
             '{"type":',
             "OpenCode startup diagnostic",
             json.dumps({"type": "tool_use", "part": {"state": {"status": "completed"}}}),
@@ -245,11 +272,12 @@ class HarnessTests(LoopTestCase):
         self.assertIn(b"OpenCode event: future_event", result.stdout)
         self.assertIn(b"future details", result.stdout)
         self.assertIn(b"OpenCode tool event", result.stdout)
+        self.assertNotIn("✓ Running action".encode(), result.stdout)
+        self.assertNotIn("✓ Pending action".encode(), result.stdout)
         self.assertIn(b"OpenCode diagnostic", result.stdout)
         self.assertIn(b"OpenCode startup diagnostic", result.stdout)
-        self.assertIn(b"Tool result", result.stdout)
-        self.assertIn(b"tool: unknown tool", result.stdout)
-        self.assertIn(b"(no output)", result.stdout)
+        self.assertIn(b"Use tool (unknown tool)", result.stdout)
+        self.assertIn(b"No output", result.stdout)
         self.assertEqual(result.stdout.count(b"OpenCode step_start event"), 3)
         self.assertEqual(result.stdout.count(b"OpenCode step_finish event"), 4)
         self.assertEqual(result.stdout.count(b"OpenCode reasoning event"), 5)
@@ -295,7 +323,10 @@ class HarnessTests(LoopTestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         visible = result.stdout.decode("utf-8")
-        self.assertIn("(no output)", visible)
+        self.assertIn(
+            '✓ Preview empty (unfamiliar_tool)\n  │ {"target":"Preview empty"}\n  └ No output',
+            visible,
+        )
         for index in range(1, 4):
             self.assertIn(f"three-{index}", visible)
         for index in range(1, 6):
@@ -304,12 +335,81 @@ class HarnessTests(LoopTestCase):
         self.assertNotIn("seven-6", visible)
         self.assertNotIn("seven-7", visible)
         self.assertIn("... 2 additional line(s) omitted", visible)
-        self.assertIn("tool: unfamiliar_tool", visible)
+        self.assertIn("✓ Preview seven (unfamiliar_tool)", visible)
+        self.assertIn('  │ {"target":"Preview seven"}', visible)
+        self.assertNotIn("tool:", visible)
+        self.assertNotIn("input:", visible)
+        self.assertNotIn("output:", visible)
         attempt = runs[0] / "attempt-1-ticket-2"
         log = attempt / "agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
         self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
         self.assertIn(b"seven-6", log.read_bytes())
+
+    def test_opencode_generic_extension_result_uses_bounded_input_fallback(self) -> None:
+        event = {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_extension",
+            "part": {
+                "type": "tool",
+                "tool": "extension.browser",
+                "state": {
+                    "status": "completed",
+                    "title": "Inspect browser response",
+                    "input": {"url": "https://example.invalid", "details": "x" * 500},
+                    "output": "Browser result stays generic.",
+                },
+            },
+        }
+
+        raw_output, visible, runs = self._run_opencode_events([event])
+
+        self.assertIn("✓ Inspect browser response (extension.browser)", visible)
+        block = next(
+            block for block in visible.split("\n\n") if "Inspect browser response" in block
+        )
+        input_line = next(line for line in block.splitlines() if line.startswith("  │ "))
+        input_summary = input_line.removeprefix("  │ ")
+        self.assertLessEqual(len(input_summary), 240)
+        self.assertTrue(input_summary.endswith("..."))
+        self.assertIn("https://example.invalid", input_summary)
+        self.assertIn("Browser result stays generic.", block)
+        self.assertNotIn("tool:", block)
+        self.assertNotIn("input:", block)
+        self.assertNotIn("output:", block)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+
+    def test_opencode_tool_output_preserves_supplied_ansi_in_preview_and_raw_log(self) -> None:
+        colored_output = "\x1b[31mred first line\nred second line\x1b[0m"
+        event = {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_ansi",
+            "part": {
+                "type": "tool",
+                "tool": "ansi_tool",
+                "state": {
+                    "status": "completed",
+                    "title": "Show colored output",
+                    "output": colored_output,
+                },
+            },
+        }
+
+        raw_output, visible, runs = self._run_opencode_events([event], extra_env={"NO_COLOR": ""})
+
+        self.assertIn("✓ Show colored output (ansi_tool)", visible)
+        self.assertIn(
+            "  └ \x1b[31mred first line\n    red second line\x1b[0m",
+            visible,
+        )
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+        self.assertIn(b"\\u001b[31mred first line", raw_output.encode("utf-8"))
 
     def test_opencode_successful_file_reads_summarize_target_without_displaying_contents(
         self,
@@ -571,8 +671,8 @@ class HarnessTests(LoopTestCase):
         self.assertIn("agent: reviewer", visible)
         self.assertIn("session: ses_review_child", visible)
         self.assertIn("A second parent-level delegated result.", visible)
-        self.assertIn("✓ Run a task", visible)
-        self.assertIn("tool: workflow_runner", visible)
+        self.assertIn("✓ Run a task (workflow_runner)", visible)
+        self.assertNotIn("tool: workflow_runner", visible)
         self.assertNotIn("Delegated: Run a task", visible)
         self.assertNotIn("A private task prompt", visible)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
@@ -644,11 +744,16 @@ class HarnessTests(LoopTestCase):
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
 
-    def _run_opencode_events(self, events: list[dict[str, object]]) -> tuple[str, str, list[Path]]:
+    def _run_opencode_events(
+        self,
+        events: list[dict[str, object]],
+        *,
+        extra_env: dict[str, str] | None = None,
+    ) -> tuple[str, str, list[Path]]:
         raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
         self.state["opencode_raw_output"] = raw_output
         self.save_state()
-        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+        result, runs = self.run_loop("--max-iterations", "1", harness=None, extra_env=extra_env)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         return raw_output, result.stdout.decode("utf-8"), runs
 
@@ -687,10 +792,9 @@ class HarnessTests(LoopTestCase):
         ]
         raw_output, visible, runs = self._run_opencode_events(events)
         for title, command, _ in outputs:
-            self.assertIn(f"✓ {title}", visible)
-            self.assertIn("tool: shell", visible)
-            self.assertIn(f"command:\n    {command}", visible)
-        self.assertIn("(no output)", visible)
+            self.assertIn(f"✓ {title} (shell)", visible)
+            self.assertIn(f"  │ {command}", visible)
+        self.assertIn("  └ No output", visible)
         for line in ("short-1", "short-2", "short-3", "five-1", "five-5"):
             self.assertIn(line, visible)
         for line in ("long-1", "long-5"):
@@ -699,6 +803,10 @@ class HarnessTests(LoopTestCase):
         self.assertNotIn("long-7", visible)
         self.assertEqual(visible.count("additional line(s) omitted"), 1)
         self.assertIn("... 2 additional line(s) omitted", visible)
+        self.assertNotIn("tool:", visible)
+        self.assertNotIn("command:", visible)
+        self.assertNotIn("output:", visible)
+        self.assertNotIn("input:", visible)
         self.assertNotIn('"command":', visible)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
@@ -747,16 +855,18 @@ class HarnessTests(LoopTestCase):
             },
         ]
         raw_output, visible, runs = self._run_opencode_events(events)
-        self.assertIn("✗ Failed shell command", visible)
-        self.assertIn("tool: shell", visible)
-        self.assertIn("command:\n    git status --short", visible)
+        self.assertIn("✗ Failed shell command (shell)", visible)
+        self.assertIn("  │ git status --short", visible)
         for line in range(1, 7):
             self.assertIn(f"failure-{line}", visible)
-        self.assertIn('input: {"workdir":"/workspace"}', visible)
+        self.assertIn('  │ {"workdir":"/workspace"}', visible)
         self.assertIn("No command field is available.", visible)
-        self.assertIn("Tool result", visible)
+        self.assertIn("✗ Run command (shell)", visible)
         self.assertIn("No input details are available.", visible)
-        self.assertNotIn("command:\n", visible[visible.index("No command field is available.") :])
+        self.assertNotIn("tool:", visible)
+        self.assertNotIn("command:", visible)
+        self.assertNotIn("input:", visible)
+        self.assertNotIn("output:", visible)
         self.assertNotIn("additional line(s) omitted", visible)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
@@ -776,6 +886,7 @@ class HarnessTests(LoopTestCase):
                         "error": "first error line\nsecond error line\nthird error line\n"
                         "fourth error line\nfifth error line\nsixth error line",
                         "title": "Failed inspection",
+                        "output": "output-1\noutput-2\noutput-3\noutput-4\noutput-5\noutput-6",
                     },
                 },
             },
@@ -794,11 +905,17 @@ class HarnessTests(LoopTestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         visible = result.stdout.decode("utf-8")
-        self.assertIn("✗ Failed inspection", visible)
-        self.assertIn("tool: failing_tool", visible)
-        self.assertIn("error:", visible)
+        self.assertIn("✗ Failed inspection (failing_tool)", visible)
+        self.assertIn('  │ {"action":"inspect"}', visible)
+        self.assertIn("Error: first error line", visible)
         self.assertIn("sixth error line", visible)
+        self.assertIn("output-1", visible)
+        self.assertIn("output-6", visible)
         self.assertNotIn("additional line(s) omitted", visible)
+        self.assertNotIn("tool:", visible)
+        self.assertNotIn("input:", visible)
+        self.assertNotIn("error:", visible)
+        self.assertNotIn("output:", visible)
         self.assertIn("✗ OpenCode error", visible)
         self.assertIn("Run-level failure detail.", visible)
         attempt = runs[0] / "attempt-1-ticket-2"
@@ -1088,6 +1205,9 @@ class HarnessTests(LoopTestCase):
 
     def test_opencode_terminal_output_is_live_before_harness_exit(self) -> None:
         self._assert_live_harness_output("opencode", terminal=True)
+
+    def test_opencode_terminal_failed_tool_uses_red_cross(self) -> None:
+        self._assert_live_harness_output("opencode", terminal=True, include_failure=True)
 
     def test_opencode_terminal_output_honors_no_color_presence(self) -> None:
         self._assert_live_harness_output("opencode", terminal=True, no_color=True)
