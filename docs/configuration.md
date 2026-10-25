@@ -86,10 +86,13 @@ by the checkout, the home directory itself, and filesystem root.
 Each private run stores repository and user metadata, issue/comment snapshots,
 the prompt, harness output, process outcome, raw and validated result evidence,
 selected harness/model/reasoning settings, the selected configuration-file path,
-retention policy, and successful commit references. This metadata records the
-root harness selection; it does not assert the effective settings of every
-configured subagent. Run and attempt directories are private (`0700`), and files
-are private (`0600`).
+retention policy, and successful commit references. OpenCode's `agent.log`
+contains the complete raw JSON event stream emitted by `--format json`, not the
+compact terminal transcript; Copilot's `agent.log` remains native text. The
+renderer does not change the private record permissions or retain a second
+rendered transcript. This metadata records the root harness selection; it does
+not assert the effective settings of every configured subagent. Run and attempt
+directories are private (`0700`), and files are private (`0600`).
 
 ## Retention
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -68,6 +69,8 @@ class HarnessSpec:
                 "--auto",
                 "--model",
                 self.model_selector,
+                "--format",
+                "json",
                 prompt,
             ]
 
@@ -167,6 +170,222 @@ def _timestamp() -> str:
     return datetime.now(UTC).isoformat()
 
 
+class _OpenCodeRenderer:
+    """Render completed OpenCode JSON-lines events as a compact transcript."""
+
+    def __init__(self, write: Callable[[str], None], *, color: bool) -> None:
+        self._write = write
+        self._color = color
+        self._pending = bytearray()
+
+    def feed(self, chunk: bytes) -> None:
+        self._pending.extend(chunk)
+        while True:
+            try:
+                boundary = self._pending.index(ord("\n"))
+            except ValueError:
+                return
+            line = bytes(self._pending[:boundary])
+            del self._pending[: boundary + 1]
+            self._render_line(line)
+
+    def finish(self) -> None:
+        if self._pending:
+            line = bytes(self._pending)
+            self._pending.clear()
+            self._render_line(line)
+
+    def _render_line(self, raw_line: bytes) -> None:
+        if raw_line.endswith(b"\r"):
+            raw_line = raw_line[:-1]
+        if not raw_line:
+            return
+        try:
+            line = raw_line.decode("utf-8")
+            record = json.loads(line)
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            self._render_block(
+                ["OpenCode diagnostic", *self._indented(raw_line.decode("utf-8", "replace"))]
+            )
+            return
+
+        if not isinstance(record, dict):
+            self._render_fallback("OpenCode output", self._compact(record))
+            return
+        event_type = record.get("type")
+        if not isinstance(event_type, str):
+            self._render_fallback("OpenCode output", self._compact(record))
+            return
+
+        payload = record.get("data")
+        if not isinstance(payload, dict) or not payload:
+            payload = record
+        if event_type in {"step_start", "step_finish", "reasoning"}:
+            return
+        if event_type == "text":
+            part = payload.get("part")
+            text = part.get("text") if isinstance(part, dict) else payload.get("text")
+            if isinstance(text, str):
+                self._render_text(text)
+                return
+            self._render_fallback("OpenCode text event", self._compact(record))
+            return
+        if event_type == "tool_use":
+            self._render_tool(record, payload)
+            return
+        if event_type == "error":
+            error = payload.get("error")
+            if error is None:
+                self._render_fallback("OpenCode error event", self._compact(record))
+            else:
+                self._render_error("OpenCode error", error)
+            return
+        self._render_fallback(f"OpenCode event: {event_type}", self._compact(record))
+
+    def _render_text(self, text: str) -> None:
+        label = self._style("Assistant", "1")
+        if not text:
+            self._render_block([label, "(empty assistant text)"])
+            return
+        rendered = f"{label}\n{text}"
+        if not text.endswith("\n"):
+            rendered += "\n"
+        if not text.endswith("\n\n"):
+            rendered += "\n"
+        self._write(rendered)
+
+    def _render_tool(self, record: dict[str, Any], payload: dict[str, Any]) -> None:
+        part = payload.get("part")
+        if not isinstance(part, dict):
+            self._render_fallback("OpenCode tool event", self._compact(record))
+            return
+        state = part.get("state")
+        if not isinstance(state, dict):
+            self._render_fallback("OpenCode tool event", self._compact(record))
+            return
+
+        status = state.get("status")
+        normalized_status = status.casefold() if isinstance(status, str) else None
+        error = state.get("error")
+        if normalized_status in {"error", "failed"} or error is not None:
+            failed = True
+        elif normalized_status in {"completed", "success", "succeeded"}:
+            failed = False
+        else:
+            self._render_fallback("OpenCode tool event", self._compact(record))
+            return
+
+        tool = part.get("tool", part.get("name", payload.get("tool")))
+        if isinstance(tool, dict):
+            tool = tool.get("name")
+        tool_name = tool.strip() if isinstance(tool, str) and tool.strip() else "unknown tool"
+        input_value = state.get("input", part.get("input", payload.get("input")))
+        title = state.get("title", part.get("title", payload.get("title")))
+        if (
+            not isinstance(title, str)
+            or not title.strip()
+            or title.strip().casefold() == tool_name.casefold()
+        ):
+            title = "Tool result"
+        else:
+            title = " ".join(title.splitlines()).strip()
+
+        marker = "✗" if failed else "✓"
+        marker_color = "31" if failed else "32"
+        lines = [f"{self._style(marker, marker_color)} {self._style(title, '1')}"]
+        lines.append(f"  {self._style(f'tool: {tool_name}', '2')}")
+        delegated_agent = self._delegated_agent(input_value, state.get("metadata"))
+        if delegated_agent is not None:
+            lines.append("  delegated result")
+            lines.append(f"  delegated agent: {delegated_agent}")
+        if input_value is not None:
+            input_text = self._compact(input_value)
+            if len(input_text) > 240:
+                input_text = input_text[:237] + "..."
+            lines.append(f"  input: {input_text}")
+
+        output = state.get("output")
+        if failed:
+            error_text = (
+                self._display_value(error) if error is not None else "No error details available."
+            )
+            lines.append("  error:")
+            lines.extend(self._indented(error_text, prefix="    "))
+            if output is not None:
+                lines.append("  output:")
+                lines.extend(self._indented(self._display_value(output), prefix="    "))
+            self._render_block(lines)
+            return
+
+        if output is None or output == "":
+            lines.append("  (no output)")
+            self._render_block(lines)
+            return
+        output_lines = self._display_value(output).splitlines()
+        if not output_lines:
+            lines.append("  (no output)")
+        else:
+            lines.extend(f"    {line}" for line in output_lines[:5])
+            omitted = len(output_lines) - 5
+            if omitted > 0:
+                lines.append(f"    ... {omitted} additional line(s) omitted")
+        self._render_block(lines)
+
+    def _render_error(self, title: str, error: Any) -> None:
+        lines = [f"{self._style('✗', '31')} {self._style(title, '1')}"]
+        lines.extend(self._indented(self._display_value(error)))
+        self._render_block(lines)
+
+    def _render_fallback(self, title: str, details: str) -> None:
+        self._render_block([f"? {title}", *self._indented(details)])
+
+    def _render_block(self, lines: list[str]) -> None:
+        self._write("\n".join(lines) + "\n\n")
+
+    @staticmethod
+    def _indented(value: str, *, prefix: str = "  ") -> list[str]:
+        return [f"{prefix}{line}" for line in value.splitlines()] or [prefix]
+
+    @staticmethod
+    def _display_value(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        return _OpenCodeRenderer._compact(value)
+
+    @staticmethod
+    def _compact(value: Any) -> str:
+        try:
+            return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError, RecursionError):
+            return "<structured details unavailable>"
+
+    def _style(self, text: str, code: str) -> str:
+        return f"\x1b[{code}m{text}\x1b[0m" if self._color else text
+
+    @staticmethod
+    def _delegated_agent(input_value: Any, metadata: Any) -> str | None:
+        keys = (
+            "agent",
+            "agent_name",
+            "agentName",
+            "subagent",
+            "subagent_name",
+            "subagentName",
+            "subagent_type",
+            "subagentType",
+        )
+        for source in (input_value, metadata):
+            if not isinstance(source, dict):
+                continue
+            for key in keys:
+                value = source.get(key)
+                if isinstance(value, dict):
+                    value = value.get("name")
+                if isinstance(value, str) and value.strip():
+                    return " ".join(value.splitlines()).strip()
+        return None
+
+
 def run_harness(
     harness: HarnessSpec,
     prompt: str,
@@ -175,13 +394,14 @@ def run_harness(
     *,
     on_invocation_starting: Callable[[], None] | None = None,
 ) -> ProcessOutcome:
-    """Start one fresh harness process and stream/persist its native text output."""
+    """Start a fresh harness process, retaining raw output and streaming its view."""
 
     return _run_process(
         harness.command(prompt),
         cwd,
         log_path,
         harness.display_name,
+        render_opencode=harness.name == "opencode",
         on_invocation_starting=on_invocation_starting,
     )
 
@@ -192,6 +412,7 @@ def _run_process(
     log_path: Path,
     display_name: str,
     *,
+    render_opencode: bool = False,
     on_invocation_starting: Callable[[], None] | None = None,
 ) -> ProcessOutcome:
     environment = os.environ.copy()
@@ -240,6 +461,17 @@ def _run_process(
         )
 
     output: BinaryIO | None = getattr(sys.stdout, "buffer", None)
+    color = "NO_COLOR" not in environment and sys.stdout.isatty()
+
+    def write_text(value: str) -> None:
+        if output is None:
+            sys.stdout.write(value)
+            sys.stdout.flush()
+        else:
+            output.write(value.encode("utf-8"))
+            output.flush()
+
+    renderer = _OpenCodeRenderer(write_text, color=color) if render_opencode else None
     try:
         with os.fdopen(descriptor, "wb") as log_file:
             if process.stdout is None:
@@ -259,14 +491,17 @@ def _run_process(
                             log_error = str(error)
                     if stream_error is None:
                         try:
-                            if output is None:
-                                sys.stdout.write(chunk.decode("utf-8", errors="replace"))
-                                sys.stdout.flush()
+                            if renderer is not None:
+                                renderer.feed(chunk)
+                            elif output is None:
+                                write_text(chunk.decode("utf-8", errors="replace"))
                             else:
                                 output.write(chunk)
                                 output.flush()
                         except (BrokenPipeError, OSError) as error:
                             stream_error = str(error)
+                if renderer is not None and stream_error is None:
+                    renderer.finish()
                 process.stdout.close()
     except OSError as error:
         log_persisted = False

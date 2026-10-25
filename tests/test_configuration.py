@@ -63,6 +63,7 @@ class ConfigurationTests(LoopTestCase):
         self.assertIn("--standalone", args)
         self.assertIn("--auto", args)
         self.assertEqual(args[args.index("--model") + 1], "github-copilot/gpt-6-luna#max")
+        self.assertEqual(args[args.index("--format") + 1], "json")
         self.assertNotIn("--continue", args)
         self.assertNotIn("--session", args)
         self.assertTrue(call["result_initially_absent"])
@@ -90,7 +91,9 @@ class ConfigurationTests(LoopTestCase):
         )
         self.assertEqual(run_metadata["retention_days"], 7)
         self.assertFalse(run_metadata["keep_records_forever"])
-        self.assertTrue((attempt / "agent.log").is_file())
+        agent_log = attempt / "agent.log"
+        self.assertTrue(agent_log.is_file())
+        self.assertEqual(json.loads(agent_log.read_text())["type"], "text")
         self.assertIn("successful OpenCode exit", state["events"][1][2])
 
     def test_project_configuration_is_not_loaded_automatically(self) -> None:
@@ -446,6 +449,8 @@ class ConfigurationTests(LoopTestCase):
         self.assertIn("--trust-folder", args)
         self.assertEqual(args[args.index("--model") + 1], "gpt-6-luna")
         self.assertEqual(args[args.index("--reasoning-effort") + 1], "max")
+        self.assertIn("--output-format", args)
+        self.assertNotIn("--format", args)
         self.assertNotIn("--continue", args)
         self.assertNotIn("--resume", args)
         self.assertTrue(call["prompt"].startswith("/implement Implement only ticket #2"))

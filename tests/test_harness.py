@@ -5,6 +5,7 @@ import os
 import resource
 import signal
 import socket
+import stat
 import subprocess
 from pathlib import Path
 
@@ -36,6 +37,7 @@ class HarnessTests(LoopTestCase):
             args = call["args"]
             self.assertEqual(args[0], "run")
             self.assertIn("--standalone", args)
+            self.assertEqual(args[args.index("--format") + 1], "json")
             self.assertNotIn("--continue", args)
             self.assertNotIn("--session", args)
             self.assertNotIn("--fork", args)
@@ -45,11 +47,350 @@ class HarnessTests(LoopTestCase):
         self.assertTrue((runs[0] / "attempt-1-ticket-2/agent.log").is_file())
         self.assertTrue((runs[0] / "attempt-2-ticket-3/agent.log").is_file())
 
+    def test_opencode_renders_completed_text_and_generic_tool_blocks(self) -> None:
+        events = [
+            {
+                "type": "text",
+                "timestamp": 1,
+                "sessionID": "ses_fixture",
+                "part": {"type": "text", "text": "Assistant wording stays unchanged."},
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_fixture",
+                "part": {
+                    "type": "tool",
+                    "tool": "example_tool",
+                    "state": {
+                        "status": "completed",
+                        "input": {"target": "the fixture"},
+                        "output": "result line",
+                        "title": "Inspect fixture",
+                    },
+                },
+            },
+        ]
+        raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
+        self.state["opencode_raw_output"] = raw_output
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertIn(b"Assistant wording stays unchanged.", result.stdout)
+        self.assertIn(b"Assistant\nAssistant wording stays unchanged.\n\n", result.stdout)
+        self.assertIn(b"\xe2\x9c\x93 Inspect fixture", result.stdout)
+        self.assertIn(b"tool: example_tool", result.stdout)
+        self.assertIn(b"result line", result.stdout)
+        self.assertNotIn(b"\x1b[", result.stdout)
+        self.assertNotIn(b'"type": "tool_use"', result.stdout)
+        self.assertEqual(result.stdout.count(b"OpenCode: github-copilot"), 1)
+        attempt = runs[0] / "attempt-1-ticket-2"
+        self.assertEqual((attempt / "agent.log").read_bytes(), raw_output.encode("utf-8"))
+
+    def test_opencode_unrecognized_and_malformed_output_stays_visible(self) -> None:
+        raw_output = (
+            '{"type":"future_event","value":"future details"}\n'
+            '{"type":"tool_use","part":{"tool":"odd_tool","state":{"status":[]}}}\n'
+            '{"type":\n'
+            "OpenCode startup diagnostic\n"
+            + json.dumps(
+                {
+                    "type": "tool_use",
+                    "part": {"state": {"status": "completed"}},
+                }
+            )
+            + "\n"
+        )
+        self.state["opencode_raw_output"] = raw_output
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertIn(b"OpenCode event: future_event", result.stdout)
+        self.assertIn(b"future details", result.stdout)
+        self.assertIn(b"OpenCode tool event", result.stdout)
+        self.assertIn(b"OpenCode diagnostic", result.stdout)
+        self.assertIn(b"OpenCode startup diagnostic", result.stdout)
+        self.assertIn(b"Tool result", result.stdout)
+        self.assertIn(b"tool: unknown tool", result.stdout)
+        self.assertIn(b"(no output)", result.stdout)
+        self.assertNotIn(b"Traceback", result.stdout + result.stderr)
+        attempt = runs[0] / "attempt-1-ticket-2"
+        self.assertEqual((attempt / "agent.log").read_bytes(), raw_output.encode("utf-8"))
+
+    def test_opencode_generic_success_output_is_bounded_and_raw_record_is_complete(self) -> None:
+        outputs = (
+            ("Preview empty", ""),
+            ("Preview three", "three-1\nthree-2\nthree-3"),
+            ("Preview five", "five-1\nfive-2\nfive-3\nfive-4\nfive-5"),
+            (
+                "Preview seven",
+                "seven-1\nseven-2\nseven-3\nseven-4\nseven-5\nseven-6\nseven-7",
+            ),
+        )
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": index,
+                "sessionID": "ses_preview",
+                "part": {
+                    "type": "tool",
+                    "tool": "unfamiliar_tool",
+                    "state": {
+                        "status": "completed",
+                        "title": title,
+                        "input": {"target": title},
+                        "output": output,
+                    },
+                },
+            }
+            for index, (title, output) in enumerate(outputs, start=1)
+        ]
+        raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
+        self.state["opencode_raw_output"] = raw_output
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        visible = result.stdout.decode("utf-8")
+        self.assertIn("(no output)", visible)
+        for index in range(1, 4):
+            self.assertIn(f"three-{index}", visible)
+        for index in range(1, 6):
+            self.assertIn(f"five-{index}", visible)
+            self.assertIn(f"seven-{index}", visible)
+        self.assertNotIn("seven-6", visible)
+        self.assertNotIn("seven-7", visible)
+        self.assertIn("... 2 additional line(s) omitted", visible)
+        self.assertIn("tool: unfamiliar_tool", visible)
+        attempt = runs[0] / "attempt-1-ticket-2"
+        log = attempt / "agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+        self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
+        self.assertIn(b"seven-6", log.read_bytes())
+
+    def test_opencode_failed_tools_and_run_errors_show_available_details(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_failure",
+                "part": {
+                    "type": "tool",
+                    "tool": "failing_tool",
+                    "state": {
+                        "status": "error",
+                        "input": {"action": "inspect"},
+                        "error": "first error line\nsecond error line\nthird error line\n"
+                        "fourth error line\nfifth error line\nsixth error line",
+                        "title": "Failed inspection",
+                    },
+                },
+            },
+            {
+                "type": "error",
+                "timestamp": 2,
+                "sessionID": "ses_failure",
+                "error": {"type": "provider.error", "message": "Run-level failure detail."},
+            },
+        ]
+        raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
+        self.state["opencode_raw_output"] = raw_output
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        visible = result.stdout.decode("utf-8")
+        self.assertIn("✗ Failed inspection", visible)
+        self.assertIn("tool: failing_tool", visible)
+        self.assertIn("error:", visible)
+        self.assertIn("sixth error line", visible)
+        self.assertNotIn("additional line(s) omitted", visible)
+        self.assertIn("✗ OpenCode error", visible)
+        self.assertIn("Run-level failure detail.", visible)
+        attempt = runs[0] / "attempt-1-ticket-2"
+        self.assertEqual((attempt / "agent.log").read_bytes(), raw_output.encode("utf-8"))
+
+    def test_opencode_identifies_delegation_only_when_the_tool_exposes_an_agent(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "generic_work_tool",
+                    "state": {
+                        "status": "completed",
+                        "title": "Review implementation",
+                        "input": {"agent": "reviewer", "task": "Review the change"},
+                        "output": "Review result",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "ordinary_tool",
+                    "state": {"status": "completed", "title": "Ordinary result", "output": "Done"},
+                },
+            },
+        ]
+        raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
+        self.state["opencode_raw_output"] = raw_output
+        self.save_state()
+
+        result, _ = self.run_loop("--max-iterations", "1", harness=None)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        visible = result.stdout.decode("utf-8")
+        self.assertIn("delegated result", visible)
+        self.assertIn("delegated agent: reviewer", visible)
+        ordinary = visible.split("Ordinary result", maxsplit=1)[1]
+        self.assertNotIn("delegated result", ordinary)
+
+    def test_opencode_stream_handles_split_unicode_multiple_records_and_final_line(self) -> None:
+        first_event = {
+            "type": "text",
+            "timestamp": 1,
+            "sessionID": "ses_split",
+            "part": {"type": "text", "text": "First complete block"},
+        }
+        large_event = {
+            "type": "text",
+            "timestamp": 2,
+            "sessionID": "ses_split",
+            "part": {"type": "text", "text": "雪"},
+        }
+        step_event = {"type": "step_start", "timestamp": 0, "sessionID": "ses_split"}
+
+        def encode_stream(text: str) -> bytes:
+            large_event["part"]["text"] = text
+            records = [step_event, first_event, large_event]
+            lines = [
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")) for event in records
+            ]
+            final_tool = {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_split",
+                "part": {
+                    "type": "tool",
+                    "tool": "final_tool",
+                    "state": {
+                        "status": "completed",
+                        "title": "Final unterminated event",
+                        "output": "unterminated result rendered",
+                    },
+                },
+            }
+            return ("\n".join([*lines, json.dumps(final_tool, separators=(",", ":"))])).encode(
+                "utf-8"
+            )
+
+        long_text = "雪"
+        raw_bytes = encode_stream(long_text)
+        unicode_offset = raw_bytes.index("雪".encode())
+        padding = (8191 - unicode_offset % 8192) % 8192
+        long_text = "x" * padding + long_text
+        raw_bytes = encode_stream(long_text)
+        unicode_offset = raw_bytes.index("雪".encode())
+        self.assertEqual(unicode_offset % 8192, 8191)
+        split_at = unicode_offset + 1
+        self.assertEqual(split_at, 8192)
+        raw_output = raw_bytes.decode("utf-8")
+        self.state["opencode_raw_output"] = raw_output
+        self.save_state()
+
+        ready_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ready_listener.bind(("127.0.0.1", 0))
+        ready_listener.listen()
+        ready_listener.settimeout(LIVE_READY_TIMEOUT)
+        env = dict(self.env)
+        env["IMPLEMENT_LOOP_TEST_OPENCODE_SPLIT_BYTES"] = str(split_at)
+        env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"] = str(ready_listener.getsockname()[1])
+        process: subprocess.Popen[bytes] | None = None
+        visible = bytearray()
+        try:
+            process = subprocess.Popen(
+                [str(SCRIPT), "1", "--max-iterations", "1"],
+                cwd=self.repo,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            assert process.stdout is not None
+            with ready_listener.accept()[0] as ready_connection:
+                ready_connection.settimeout(LIVE_READY_TIMEOUT)
+                self.assertEqual(ready_connection.recv(1), b"R")
+            self._read_until_output(
+                process.stdout.fileno(),
+                visible,
+                b"First complete block",
+                timeout=LIVE_OUTPUT_TIMEOUT,
+            )
+            self.assertIsNone(process.poll(), "harness exited before receiving the second chunk")
+            self.assertNotIn("雪".encode(), visible)
+            attempts = list(
+                (self.home / ".local/state/implement-loop").glob("run-*/attempt-1-ticket-2")
+            )
+            self.assertEqual(len(attempts), 1)
+            self.assertEqual((attempts[0] / "agent.log").read_bytes(), raw_bytes[:split_at])
+
+            assert process.stdin is not None
+            process.stdin.write(b"x")
+            process.stdin.flush()
+            process.stdin.close()
+            process.stdin = None
+            remaining, _ = process.communicate(timeout=LIVE_READY_TIMEOUT)
+            visible.extend(remaining)
+            self.assertEqual(process.returncode, 0, bytes(visible).decode("utf-8", "replace"))
+            self.assertIn("雪".encode(), visible)
+            self.assertIn(b"Final unterminated event", visible)
+            self.assertIn(b"unterminated result rendered", visible)
+            self.assertEqual((attempts[0] / "agent.log").read_bytes(), raw_bytes)
+        finally:
+            if process is not None:
+                if process.stdin is not None and not process.stdin.closed:
+                    try:
+                        process.stdin.write(b"x")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError, ValueError):
+                        pass
+                    try:
+                        process.stdin.close()
+                    except OSError:
+                        pass
+                try:
+                    process.wait(timeout=LIVE_READY_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    process.wait(timeout=5)
+                if process.stdout is not None:
+                    process.stdout.close()
+            ready_listener.close()
+
     def test_opencode_redirected_output_is_live_before_harness_exit(self) -> None:
         self._assert_live_harness_output("opencode", terminal=False)
 
     def test_opencode_terminal_output_is_live_before_harness_exit(self) -> None:
         self._assert_live_harness_output("opencode", terminal=True)
+
+    def test_opencode_terminal_output_honors_no_color_presence(self) -> None:
+        self._assert_live_harness_output("opencode", terminal=True, no_color=True)
 
     def test_copilot_redirected_output_is_live_before_harness_exit(self) -> None:
         self._assert_live_harness_output("copilot", terminal=False)
@@ -346,22 +687,30 @@ class HarnessTests(LoopTestCase):
             signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
             resource.setrlimit(resource.RLIMIT_FSIZE, (8192, 8192))
 
-        result, runs = self.run_loop(
-            "--max-iterations",
-            "1",
-            extra_env={"IMPLEMENT_LOOP_TEST_OUTPUT": "x" * 20_000},
-            preexec_fn=limit_file_size,
-        )
+        for harness, display_name in ((None, "OpenCode"), ("copilot", "Copilot")):
+            with self.subTest(harness=harness or "default"):
+                self.state = self.default_state()
+                self.save_state()
+                result, runs = self.run_loop(
+                    "--max-iterations",
+                    "1",
+                    harness=harness,
+                    extra_env={"IMPLEMENT_LOOP_TEST_OUTPUT": "x" * 20_000},
+                    preexec_fn=limit_file_size,
+                )
 
-        state = self.load_state()
-        attempt = runs[-1] / "attempt-1-ticket-2"
-        process = json.loads((attempt / "process.json").read_text())
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"Unable to persist the complete Copilot output log", result.stderr)
-        self.assertFalse(process["log_persisted"])
-        self.assertLessEqual((attempt / "agent.log").stat().st_size, 8192)
-        self.assertEqual(state["tickets"]["2"]["state"], "open")
-        self.assertEqual([event[0] for event in state["events"]], ["assign"])
+                state = self.load_state()
+                attempt = runs[-1] / "attempt-1-ticket-2"
+                process = json.loads((attempt / "process.json").read_text())
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    f"Unable to persist the complete {display_name} output log".encode(),
+                    result.stderr,
+                )
+                self.assertFalse(process["log_persisted"])
+                self.assertLessEqual((attempt / "agent.log").stat().st_size, 8192)
+                self.assertEqual(state["tickets"]["2"]["state"], "open")
+                self.assertEqual([event[0] for event in state["events"]], ["assign"])
 
     def test_missing_copilot_cli_fails_before_claim(self) -> None:
         limited_bin = self.controlled_path_directory("python3", "git", "gh", "opencode")

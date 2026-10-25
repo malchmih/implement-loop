@@ -188,20 +188,66 @@ if tool_name in ("copilot", "opencode"):
             '"acceptance_criteria":"passed","validation":"passed"}',
         ),
     )
+    if tool_name == "opencode" and "opencode_raw_output" in state:
+        raw_output = state["opencode_raw_output"].encode("utf-8")
+        split_bytes = os.environ.get("IMPLEMENT_LOOP_TEST_OPENCODE_SPLIT_BYTES")
+        if split_bytes is None:
+            sys.stdout.buffer.write(raw_output)
+            sys.stdout.buffer.flush()
+        else:
+            split_at = int(split_bytes)
+            section = raw_output[:split_at]
+            offset = 0
+            while offset < len(section):
+                offset += os.write(sys.stdout.fileno(), section[offset:])
+            with socket.create_connection(
+                ("127.0.0.1", int(os.environ["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"])),
+                timeout=20,
+            ) as ready_connection:
+                ready_connection.sendall(b"R")
+            sys.stdin.buffer.read(1)
+            section = raw_output[split_at:]
+            offset = 0
+            while offset < len(section):
+                offset += os.write(sys.stdout.fileno(), section[offset:])
+        sys.exit(int(exit_status))
     live_fragment = os.environ.get("IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT")
     if live_fragment is not None:
-        sys.stdout.write(live_fragment)
-        sys.stdout.flush()
+        if tool_name == "opencode":
+            event = {
+                "type": "text",
+                "timestamp": 1,
+                "sessionID": "ses_live_fixture",
+                "part": {"type": "text", "text": live_fragment},
+            }
+            encoded_event = json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+            sys.stdout.buffer.write(encoded_event.encode("utf-8"))
+            sys.stdout.buffer.flush()
+        else:
+            sys.stdout.write(live_fragment)
+            sys.stdout.flush()
         with socket.create_connection(
             ("127.0.0.1", int(os.environ["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"])),
             timeout=20,
         ) as ready_connection:
             ready_connection.sendall(b"R")
         sys.stdin.buffer.read(1)
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        if tool_name != "opencode":
+            sys.stdout.write("\n")
+            sys.stdout.flush()
         sys.exit(int(exit_status))
-    sys.stdout.write("Agent output\n" + output + "\n")
+    if tool_name == "opencode":
+        event = {
+            "type": "text",
+            "timestamp": 1,
+            "sessionID": "ses_fixture",
+            "part": {"type": "text", "text": "Agent output\n" + output},
+        }
+        encoded_event = json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+        sys.stdout.buffer.write(encoded_event.encode("utf-8"))
+        sys.stdout.buffer.flush()
+    else:
+        sys.stdout.write("Agent output\n" + output + "\n")
     sys.exit(int(exit_status))
 
 if args[:2] == ["repo", "view"]:
@@ -705,7 +751,9 @@ class LoopTestCase(TemporaryHomeTestCase):
                 self.fail(f"Caller output closed before {fragment!r} arrived")
             output.extend(chunk)
 
-    def _assert_live_harness_output(self, harness: str, *, terminal: bool) -> None:
+    def _assert_live_harness_output(
+        self, harness: str, *, terminal: bool, no_color: bool = False
+    ) -> None:
         ready_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         ready_listener.bind(("127.0.0.1", 0))
         ready_listener.listen()
@@ -719,6 +767,8 @@ class LoopTestCase(TemporaryHomeTestCase):
             env = dict(self.env)
             env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT"] = LIVE_OUTPUT_FRAGMENT.decode("ascii")
             env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"] = str(ready_listener.getsockname()[1])
+            if no_color:
+                env["NO_COLOR"] = ""
             if terminal:
                 master, slave = pty.openpty()
                 stdout = slave
@@ -772,7 +822,24 @@ class LoopTestCase(TemporaryHomeTestCase):
             attempt_dir = attempt_dirs[0]
             self.assertTrue((attempt_dir.parent / "active.pid").is_file())
             self.assertIn(LIVE_OUTPUT_FRAGMENT, output)
-            self.assertEqual((attempt_dir / "agent.log").read_bytes(), LIVE_OUTPUT_FRAGMENT)
+            if harness == "opencode":
+                self.assertIn(b"Assistant", output)
+                if terminal and not no_color:
+                    self.assertIn(b"\x1b[1mAssistant", output)
+                else:
+                    self.assertNotIn(b"\x1b[", output)
+                expected_event = {
+                    "type": "text",
+                    "timestamp": 1,
+                    "sessionID": "ses_live_fixture",
+                    "part": {"type": "text", "text": LIVE_OUTPUT_FRAGMENT.decode("ascii")},
+                }
+                expected_log = (
+                    json.dumps(expected_event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                ).encode("utf-8")
+                self.assertEqual((attempt_dir / "agent.log").read_bytes(), expected_log)
+            else:
+                self.assertEqual((attempt_dir / "agent.log").read_bytes(), LIVE_OUTPUT_FRAGMENT)
 
             assert process.stdin is not None
             process.stdin.write(b"x")
@@ -785,8 +852,10 @@ class LoopTestCase(TemporaryHomeTestCase):
             )
 
             call = self.load_state()[f"{harness}_calls"][0]
-            self.assertEqual(call["no_color"], None if terminal else "1")
-            self.assertEqual(call["force_color"], "1" if terminal else "0")
+            expected_no_color = "1" if no_color or not terminal else None
+            expected_force_color = "1" if terminal and not no_color else "0"
+            self.assertEqual(call["no_color"], expected_no_color)
+            self.assertEqual(call["force_color"], expected_force_color)
         finally:
             if process is not None:
                 if process.stdin is not None and not process.stdin.closed:

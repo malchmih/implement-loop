@@ -168,16 +168,16 @@ fake executables and do not emit real alerts.
 
 ## Harness capabilities and external skill setup
 
-The invocation contracts were checked against OpenCode CLI v2.1.3 and GitHub
+The invocation contracts were checked against OpenCode CLI v2.1.4 and GitHub
 Copilot CLI 1.0.103-0. The executable versions are not pinned at runtime; if a
 later release changes its CLI contract, check its help and the linked V2/CLI
 documentation before using it. OpenCode V1 is not supported.
 
 - OpenCode uses `opencode run --standalone --auto --model
-  github-copilot/gpt-6-luna#max`. V2 documents headless `run`, private-server
-  execution, model selectors in `provider/model#variant` form, and `--auto` in
-  the installed v2.1.3 command help. Each attempt starts a new process without
-  `--continue`, `--session`, or `--fork`.
+  github-copilot/gpt-6-luna#max --format json`. V2 documents headless `run`,
+  private-server execution, model selectors in `provider/model#variant` form,
+  `--auto`, and JSON output in the installed v2.1.4 command help. Each attempt
+  starts a new process without `--continue`, `--session`, or `--fork`.
 - Copilot uses `copilot --trust-folder -p ... --model gpt-6-luna
   --reasoning-effort max --stream on --output-format text --allow-all-tools`.
   `--trust-folder` applies repository configuration trust to this prompt-mode
@@ -202,9 +202,21 @@ documentation before using it. OpenCode V1 is not supported.
   project/user instructions, agents, plugins, policies, and explicit denials
   remain in effect. These flags do not guarantee that every path, URL,
   permission, or clarification can be handled unattended.
-- Both harnesses stream native text output to the terminal and the same private
-  per-attempt `agent.log`. Redirected output or `NO_COLOR` (including an empty
-  value) disables color; a terminal enables it when `NO_COLOR` is unset.
+- OpenCode V2.1.4 JSON output is a newline-delimited stream of event records.
+  Implement Loop renders completed assistant text and completed or failed tool
+  results as separate scrolling blocks. It omits step-start, step-finish, and
+  reasoning events, and does not promise text deltas, live tool starts, or tool
+  progress. Successful generic tool output is previewed to five lines with an
+  omitted-line count; failures retain their available details. This first slice
+  uses a generic tool presentation rather than specialized shell or exploration
+  summaries.
+- OpenCode's private per-attempt `agent.log` retains the complete emitted JSON
+  event stream before display filtering or truncation. It is raw evidence, not a
+  copy of the rendered transcript. Copilot keeps its existing native-text
+  terminal stream and `agent.log` format. Redirected output or the presence of
+  `NO_COLOR` (including an empty value) disables terminal styling; a terminal
+  enables it when `NO_COLOR` is unset. The same readable block structure remains
+  in monochrome output.
 
 Official references for these contracts:
 
@@ -213,6 +225,8 @@ Official references for these contracts:
 - [OpenCode V2 models](https://opencode.ai/v2/docs/models/)
 - [OpenCode V2 Copilot provider](https://opencode.ai/v2/docs/providers/)
 - [OpenCode V2 permissions](https://opencode.ai/v2/docs/permissions/)
+- [OpenCode 2.1.4 noninteractive JSON renderer](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/cli/src/run/noninteractive.ts)
+- [OpenCode 2.1.4 noninteractive tests](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/cli/test/run/noninteractive.test.ts)
 - [Copilot CLI command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
 - [Copilot CLI programmatic reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference)
 - [Copilot CLI skill setup](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills)
@@ -269,11 +283,24 @@ not claim a push, merge, or PR. Already-committed work can instead be
 
 ## Output and record boundaries
 
-Harness output streams natively to the terminal and is persisted in private
-per-attempt records. See [configuration and private records](configuration.md)
-for record contents, file permissions, and cleanup behavior. Loop retention does
-not govern harness-native sessions, logs, telemetry, or other storage; manage
-those separately using each harness's settings.
+OpenCode's `--format json` stream is parsed incrementally at the existing harness
+output boundary. Completed assistant text and tool results appear promptly in
+separate blocks, before the process exits. Successful generic tool output is
+limited to five preview lines and reports how many additional lines were omitted;
+available failure details are not preview-limited. Unknown or malformed records
+and merged-stream diagnostics remain visible through readable fallbacks. The
+renderer does not infer completion from tool markers, step-finish events, or the
+absence of an error event. Process status and the separate completion-result file
+remain authoritative for Attempt completion.
+
+OpenCode's private per-attempt `agent.log` preserves every emitted byte before
+rendering, filtering, or truncation, so it contains raw JSON events rather than
+the former native-text display. Copilot continues to stream and record its
+native text unchanged. Both use the existing private record directory and file
+permissions; see [configuration and private records](configuration.md) for
+contents, permissions, and cleanup behavior. Loop retention does not govern
+harness-native sessions, logs, telemetry, or other storage; manage those
+separately using each harness's settings.
 
 OpenCode's `--standalone` runs against a private server instead of the shared
 background service. It is **not** a sandbox, filesystem/network isolation, or a
@@ -312,7 +339,9 @@ After a failure:
 
 1. Start with the original error and the printed record pointers. Inspect the
    run's `agent.log`, `process.json`, context snapshots, prompt, result evidence,
-   and `checks.json` when present. Use the current ticket's record directory
+   and `checks.json` when present. OpenCode's `agent.log` is the complete raw
+   JSON event stream, including details omitted from the terminal preview;
+   Copilot's log remains native text. Use the current ticket's record directory
    when printed; its presence does not prove that the harness ran.
 2. Inspect the current branch, commit history, and working tree; resolve any
    partial work deliberately.

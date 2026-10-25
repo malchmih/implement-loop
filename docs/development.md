@@ -85,6 +85,12 @@ the runner's private module layout. The help smoke test and installation-only
 tests use lightweight isolated homes; installed-command integration tests retain
 real target repositories, including a scenario that invokes the installed link
 from a target-checkout subdirectory.
+
+The OpenCode fake emits representative JSON-lines records from the inspected
+2.1.4 contract, including split-stream and malformed-output cases. Acceptance
+checks observe the rendered CLI output, raw private `agent.log`, and output
+delivered before the fake process exits. Copilot fixtures continue to verify its
+native byte relay and record format.
 CLI references and locally verified versions for native skill loading and
 invocation flags are recorded in [workflow and recovery](usage.md); fake
 executables do not prove that a live model loads a user's skill.
