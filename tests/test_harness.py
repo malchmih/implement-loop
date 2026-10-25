@@ -90,30 +90,45 @@ class HarnessTests(LoopTestCase):
         self.assertEqual((attempt / "agent.log").read_bytes(), raw_output.encode("utf-8"))
 
     def test_opencode_unrecognized_and_malformed_output_stays_visible(self) -> None:
-        raw_output = (
-            '{"type":"future_event","value":"future details"}\n'
-            '{"type":"tool_use","part":{"tool":"odd_tool","state":{"status":[]}}}\n'
-            '{"type":\n'
-            "OpenCode startup diagnostic\n"
-            + json.dumps(
+        raw_lines = [
+            '{"type":"future_event","value":"future details"}',
+            '{"type":"tool_use","part":{"tool":"odd_tool","state":{"status":[]}}}',
+            '{"type":',
+            "OpenCode startup diagnostic",
+            json.dumps({"type": "tool_use", "part": {"state": {"status": "completed"}}}),
+            '{"type":"step_start"}',
+            json.dumps(
                 {
-                    "type": "tool_use",
-                    "part": {"state": {"status": "completed"}},
+                    "type": "step_start",
+                    "timestamp": 1,
+                    "sessionID": "ses",
+                    "part": {"type": "step-start"},
                 }
-            )
-            + "\n"
-            + '{"type":"step_start"}\n'
-            + '{"type":"step_finish","part":{"type":"unexpected"}}\n'
-            + '{"type":"reasoning","part":{"type":"reasoning","text":"secret reasoning"}}\n'
-            + '{"type":"reasoning"}\n'
-            + json.dumps(
+            ),
+            '{"type":"step_finish","part":{"type":"unexpected"}}',
+            json.dumps(
                 {
-                    "type": "text",
-                    "part": {"type": "text", "text": "before\ud800after"},
+                    "type": "step_finish",
+                    "timestamp": 1,
+                    "sessionID": "ses",
+                    "part": {"type": "step-finish"},
                 }
-            )
-            + "\n"
-        )
+            ),
+            json.dumps(
+                {"type": "reasoning", "part": {"type": "reasoning", "text": "secret reasoning"}}
+            ),
+            json.dumps(
+                {
+                    "type": "reasoning",
+                    "timestamp": 1,
+                    "sessionID": "ses",
+                    "part": {"type": "reasoning", "text": "secret reasoning"},
+                }
+            ),
+            '{"type":"reasoning"}',
+            json.dumps({"type": "text", "part": {"type": "text", "text": "before\ud800after"}}),
+        ]
+        raw_output = "\n".join(raw_lines) + "\n"
         self.state["opencode_raw_output"] = raw_output
         self.save_state()
 
@@ -128,9 +143,9 @@ class HarnessTests(LoopTestCase):
         self.assertIn(b"Tool result", result.stdout)
         self.assertIn(b"tool: unknown tool", result.stdout)
         self.assertIn(b"(no output)", result.stdout)
-        self.assertIn(b"OpenCode step_start event", result.stdout)
-        self.assertIn(b"OpenCode step_finish event", result.stdout)
-        self.assertIn(b"OpenCode reasoning event", result.stdout)
+        self.assertEqual(result.stdout.count(b"OpenCode step_start event"), 2)
+        self.assertEqual(result.stdout.count(b"OpenCode step_finish event"), 2)
+        self.assertEqual(result.stdout.count(b"OpenCode reasoning event"), 3)
         self.assertNotIn(b"secret reasoning", result.stdout)
         self.assertIn(b"before?after", result.stdout)
         self.assertNotIn(b"Traceback", result.stdout + result.stderr)
@@ -245,11 +260,35 @@ class HarnessTests(LoopTestCase):
             "sessionID": "ses_split",
             "part": {"type": "text", "text": "雪"},
         }
-        step_event = {"type": "step_start", "timestamp": 0, "sessionID": "ses_split"}
+        step_event = {
+            "type": "step_start",
+            "timestamp": 0,
+            "sessionID": "ses_split",
+            "part": {
+                "id": "prt_step",
+                "sessionID": "ses_split",
+                "messageID": "msg_split",
+                "type": "step-start",
+                "snapshot": {},
+            },
+        }
+        reasoning_event = {
+            "type": "reasoning",
+            "timestamp": 0,
+            "sessionID": "ses_split",
+            "part": {
+                "id": "prt_reasoning",
+                "sessionID": "ses_split",
+                "messageID": "msg_split",
+                "type": "reasoning",
+                "text": "hidden reasoning",
+                "time": {"start": 0, "end": 0},
+            },
+        }
 
         def encode_stream(text: str) -> bytes:
             large_event["part"]["text"] = text
-            records = [step_event, first_event, large_event]
+            records = [step_event, reasoning_event, first_event, large_event]
             lines = [
                 json.dumps(event, ensure_ascii=False, separators=(",", ":")) for event in records
             ]
@@ -331,6 +370,8 @@ class HarnessTests(LoopTestCase):
             visible.extend(remaining)
             self.assertEqual(process.returncode, 0, bytes(visible).decode("utf-8", "replace"))
             self.assertIn("雪".encode(), visible)
+            self.assertNotIn(b"hidden reasoning", visible)
+            self.assertNotIn(b"OpenCode step_start event", visible)
             self.assertIn(b"Final unterminated event", visible)
             self.assertIn(b"unterminated result rendered", visible)
             self.assertEqual((attempts[0] / "agent.log").read_bytes(), raw_bytes)

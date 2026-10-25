@@ -227,16 +227,26 @@ class _OpenCodeRenderer:
         if event_type in {"step_start", "step_finish"}:
             part = payload.get("part")
             expected_part_type = "step-start" if event_type == "step_start" else "step-finish"
-            if isinstance(part, dict) and part.get("type") == expected_part_type:
+            has_terminal_detail = isinstance(part, dict) and (
+                "snapshot" in part if event_type == "step_start" else "reason" in part
+            )
+            if (
+                self._has_event_envelope(record)
+                and isinstance(part, dict)
+                and self._has_part_identity(part, expected_part_type)
+                and has_terminal_detail
+            ):
                 return
             self._render_fallback(f"OpenCode {event_type} event", self._compact(record))
             return
         if event_type == "reasoning":
             part = payload.get("part")
             if (
-                isinstance(part, dict)
-                and part.get("type") == "reasoning"
+                self._has_event_envelope(record)
+                and isinstance(part, dict)
+                and self._has_part_identity(part, "reasoning")
                 and isinstance(part.get("text"), str)
+                and isinstance(part.get("time"), dict)
             ):
                 return
             self._render_fallback("OpenCode reasoning event", "Reasoning content is not displayed.")
@@ -376,6 +386,23 @@ class _OpenCodeRenderer:
 
     def _style(self, text: str, code: str) -> str:
         return f"\x1b[{code}m{text}\x1b[0m" if self._color else text
+
+    @staticmethod
+    def _has_event_envelope(record: dict[str, Any]) -> bool:
+        timestamp = record.get("timestamp")
+        return (
+            isinstance(timestamp, (int, float))
+            and not isinstance(timestamp, bool)
+            and isinstance(record.get("sessionID"), str)
+            and bool(record["sessionID"])
+        )
+
+    @staticmethod
+    def _has_part_identity(part: dict[str, Any], expected_type: str) -> bool:
+        return part.get("type") == expected_type and all(
+            isinstance(part.get(key), str) and bool(part[key])
+            for key in ("id", "sessionID", "messageID")
+        )
 
 
 def run_harness(
