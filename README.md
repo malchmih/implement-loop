@@ -45,14 +45,8 @@ the project's Python 3.11 and locked build dependencies. The installed
 executable includes Python and does not need the source checkout or build tools
 at runtime. Add `~/.local/bin` to `PATH` yourself if needed; the command does
 not edit shell profiles. Installation safely replaces an existing regular
-executable; a failed build or replacement leaves it in place.
-
-If the old source-symlink installer left a link at the destination, inspect the
-default with `ls -l ~/.local/bin/implement-loop` and
-`readlink ~/.local/bin/implement-loop`. Remove it manually only after
-confirming it points to the old checkout (`rm ~/.local/bin/implement-loop` for
-the default prefix). Use the matching `PREFIX/bin` path for a custom prefix.
-`make install` refuses symlinks and directories and does not migrate them.
+executable; a failed build or replacement leaves it in place. `make install`
+refuses to replace a symlink or directory.
 Reinstall after changing the checkout to build and install its current files;
 editing the checkout alone does not update the executable.
 
