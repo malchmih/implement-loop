@@ -852,7 +852,7 @@ class _OpenCodeRenderer:
             input_value, ("description", "task_description", "taskDescription")
         )
         heading = description or title
-        details = self._success_preview(self._delegated_output(tool_name, output))
+        details = self._success_preview(self._delegated_output(tool_name, output, input_value))
         self._render_action_block(
             heading,
             tool_name,
@@ -861,8 +861,7 @@ class _OpenCodeRenderer:
             tool_identity=self._delegated_suffix(tool_name, input_value, metadata),
         )
 
-    @staticmethod
-    def _delegated_output(tool_name: str, output: Any) -> Any:
+    def _delegated_output(self, tool_name: str, output: Any, input_value: Any) -> Any:
         if not isinstance(output, str):
             return output
 
@@ -879,11 +878,21 @@ class _OpenCodeRenderer:
                 return content[: -len(closing)]
 
         if normalized == "task":
-            content = "\n".join(
-                line for line in output.splitlines() if not line.startswith("task_id:")
-            ).strip()
+            content = output.strip()
             opening = "<task_result>"
             closing = "</task_result>"
+            first_line, separator, remainder = content.partition("\n")
+            remainder = remainder.strip()
+            task_id = self._input_value(input_value, ("task_id", "taskId"))
+            if (
+                first_line.startswith("task_id:")
+                and separator
+                and (
+                    (remainder.startswith(opening) and remainder.endswith(closing))
+                    or first_line == f"task_id: {task_id}"
+                )
+            ):
+                content = remainder
             if content.startswith(opening) and content.endswith(closing):
                 return content[len(opening) : -len(closing)].strip()
             return content

@@ -1418,6 +1418,28 @@ class HarnessTests(LoopTestCase):
                     },
                 },
             },
+            {
+                "type": "tool_use",
+                "timestamp": 8,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "task",
+                    "state": {
+                        "status": "completed",
+                        "title": "task",
+                        "input": {
+                            "description": "Preserve task result text",
+                            "subagent_type": "explore",
+                            "task_id": "ses_task_456",
+                            "prompt": "A private task result-body prompt",
+                        },
+                        "output": "<task_result>\n"
+                        "task_id: This is a useful finding.\n"
+                        "A second finding.\n</task_result>",
+                    },
+                },
+            },
         ]
 
         raw_output, visible, runs = self._run_opencode_events(events)
@@ -1450,15 +1472,23 @@ class HarnessTests(LoopTestCase):
         self.assertIn("✓ Run a task (workflow_runner)", visible)
         self.assertNotIn("tool: workflow_runner", visible)
         self.assertNotIn("Delegated: Run a task", visible)
+        self.assertIn(
+            "✓ Preserve task result text (task: explore)\n"
+            "  └ task_id: This is a useful finding.\n"
+            "    A second finding.",
+            visible,
+        )
         for private_value in (
             "A private task prompt",
             "A private subagent prompt",
             "A private explicit-delegation prompt",
             "A private prompt without agent identity",
+            "A private task result-body prompt",
             "ses_child_123",
             "ses_review_child",
             "ses_queue_child",
             "ses_no_agent",
+            "ses_task_456",
             "<task_result>",
             "<subagent ",
             "agent: explore",
