@@ -381,7 +381,7 @@ class _OpenCodeRenderer:
 
         if tool_name.casefold() == "question":
             questions = self._question_prompts(input_value)
-            answers = self._question_answers(metadata, len(questions)) if questions else None
+            answers = self._question_answers(metadata, questions) if questions else None
             if questions is not None and answers is not None and isinstance(output, str):
                 self._render_question_summary(title, tool_name, questions, answers)
                 return
@@ -458,7 +458,7 @@ class _OpenCodeRenderer:
                 return f"Load {skill_name} instructions"
         if normalized_tool == "question":
             questions = self._question_prompts(input_value)
-            answers = self._question_answers(metadata, len(questions)) if questions else None
+            answers = self._question_answers(metadata, questions) if questions else None
             if questions is not None and answers is not None:
                 if len(questions) == 1:
                     return self._bounded_single_line(questions[0]["question"]) or "Answer question"
@@ -600,19 +600,24 @@ class _OpenCodeRenderer:
         return supported
 
     @staticmethod
-    def _question_answers(metadata: Any, question_count: int) -> list[list[str]] | None:
+    def _question_answers(metadata: Any, questions: list[dict[str, Any]]) -> list[list[str]] | None:
         for layer in reversed(_OpenCodeRenderer._metadata_layers(metadata)):
             if "answers" not in layer:
                 continue
             answers = layer.get("answers")
             if (
                 not isinstance(answers, list)
-                or len(answers) != question_count
+                or len(answers) != len(questions)
                 or any(
                     not isinstance(answer, list)
                     or any(not isinstance(value, str) for value in answer)
                     for answer in answers
                 )
+            ):
+                return None
+            if any(
+                question.get("multiple") is not True and len(answer) > 1
+                for question, answer in zip(questions, answers, strict=True)
             ):
                 return None
             return answers

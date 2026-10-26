@@ -685,6 +685,33 @@ class HarnessTests(LoopTestCase):
                     },
                 },
             },
+            {
+                "type": "tool_use",
+                "timestamp": 6,
+                "sessionID": "ses_partial_summaries",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose one database",
+                                    "header": "Database",
+                                    "options": [
+                                        {"label": "PostgreSQL", "description": "Relational"},
+                                        {"label": "SQLite", "description": "Embedded"},
+                                    ],
+                                }
+                            ]
+                        },
+                        "output": "UNSUPPORTED_SINGLE_CHOICE_ANSWERS",
+                        "metadata": {"metadata": {"answers": [["PostgreSQL", "SQLite"]]}},
+                    },
+                },
+            },
         ]
 
         raw_output, visible, runs = self._run_opencode_events(events)
@@ -700,6 +727,11 @@ class HarnessTests(LoopTestCase):
         self.assertIn("✓ Inspect extension question result (question_extension)", visible)
         self.assertIn("EXTENSION_QUESTION_RESULT", visible)
         self.assertIn("LONG_HEADER_QUESTION_RESULT", visible)
+        self.assertIn("✓ Use tool (question)", visible)
+        unsupported_answers = next(
+            block for block in visible.split("\n\n") if "UNSUPPORTED_SINGLE_CHOICE_ANSWERS" in block
+        )
+        self.assertNotIn("Selected PostgreSQL, SQLite", unsupported_answers)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
 
