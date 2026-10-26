@@ -87,6 +87,13 @@ class MakeInstallCommandTests(TemporaryHomeTestCase):
             timeout=30,
         )
 
+    def _write_existing_executable(self, prefix: Path) -> Path:
+        installed = prefix / "bin/implement-loop"
+        installed.parent.mkdir(parents=True)
+        installed.write_text("previous working executable\n")
+        installed.chmod(0o755)
+        return installed
+
     def test_make_install_builds_and_installs_default_user_executable(self) -> None:
         result = self._run_make_install()
 
@@ -157,10 +164,7 @@ class MakeInstallCommandTests(TemporaryHomeTestCase):
 
     def test_make_install_build_failure_preserves_existing_executable(self) -> None:
         prefix = self.home / "existing install prefix"
-        installed = prefix / "bin/implement-loop"
-        installed.parent.mkdir(parents=True)
-        installed.write_text("previous working executable\n")
-        installed.chmod(0o755)
+        installed = self._write_existing_executable(prefix)
         failed_build_env = dict(self.env)
         failed_build_env["IMPLEMENT_LOOP_TEST_BUILD_FAIL"] = "1"
 
@@ -173,10 +177,7 @@ class MakeInstallCommandTests(TemporaryHomeTestCase):
 
     def test_make_install_replacement_failure_preserves_existing_executable(self) -> None:
         prefix = self.home / "existing install prefix"
-        installed = prefix / "bin/implement-loop"
-        installed.parent.mkdir(parents=True)
-        installed.write_text("previous working executable\n")
-        installed.chmod(0o755)
+        installed = self._write_existing_executable(prefix)
         failed_replacement_env = dict(self.env)
         failed_replacement_env["IMPLEMENT_LOOP_TEST_REPLACEMENT_FAIL"] = "1"
 
