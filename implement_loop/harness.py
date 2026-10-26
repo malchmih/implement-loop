@@ -504,8 +504,12 @@ class _OpenCodeRenderer:
         ]
         for connector, detail in details:
             detail_lines = detail.splitlines() or [""]
-            lines.append(f"  {self._style(connector, '2')} {detail_lines[0]}")
-            lines.extend(f"    {line}" for line in detail_lines[1:])
+            for index, detail_line in enumerate(detail_lines):
+                if connector == "└":
+                    line_connector = "└" if index == len(detail_lines) - 1 else "│"
+                else:
+                    line_connector = connector if index == 0 else "│"
+                lines.append(f"  {self._style(line_connector, '2')} {detail_line}")
         self._render_block(lines)
 
     @staticmethod
