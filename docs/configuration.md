@@ -85,9 +85,11 @@ by the checkout, the home directory itself, and filesystem root.
 
 Run and ticket records can contain repository paths, issue and comment snapshots,
 prompts, full harness output, process results, and completion evidence. Treat
-them as sensitive. The full output is in the ticket's `agent.log`; OpenCode
-records raw harness output and Copilot preserves its native text. Run and attempt
-directories are private (`0700`), and files are private (`0600`).
+them as sensitive. When log persistence succeeds, the full output is in the
+ticket's `agent.log`; a log-write failure is reported and can leave it
+incomplete. OpenCode records raw harness output and Copilot preserves its native
+text. Run and attempt directories are private (`0700`), and files are private
+(`0600`).
 
 ## Retention
 
