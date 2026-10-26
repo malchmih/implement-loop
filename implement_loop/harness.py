@@ -463,13 +463,17 @@ class _OpenCodeRenderer:
         return summary if len(summary) <= 240 else summary[:237] + "..."
 
     @staticmethod
+    def _bounded_single_line(value: str) -> str | None:
+        rendered = " ".join(value.split())
+        if not rendered:
+            return None
+        return rendered if len(rendered) <= 240 else rendered[:237] + "..."
+
+    @staticmethod
     def _input_string(input_value: Any, key: str) -> str | None:
         if not isinstance(input_value, dict) or not isinstance(input_value.get(key), str):
             return None
-        value = " ".join(input_value[key].split())
-        if not value:
-            return None
-        return value if len(value) <= 240 else value[:237] + "..."
+        return _OpenCodeRenderer._bounded_single_line(input_value[key])
 
     def _failure_detail(self, error: Any, output: Any) -> str:
         error_text = self._display_value(error) if error is not None else ""
@@ -575,10 +579,14 @@ class _OpenCodeRenderer:
             return None
         for key in keys:
             value = input_value.get(key)
-            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
-                rendered = " ".join(str(value).split())
-                if rendered:
-                    return rendered if len(rendered) <= 240 else rendered[:237] + "..."
+            if isinstance(value, str):
+                rendered = _OpenCodeRenderer._bounded_single_line(value)
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                rendered = _OpenCodeRenderer._bounded_single_line(str(value))
+            else:
+                rendered = None
+            if rendered is not None:
+                return rendered
         return None
 
     @staticmethod
