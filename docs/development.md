@@ -38,11 +38,10 @@ includes its Python runtime and runs independently of the source checkout.
 PyInstaller's local ad-hoc signing needs no Developer ID credentials or
 notarization; a downloaded copy may still encounter Gatekeeper restrictions.
 
-`make install` runs this build and installs a regular executable at
-`$(PREFIX)/bin/implement-loop`, defaulting to `~/.local/bin/implement-loop`. Set
-`PREFIX` to choose another prefix. It safely replaces a regular executable but
-refuses symlinks and directories; users of the old source-symlink installer
-must inspect and remove that link manually. Rebuild and reinstall to update the
+`make install` runs this build and installs to `$(PREFIX)/bin/implement-loop`,
+defaulting to `~/.local/bin/implement-loop`. Set `PREFIX` to choose another
+prefix. See the [README](../README.md#install-and-run) for operator install,
+upgrade, and old-symlink instructions. Rebuild and reinstall to update the
 installed command after editing the checkout.
 
 Contributors may install the optional pinned tools with `mise install` (uv and
@@ -157,6 +156,5 @@ question prompt/answer schemas. Their CLI tests cover instruction-payload
 suppression with raw-log retention, single and multiple questions, selected and
 free-form answers, empty answers, partial/unsupported fallback, incomplete
 interactions, and complete failure details.
-CLI references and locally verified versions for native skill loading and
-invocation flags are recorded in [workflow and recovery](usage.md); fake
+See [workflow prerequisites and skill setup](usage.md#before-a-run); fake
 executables do not prove that a live model loads a user's skill.

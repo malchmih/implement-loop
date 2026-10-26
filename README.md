@@ -3,9 +3,9 @@
 Implement prepared direct child GitHub issues sequentially from the target
 checkout. The standalone executable is supported on Apple silicon macOS. Linux
 remains supported through source execution with Python 3.11+. A run also needs
-Git, `gh` with an authenticated GitHub CLI session, the selected harness CLI
-(OpenCode V2 by default; Copilot is optional), and the external `implement`
-skill.
+Git, an authenticated `gh` session, a supported harness CLI, and the external
+`implement` skill. See [workflow prerequisites](docs/usage.md#before-a-run) for
+setup and permissions.
 
 ## Install and run
 
@@ -22,15 +22,17 @@ The default destination is `~/.local/bin/implement-loop`. `make` and
 the project's Python 3.11 and locked build dependencies. The installed
 executable includes Python and does not need the source checkout or build tools
 at runtime. Add `~/.local/bin` to `PATH` yourself if needed; the command does
-not edit shell profiles.
+not edit shell profiles. Installation safely replaces an existing regular
+executable; a failed build or replacement leaves it in place.
 
-If you previously used the source installer, it left a symlink in the bin
-directory. Inspect it with `ls -l` and `readlink`, then remove it manually only
-after confirming it is the old source-checkout link (for the default prefix,
-`rm ~/.local/bin/implement-loop`). `make install` refuses all existing
-symlinks and directories and does not migrate them. Reinstall after changing
-the checkout to build and install its current files; editing the checkout alone
-does not update the executable.
+If the old source-symlink installer left a link at the destination, inspect the
+default with `ls -l ~/.local/bin/implement-loop` and
+`readlink ~/.local/bin/implement-loop`. Remove it manually only after
+confirming it points to the old checkout (`rm ~/.local/bin/implement-loop` for
+the default prefix). Use the matching `PREFIX/bin` path for a custom prefix.
+`make install` refuses symlinks and directories and does not migrate them.
+Reinstall after changing the checkout to build and install its current files;
+editing the checkout alone does not update the executable.
 
 After installation on macOS, run the command from the target repository:
 
@@ -68,15 +70,11 @@ preview builds, not Developer ID-signed or notarized releases; macOS Gatekeeper
 may warn or block them. Only run an artifact from a workflow and revision you
 trust, and do not disable Gatekeeper globally.
 
-The default limit is five harness invocations. Only the selected harness CLI is
-required.
-
-Run only against trusted repositories, skills, and issue content: this is local
-automation, not a sandbox, and agent guidance is not an enforcement boundary. The
-wrapper closes issues after a clean-checkout check and, by default, a new local
-commit; it does not push commits, open PRs, or merge work. Completion includes the
-external skill's validation/review and result-file attestation, not independent
-proof of semantic correctness.
+Run only against trusted repositories, skills, and issue content. This local
+automation is not a sandbox. After a successful run, the wrapper closes issues
+only after its completion checks; it does not push commits, open PRs, or merge
+work. The external skill's validation/review and result-file attestation are not
+independent proof of semantic correctness.
 
 - [Configuration and private records](docs/configuration.md)
 - [Workflow and recovery](docs/usage.md)
