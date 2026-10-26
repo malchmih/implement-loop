@@ -69,8 +69,8 @@ repeat the static and behavioral suites already required for PRs. A failed
 packaged job cannot reach the release job, leaving the previous download intact.
 
 Only the main-push publication job has repository-content write permission. It
-serializes release updates and skips a build when its commit is no longer the
-current `main` head. PR and manual runs cannot publish. The
+serializes main build/publication runs and skips publishing when its commit is no
+longer the current `main` head. PR and manual runs cannot publish. The
 [README](../README.md#download-the-rolling-macos-build) has the stable download,
 extraction, runtime requirements, and Gatekeeper guidance. The packaged smoke
 test installs through the public Make targets and exercises the executable

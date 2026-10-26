@@ -26,8 +26,8 @@ The archive preserves the executable permission. From a target repository, run
 silicon macOS executable includes its Python runtime, so Python and build tools
 are not needed at runtime. It still requires Git, an authenticated `gh` session,
 a supported harness CLI, and the external `implement` skill. The binary is
-unsigned and not notarized; macOS Gatekeeper may warn or block it. Do not disable
-Gatekeeper globally.
+not Developer ID-signed or notarized; macOS Gatekeeper may warn or block it. Do
+not disable Gatekeeper globally.
 
 ### Build and install from source
 

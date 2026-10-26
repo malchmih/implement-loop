@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Serialize the build and its publisher together; otherwise an older, slower
+# package job could displace a newer publisher from the concurrency queue.
+concurrency:
+  group: rolling-macos-prerelease
+  cancel-in-progress: false
+
 jobs:
   packaged:
     name: macOS arm64 executable
@@ -40,9 +46,6 @@ jobs:
     permissions:
       actions: read
       contents: write
-    concurrency:
-      group: rolling-macos-prerelease
-      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
