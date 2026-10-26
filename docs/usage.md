@@ -131,9 +131,10 @@ rm "$lock/pid"
 rmdir "$lock"
 ```
 
-Each run record also has an `active.pid` marker. Retention keeps a run while the
-marker exists, even if it looks stale. Inspect its owner and related work before
-removing only that run's marker:
+An active Loop run has an `active.pid` marker in its run record; interruption
+before cleanup can leave it behind. Retention keeps a marked run, even if the
+marker looks stale. Inspect its owner and related work before removing only
+that run's marker:
 
 ```bash
 marker="/path/to/run-record/active.pid"

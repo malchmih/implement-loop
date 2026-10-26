@@ -70,11 +70,8 @@ preview builds, not Developer ID-signed or notarized releases; macOS Gatekeeper
 may warn or block them. Only run an artifact from a workflow and revision you
 trust, and do not disable Gatekeeper globally.
 
-Run only against trusted repositories, skills, and issue content. This local
-automation is not a sandbox. After a successful run, the wrapper closes issues
-only after its completion checks; it does not push commits, open PRs, or merge
-work. The external skill's validation/review and result-file attestation are not
-independent proof of semantic correctness.
+Before running, review [permissions, commits, and closure](docs/usage.md#permissions-commits-and-closure)
+for trust, permission, side-effect, and completion limits.
 
 - [Configuration and private records](docs/configuration.md)
 - [Workflow and recovery](docs/usage.md)
