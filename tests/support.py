@@ -242,6 +242,21 @@ if tool_name in ("copilot", "opencode"):
                     },
                 },
             })
+            if os.environ.get("IMPLEMENT_LOOP_TEST_LIVE_FAILURE") == "1":
+                write_opencode_event({
+                    "type": "tool_use",
+                    "timestamp": 2,
+                    "sessionID": "ses_live_fixture",
+                    "part": {
+                        "type": "tool",
+                        "tool": "live_failure",
+                        "state": {
+                            "status": "error",
+                            "title": "Live failed tool",
+                            "error": "live failure details",
+                        },
+                    },
+                })
         else:
             sys.stdout.write(live_fragment)
             sys.stdout.flush()
@@ -763,7 +778,12 @@ class LoopTestCase(TemporaryHomeTestCase):
             output.extend(chunk)
 
     def _assert_live_harness_output(
-        self, harness: str, *, terminal: bool, no_color: bool = False
+        self,
+        harness: str,
+        *,
+        terminal: bool,
+        no_color: bool = False,
+        include_failure: bool = False,
     ) -> None:
         ready_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         ready_listener.bind(("127.0.0.1", 0))
@@ -778,6 +798,8 @@ class LoopTestCase(TemporaryHomeTestCase):
             env = dict(self.env)
             env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT"] = LIVE_OUTPUT_FRAGMENT.decode("ascii")
             env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"] = str(ready_listener.getsockname()[1])
+            if include_failure:
+                env["IMPLEMENT_LOOP_TEST_LIVE_FAILURE"] = "1"
             if no_color:
                 env["NO_COLOR"] = ""
             if terminal:
@@ -824,6 +846,13 @@ class LoopTestCase(TemporaryHomeTestCase):
                 LIVE_OUTPUT_FRAGMENT,
                 timeout=LIVE_OUTPUT_TIMEOUT,
             )
+            if include_failure:
+                self._read_until_output(
+                    output_descriptor,
+                    output,
+                    b"Live failed tool",
+                    timeout=LIVE_OUTPUT_TIMEOUT,
+                )
 
             self.assertIsNone(process.poll(), "harness exited before the test released it")
             attempt_dirs = list(
@@ -834,13 +863,27 @@ class LoopTestCase(TemporaryHomeTestCase):
             self.assertTrue((attempt_dir.parent / "active.pid").is_file())
             self.assertIn(LIVE_OUTPUT_FRAGMENT, output)
             if harness == "opencode":
-                self.assertIn(b"tool: live_tool", output)
                 if terminal and not no_color:
-                    self.assertIn(b"\x1b[32m\xe2\x9c\x93\x1b[0m \x1b[1mLive completed tool", output)
-                    self.assertIn(b"\x1b[1mLive completed tool", output)
+                    self.assertIn(
+                        b"\x1b[32m\xe2\x9c\x93\x1b[0m "
+                        b"\x1b[1mLive completed tool\x1b[0m "
+                        b"\x1b[2m(live_tool)\x1b[0m",
+                        output,
+                    )
+                    self.assertIn(b'  \x1b[2m\xe2\x94\x82\x1b[0m {"fixture":"live"}', output)
                 else:
-                    self.assertIn(b"\xe2\x9c\x93 Live completed tool", output)
+                    self.assertIn(b"\xe2\x9c\x93 Live completed tool (live_tool)", output)
                     self.assertNotIn(b"\x1b[", output)
+                if include_failure:
+                    if terminal and not no_color:
+                        self.assertIn(
+                            b"\x1b[31m\xe2\x9c\x97\x1b[0m "
+                            b"\x1b[1mLive failed tool\x1b[0m "
+                            b"\x1b[2m(live_failure)\x1b[0m",
+                            output,
+                        )
+                    else:
+                        self.assertIn("✗ Live failed tool (live_failure)".encode(), output)
                 expected_event = {
                     "type": "tool_use",
                     "timestamp": 1,
@@ -856,8 +899,27 @@ class LoopTestCase(TemporaryHomeTestCase):
                         },
                     },
                 }
-                expected_log = (
-                    json.dumps(expected_event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                expected_events = [expected_event]
+                if include_failure:
+                    expected_events.append(
+                        {
+                            "type": "tool_use",
+                            "timestamp": 2,
+                            "sessionID": "ses_live_fixture",
+                            "part": {
+                                "type": "tool",
+                                "tool": "live_failure",
+                                "state": {
+                                    "status": "error",
+                                    "title": "Live failed tool",
+                                    "error": "live failure details",
+                                },
+                            },
+                        }
+                    )
+                expected_log = "".join(
+                    json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                    for event in expected_events
                 ).encode("utf-8")
                 self.assertEqual((attempt_dir / "agent.log").read_bytes(), expected_log)
             else:

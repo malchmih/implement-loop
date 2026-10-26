@@ -89,11 +89,29 @@ from a target-checkout subdirectory.
 The OpenCode fake emits representative JSON-lines records from the inspected
 2.1.4 contract, including split-stream and malformed-output cases. Acceptance
 checks observe the rendered CLI output, raw private `agent.log`, and output
-delivered before the fake process exits. Fixtures also check that successful
-read/search results and identifiable parent-level delegation are summarized
-without losing their full raw events, while ambiguous tools keep the generic
-fallback. Copilot fixtures continue to verify its native byte relay and record
-format.
+delivered before the fake process exits. CLI fixtures cover unchanged assistant
+text, the shared tool-block layout, bounded shell and generic previews, full
+failure details, wrapper styling policy, and pass-through of tool-supplied ANSI
+sequences. Read fixtures cover file, directory, and media-shaped events,
+metadata-supplied zero/reliable counts, truncated or missing counts, and content
+suppression without changing raw events. Search fixtures cover verified `grep`,
+`glob`, and `websearch` inputs, natural query/scope/filter details, count
+semantics, omitted result dumps, and generic fallback for unsupported shapes.
+Delegation fixtures cover `task`, `subagent`, explicit delegation metadata,
+missing agent identity, ID/wrapper omission, bounded result previews, and
+unrecognized tools that must keep their generic results. Failure fixtures verify
+complete read/search/delegation error and output details. Copilot fixtures
+continue to verify its native byte relay and record format.
+File-modification and web-fetch fixtures follow the verified OpenCode 2.1.4
+schemas for `patch`, `edit`, `write`, and `webfetch`. Their integration tests
+cover result previews, patch-only success-header removal, first-line
+preservation, unsupported-shape fallback, full failures, tool-supplied colors,
+and raw-log retention of filtered or omitted content.
+Skill and question fixtures follow the verified OpenCode 2.1.4 built-in tool and
+question prompt/answer schemas. Their CLI tests cover instruction-payload
+suppression with raw-log retention, single and multiple questions, selected and
+free-form answers, empty answers, partial/unsupported fallback, incomplete
+interactions, and complete failure details.
 CLI references and locally verified versions for native skill loading and
 invocation flags are recorded in [workflow and recovery](usage.md); fake
 executables do not prove that a live model loads a user's skill.

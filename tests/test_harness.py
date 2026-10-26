@@ -48,12 +48,15 @@ class HarnessTests(LoopTestCase):
         self.assertTrue((runs[0] / "attempt-2-ticket-3/agent.log").is_file())
 
     def test_opencode_renders_completed_text_and_generic_tool_blocks(self) -> None:
+        assistant_text = (
+            "Assistant wording stays unchanged.\n\n**Assistant Markdown stays unchanged.**"
+        )
         events = [
             {
                 "type": "text",
                 "timestamp": 1,
                 "sessionID": "ses_fixture",
-                "part": {"type": "text", "text": "Assistant wording stays unchanged."},
+                "part": {"type": "text", "text": assistant_text},
             },
             {
                 "type": "tool_use",
@@ -78,11 +81,13 @@ class HarnessTests(LoopTestCase):
         result, runs = self.run_loop("--max-iterations", "1", harness=None)
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertIn(b"Assistant wording stays unchanged.", result.stdout)
-        self.assertIn(b"Assistant\nAssistant wording stays unchanged.\n\n", result.stdout)
-        self.assertIn(b"\xe2\x9c\x93 Inspect fixture", result.stdout)
-        self.assertIn(b"tool: example_tool", result.stdout)
-        self.assertIn(b"result line", result.stdout)
+        expected_tool_block = (
+            '✓ Inspect fixture (example_tool)\n  │ {"target":"the fixture"}\n  └ result line'
+        )
+        self.assertIn((assistant_text + "\n\n" + expected_tool_block).encode(), result.stdout)
+        self.assertNotIn(b"Assistant\n", result.stdout)
+        self.assertNotIn(b"tool: example_tool", result.stdout)
+        self.assertNotIn(b"input:", result.stdout)
         self.assertNotIn(b"\x1b[", result.stdout)
         self.assertNotIn(b'"type": "tool_use"', result.stdout)
         self.assertEqual(result.stdout.count(b"OpenCode: github-copilot"), 1)
@@ -93,6 +98,28 @@ class HarnessTests(LoopTestCase):
         raw_lines = [
             '{"type":"future_event","value":"future details"}',
             '{"type":"tool_use","part":{"tool":"odd_tool","state":{"status":[]}}}',
+            json.dumps(
+                {
+                    "type": "tool_use",
+                    "part": {
+                        "tool": "running_tool",
+                        "state": {
+                            "status": "running",
+                            "title": "Running action",
+                            "output": "not a completed result",
+                        },
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "tool_use",
+                    "part": {
+                        "tool": "pending_tool",
+                        "state": {"status": "pending", "title": "Pending action"},
+                    },
+                }
+            ),
             '{"type":',
             "OpenCode startup diagnostic",
             json.dumps({"type": "tool_use", "part": {"state": {"status": "completed"}}}),
@@ -245,11 +272,12 @@ class HarnessTests(LoopTestCase):
         self.assertIn(b"OpenCode event: future_event", result.stdout)
         self.assertIn(b"future details", result.stdout)
         self.assertIn(b"OpenCode tool event", result.stdout)
+        self.assertNotIn("✓ Running action".encode(), result.stdout)
+        self.assertNotIn("✓ Pending action".encode(), result.stdout)
         self.assertIn(b"OpenCode diagnostic", result.stdout)
         self.assertIn(b"OpenCode startup diagnostic", result.stdout)
-        self.assertIn(b"Tool result", result.stdout)
-        self.assertIn(b"tool: unknown tool", result.stdout)
-        self.assertIn(b"(no output)", result.stdout)
+        self.assertIn(b"Use tool (unknown tool)", result.stdout)
+        self.assertIn(b"No output", result.stdout)
         self.assertEqual(result.stdout.count(b"OpenCode step_start event"), 3)
         self.assertEqual(result.stdout.count(b"OpenCode step_finish event"), 4)
         self.assertEqual(result.stdout.count(b"OpenCode reasoning event"), 5)
@@ -295,7 +323,10 @@ class HarnessTests(LoopTestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         visible = result.stdout.decode("utf-8")
-        self.assertIn("(no output)", visible)
+        self.assertIn(
+            '✓ Preview empty (unfamiliar_tool)\n  │ {"target":"Preview empty"}\n  └ No output',
+            visible,
+        )
         for index in range(1, 4):
             self.assertIn(f"three-{index}", visible)
         for index in range(1, 6):
@@ -304,16 +335,1018 @@ class HarnessTests(LoopTestCase):
         self.assertNotIn("seven-6", visible)
         self.assertNotIn("seven-7", visible)
         self.assertIn("... 2 additional line(s) omitted", visible)
-        self.assertIn("tool: unfamiliar_tool", visible)
+        self.assertIn("✓ Preview seven (unfamiliar_tool)", visible)
+        self.assertIn('  │ {"target":"Preview seven"}', visible)
+        self.assertNotIn("tool:", visible)
+        self.assertNotIn("input:", visible)
+        self.assertNotIn("output:", visible)
         attempt = runs[0] / "attempt-1-ticket-2"
         log = attempt / "agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
         self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
         self.assertIn(b"seven-6", log.read_bytes())
 
-    def test_opencode_successful_file_reads_summarize_target_without_displaying_contents(
+    def test_opencode_generic_extension_result_uses_bounded_input_fallback(self) -> None:
+        event = {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_extension",
+            "part": {
+                "type": "tool",
+                "tool": "extension.browser",
+                "state": {
+                    "status": "completed",
+                    "title": "Inspect browser response",
+                    "input": {"url": "https://example.invalid", "details": "x" * 500},
+                    "output": "Browser result stays generic.",
+                },
+            },
+        }
+
+        raw_output, visible, runs = self._run_opencode_events([event])
+
+        self.assertIn("✓ Inspect browser response (extension.browser)", visible)
+        block = next(
+            block for block in visible.split("\n\n") if "Inspect browser response" in block
+        )
+        input_line = next(line for line in block.splitlines() if line.startswith("  │ "))
+        input_summary = input_line.removeprefix("  │ ")
+        self.assertLessEqual(len(input_summary), 240)
+        self.assertTrue(input_summary.endswith("..."))
+        self.assertIn("https://example.invalid", input_summary)
+        self.assertIn("Browser result stays generic.", block)
+        self.assertNotIn("tool:", block)
+        self.assertNotIn("input:", block)
+        self.assertNotIn("output:", block)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+
+    def test_opencode_successful_skill_loads_suppress_instructions_and_keep_raw_event(self) -> None:
+        instruction_payload = (
+            '<skill_content name="Test-driven development">\n'
+            "PRIVATE_SKILL_INSTRUCTIONS\n"
+            "PRIVATE_SKILL_REFERENCE\n"
+            "</skill_content>"
+        )
+        event = {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_skill",
+            "part": {
+                "type": "tool",
+                "tool": "skill",
+                "state": {
+                    "status": "completed",
+                    "title": "skill",
+                    "input": {"id": "tdd"},
+                    "output": instruction_payload,
+                    "metadata": {
+                        "metadata": {
+                            "name": "Test-driven development",
+                            "directory": "/skills/tdd",
+                        },
+                        "content": [{"type": "text", "text": instruction_payload}],
+                        "rawInput": '{"id":"tdd"}',
+                    },
+                },
+            },
+        }
+
+        raw_output, visible, runs = self._run_opencode_events([event])
+
+        self.assertIn(
+            "✓ Load Test-driven development instructions (skill)\n  └ Loaded tdd",
+            visible,
+        )
+        self.assertNotIn("PRIVATE_SKILL_INSTRUCTIONS", visible)
+        self.assertNotIn("PRIVATE_SKILL_REFERENCE", visible)
+        self.assertNotIn("<skill_content", visible)
+        self.assertNotIn('{"id":"tdd"}', visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+        self.assertIn(b"PRIVATE_SKILL_INSTRUCTIONS", log.read_bytes())
+        self.assertIn(b"PRIVATE_SKILL_REFERENCE", log.read_bytes())
+
+    def test_opencode_successful_questions_show_supplied_answers_and_keep_question_relationships(
         self,
     ) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_question",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a database",
+                                    "header": "Database",
+                                    "options": [
+                                        {
+                                            "label": "PostgreSQL",
+                                            "description": "Relational database",
+                                        },
+                                        {"label": "SQLite", "description": "Embedded database"},
+                                    ],
+                                }
+                            ]
+                        },
+                        "output": "PRIVATE_QUESTION_MODEL_TEXT",
+                        "metadata": {"metadata": {"answers": [["PostgreSQL"]]}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_question",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Which databases do you prefer?",
+                                    "header": "Databases",
+                                    "options": [
+                                        {"label": "PostgreSQL", "description": "Relational"},
+                                        {"label": "SQLite", "description": "Embedded"},
+                                    ],
+                                    "multiple": True,
+                                },
+                                {
+                                    "question": "What must the migration preserve?",
+                                    "header": "Constraints\nand risks",
+                                    "options": [],
+                                },
+                                {
+                                    "question": "Choose a deployment region",
+                                    "header": "Region",
+                                    "options": [
+                                        {"label": "EU West", "description": "Europe"},
+                                        {"label": "US East", "description": "North America"},
+                                    ],
+                                },
+                            ]
+                        },
+                        "output": "PRIVATE_MULTI_QUESTION_MODEL_TEXT",
+                        "metadata": {
+                            "metadata": {
+                                "answers": [
+                                    ["PostgreSQL", "SQLite"],
+                                    ["Keep the current table names; preserve naïve labels."],
+                                    ["EU West"],
+                                ]
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_question",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Share optional notes",
+                                    "header": "Notes",
+                                    "options": [],
+                                }
+                            ]
+                        },
+                        "output": "PRIVATE_NO_ANSWER_MODEL_TEXT",
+                        "metadata": {"metadata": {"answers": [[]]}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 4,
+                "sessionID": "ses_question",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Submit a blank note",
+                                    "header": "Notes",
+                                    "options": [],
+                                }
+                            ]
+                        },
+                        "output": "PRIVATE_EMPTY_STRING_QUESTION_OUTPUT",
+                        "metadata": {"metadata": {"answers": [[""]]}},
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn(
+            "✓ Choose a database (question)\n  └ Selected PostgreSQL",
+            visible,
+        )
+        self.assertIn(
+            "✓ Answer 3 questions (question)\n"
+            "  ├ Databases: Which databases do you prefer?\n"
+            "    Selected PostgreSQL, SQLite\n"
+            "  ├ Constraints and risks: What must the migration preserve?\n"
+            "    Keep the current table names; preserve naïve labels.\n"
+            "  └ Region: Choose a deployment region\n"
+            "    Selected EU West",
+            visible,
+        )
+        self.assertIn(
+            "✓ Share optional notes (question)\n  └ No answer supplied",
+            visible,
+        )
+        self.assertIn(
+            '✓ Submit a blank note (question)\n  └ ""',
+            visible,
+        )
+        self.assertNotIn("PRIVATE_QUESTION_MODEL_TEXT", visible)
+        self.assertNotIn("PRIVATE_MULTI_QUESTION_MODEL_TEXT", visible)
+        self.assertNotIn("PRIVATE_NO_ANSWER_MODEL_TEXT", visible)
+        self.assertNotIn("PRIVATE_EMPTY_STRING_QUESTION_OUTPUT", visible)
+        self.assertNotIn("Relational database", visible)
+        self.assertNotIn("Embedded database", visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+        self.assertIn(b"PRIVATE_QUESTION_MODEL_TEXT", log.read_bytes())
+        self.assertIn(b"PRIVATE_MULTI_QUESTION_MODEL_TEXT", log.read_bytes())
+        self.assertIn(b"PRIVATE_NO_ANSWER_MODEL_TEXT", log.read_bytes())
+        self.assertIn(b"PRIVATE_EMPTY_STRING_QUESTION_OUTPUT", log.read_bytes())
+        self.assertIn("preserve naïve labels".encode(), log.read_bytes())
+
+    def test_opencode_partial_skill_and_question_schemas_keep_generic_results(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_partial_summaries",
+                "part": {
+                    "type": "tool",
+                    "tool": "skill",
+                    "state": {
+                        "status": "completed",
+                        "title": "skill",
+                        "input": {"id": "incomplete-skill"},
+                        "output": "PARTIAL_SKILL_RESULT",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_partial_summaries",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a database",
+                                    "header": "Database",
+                                    "options": [
+                                        {"label": "PostgreSQL", "description": "Relational"},
+                                    ],
+                                }
+                            ]
+                        },
+                        "output": "PARTIAL_QUESTION_RESULT",
+                        "metadata": {"metadata": {"answers": []}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_partial_summaries",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a database",
+                                    "header": "Database",
+                                    "options": [],
+                                    "extra": "unsupported prompt field",
+                                }
+                            ]
+                        },
+                        "output": "UNSUPPORTED_QUESTION_RESULT",
+                        "metadata": {"metadata": {"answers": [["PostgreSQL"]]}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 4,
+                "sessionID": "ses_partial_summaries",
+                "part": {
+                    "type": "tool",
+                    "tool": "question_extension",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect extension question result",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a database",
+                                    "header": "Database",
+                                    "options": [],
+                                }
+                            ]
+                        },
+                        "output": "EXTENSION_QUESTION_RESULT",
+                        "metadata": {"metadata": {"answers": [["PostgreSQL"]]}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 5,
+                "sessionID": "ses_partial_summaries",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a backend",
+                                    "header": "A question header longer than thirty characters",
+                                    "options": [],
+                                }
+                            ]
+                        },
+                        "output": "LONG_HEADER_QUESTION_RESULT",
+                        "metadata": {"metadata": {"answers": [["PostgreSQL"]]}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 6,
+                "sessionID": "ses_partial_summaries",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose one database",
+                                    "header": "Database",
+                                    "options": [
+                                        {"label": "PostgreSQL", "description": "Relational"},
+                                        {"label": "SQLite", "description": "Embedded"},
+                                    ],
+                                }
+                            ]
+                        },
+                        "output": "UNSUPPORTED_SINGLE_CHOICE_ANSWERS",
+                        "metadata": {"metadata": {"answers": [["PostgreSQL", "SQLite"]]}},
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn("✓ Use tool (skill)", visible)
+        self.assertNotIn("Loaded incomplete-skill", visible)
+        self.assertIn("PARTIAL_SKILL_RESULT", visible)
+        self.assertIn("✓ Use tool (question)", visible)
+        self.assertNotIn("Selected PostgreSQL", visible)
+        self.assertIn("PARTIAL_QUESTION_RESULT", visible)
+        self.assertIn("✓ Use tool (question)", visible)
+        self.assertIn("UNSUPPORTED_QUESTION_RESULT", visible)
+        self.assertIn("✓ Inspect extension question result (question_extension)", visible)
+        self.assertIn("EXTENSION_QUESTION_RESULT", visible)
+        self.assertIn("LONG_HEADER_QUESTION_RESULT", visible)
+        self.assertIn("✓ Use tool (question)", visible)
+        unsupported_answers = next(
+            block for block in visible.split("\n\n") if "UNSUPPORTED_SINGLE_CHOICE_ANSWERS" in block
+        )
+        self.assertNotIn("Selected PostgreSQL, SQLite", unsupported_answers)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+
+    def test_opencode_incomplete_questions_do_not_get_success_summaries(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_incomplete_question",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "running",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a pending database",
+                                    "header": "Database",
+                                    "options": [
+                                        {"label": "PostgreSQL", "description": "Relational"},
+                                    ],
+                                }
+                            ]
+                        },
+                        "output": "PENDING_QUESTION_OUTPUT",
+                        "metadata": {"metadata": {"answers": [["PostgreSQL"]]}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_incomplete_question",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "cancelled",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a cancelled region",
+                                    "header": "Region",
+                                    "options": [{"label": "EU", "description": "Europe"}],
+                                }
+                            ]
+                        },
+                        "output": "CANCELLED_QUESTION_OUTPUT",
+                        "metadata": {"metadata": {"answers": [["EU"]]}},
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertNotIn("✓ Choose a pending database (question)", visible)
+        self.assertNotIn("✓ Choose a cancelled region (question)", visible)
+        self.assertNotIn("Selected PostgreSQL", visible)
+        self.assertNotIn("Selected EU", visible)
+        self.assertIn("OpenCode tool event", visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+
+    def test_opencode_failed_skill_and_question_calls_keep_full_evidence(self) -> None:
+        skill_error = "\n".join(f"SKILL_ERROR_LINE_{line}" for line in range(1, 7))
+        skill_output = "\n".join(f"SKILL_OUTPUT_LINE_{line}" for line in range(1, 7))
+        question_error = "\n".join(f"QUESTION_ERROR_LINE_{line}" for line in range(1, 7))
+        question_output = "\n".join(f"QUESTION_OUTPUT_LINE_{line}" for line in range(1, 7))
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_summary_failures",
+                "part": {
+                    "type": "tool",
+                    "tool": "skill",
+                    "state": {
+                        "status": "error",
+                        "title": "skill",
+                        "input": {"id": "tdd"},
+                        "error": skill_error,
+                        "output": skill_output,
+                        "metadata": {
+                            "metadata": {
+                                "name": "Test-driven development",
+                                "directory": "/skills/tdd",
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_summary_failures",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "error",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a database",
+                                    "header": "Database",
+                                    "options": [
+                                        {"label": "PostgreSQL", "description": "Relational"},
+                                    ],
+                                }
+                            ]
+                        },
+                        "error": question_error,
+                        "output": question_output,
+                        "metadata": {"metadata": {"answers": [["PostgreSQL"]]}},
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn("✗ Load Test-driven development instructions (skill)", visible)
+        self.assertNotIn("Loaded tdd", visible)
+        self.assertIn("✗ Choose a database (question)", visible)
+        for line in range(1, 7):
+            self.assertIn(f"SKILL_ERROR_LINE_{line}", visible)
+            self.assertIn(f"SKILL_OUTPUT_LINE_{line}", visible)
+            self.assertIn(f"QUESTION_ERROR_LINE_{line}", visible)
+            self.assertIn(f"QUESTION_OUTPUT_LINE_{line}", visible)
+        self.assertNotIn("additional line(s) omitted", visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+
+    def test_opencode_tool_output_preserves_supplied_ansi_in_preview_and_raw_log(self) -> None:
+        colored_output = "\x1b[31mred first line\nred second line\x1b[0m"
+        event = {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_ansi",
+            "part": {
+                "type": "tool",
+                "tool": "ansi_tool",
+                "state": {
+                    "status": "completed",
+                    "title": "Show colored output",
+                    "output": colored_output,
+                },
+            },
+        }
+
+        raw_output, visible, runs = self._run_opencode_events([event], extra_env={"NO_COLOR": ""})
+
+        self.assertIn("✓ Show colored output (ansi_tool)", visible)
+        self.assertIn(
+            "  └ \x1b[31mred first line\n    red second line\x1b[0m",
+            visible,
+        )
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+        self.assertIn(b"\\u001b[31mred first line", raw_output.encode("utf-8"))
+
+    def test_opencode_file_modification_results_hide_inputs_and_strip_patch_header(self) -> None:
+        patch_input = (
+            "*** Begin Patch\n*** Update File: src/settings.py\n+SECRET_PATCH_INPUT\n*** End Patch"
+        )
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_file_changes",
+                "part": {
+                    "id": "call_patch",
+                    "type": "tool",
+                    "tool": "patch",
+                    "state": {
+                        "status": "completed",
+                        "title": "patch",
+                        "input": {"patchText": patch_input},
+                        "output": "Success. Updated the following files:\n"
+                        "M src/settings.py\nA tests/test_settings.py\n"
+                        "M src/config.py\nD src/old_config.py\n"
+                        "A docs/settings.md\nM sixth-result.py",
+                        "metadata": {
+                            "metadata": {
+                                "files": [
+                                    {
+                                        "file": "src/settings.py",
+                                        "patch": "SECRET_PATCH_DIFF",
+                                    }
+                                ]
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_file_changes",
+                "part": {
+                    "id": "call_returned_diff",
+                    "type": "tool",
+                    "tool": "patch",
+                    "state": {
+                        "status": "completed",
+                        "title": "Show returned change",
+                        "input": {"patchText": "SECRET_PATCH_FOR_RETURNED_DIFF"},
+                        "output": "--- a/src/returned.py\n+++ b/src/returned.py\n"
+                        "@@ -1 +1 @@\n-old\n+new",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_file_changes",
+                "part": {
+                    "id": "call_edit",
+                    "type": "tool",
+                    "tool": "edit",
+                    "state": {
+                        "status": "completed",
+                        "title": "edit",
+                        "input": {
+                            "path": "src/app.py",
+                            "oldString": "SECRET_OLD_CONTENT",
+                            "newString": "SECRET_NEW_CONTENT",
+                        },
+                        "output": "Edited src/app.py (1 replacement)",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 4,
+                "sessionID": "ses_file_changes",
+                "part": {
+                    "id": "call_write",
+                    "type": "tool",
+                    "tool": "write",
+                    "state": {
+                        "status": "completed",
+                        "title": "write",
+                        "input": {"path": "src/new.py", "content": "SECRET_FILE_CONTENT"},
+                        "output": "Wrote file successfully: src/new.py",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn("✓ Apply patch (patch)", visible)
+        patch_block = next(block for block in visible.split("\n\n") if "(patch)" in block)
+        for result_line in (
+            "M src/settings.py",
+            "A tests/test_settings.py",
+            "M src/config.py",
+            "D src/old_config.py",
+            "A docs/settings.md",
+        ):
+            self.assertIn(result_line, patch_block)
+        self.assertNotIn("Success. Updated the following files:", patch_block)
+        self.assertNotIn("sixth-result.py", patch_block)
+        self.assertIn("... 1 additional line(s) omitted", patch_block)
+        diff_block = next(
+            block for block in visible.split("\n\n") if "Show returned change" in block
+        )
+        for diff_line in (
+            "--- a/src/returned.py",
+            "+++ b/src/returned.py",
+            "@@ -1 +1 @@",
+            "-old",
+            "+new",
+        ):
+            self.assertIn(diff_line, diff_block)
+        self.assertIn("✓ Edit src/app.py (edit)", visible)
+        self.assertIn("Edited src/app.py (1 replacement)", visible)
+        self.assertIn("✓ Write src/new.py (write)", visible)
+        self.assertIn("Wrote file successfully: src/new.py", visible)
+        for private_input in (
+            "SECRET_PATCH_INPUT",
+            "SECRET_PATCH_DIFF",
+            "SECRET_PATCH_FOR_RETURNED_DIFF",
+            "SECRET_OLD_CONTENT",
+            "SECRET_NEW_CONTENT",
+            "SECRET_FILE_CONTENT",
+        ):
+            self.assertNotIn(private_input, visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+        for private_input in (
+            "SECRET_PATCH_INPUT",
+            "SECRET_PATCH_DIFF",
+            "SECRET_OLD_CONTENT",
+            "SECRET_NEW_CONTENT",
+            "SECRET_FILE_CONTENT",
+        ):
+            self.assertIn(private_input.encode("utf-8"), log.read_bytes())
+
+    def test_opencode_file_and_webfetch_previews_preserve_supplied_ansi(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_colored_previews",
+                "part": {
+                    "type": "tool",
+                    "tool": "patch",
+                    "state": {
+                        "status": "completed",
+                        "title": "Update colored file",
+                        "input": {"patchText": "*** Begin Patch\n+line\n*** End Patch"},
+                        "output": "Success. Updated the following files:\n"
+                        "\x1b[35m+src/colored.py\x1b[0m",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_colored_previews",
+                "part": {
+                    "type": "tool",
+                    "tool": "webfetch",
+                    "state": {
+                        "status": "completed",
+                        "title": "Fetch colored docs",
+                        "input": {"url": "https://example.test/colored"},
+                        "output": "\x1b[36m# Colored web title\x1b[0m",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events, extra_env={"NO_COLOR": ""})
+
+        self.assertIn("✓ Update colored file (patch)", visible)
+        self.assertIn("  └ \x1b[35m+src/colored.py\x1b[0m", visible)
+        self.assertIn("✓ Fetch colored docs (webfetch)", visible)
+        self.assertIn("  │ https://example.test/colored", visible)
+        self.assertIn("  └ \x1b[36m# Colored web title\x1b[0m", visible)
+        self.assertNotIn("\x1b[32m", visible)
+        self.assertNotIn("\x1b[1m", visible)
+        agent_log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(agent_log.read_bytes(), raw_output.encode("utf-8"))
+        self.assertIn(b"\\u001b[35m", agent_log.read_bytes())
+        self.assertIn(b"\\u001b[36m", agent_log.read_bytes())
+
+    def test_opencode_webfetch_shows_url_and_bounded_content_preview(self) -> None:
+        url = "https://docs.python.org/3/library/asyncio.html"
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_webfetch",
+                "part": {
+                    "id": "call_webfetch",
+                    "type": "tool",
+                    "tool": "webfetch",
+                    "state": {
+                        "status": "completed",
+                        "title": "webfetch",
+                        "input": {"url": url, "format": "markdown", "timeout": 20},
+                        "output": "# asyncio — Asynchronous I/O\n"
+                        "Retrieved content line two\n"
+                        "Retrieved content line three\n"
+                        "Retrieved content line four\n"
+                        "Retrieved content line five\n"
+                        "sixth content line",
+                        "metadata": {"metadata": {"contentType": "text/markdown"}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_webfetch",
+                "part": {
+                    "id": "call_empty_webfetch",
+                    "type": "tool",
+                    "tool": "webfetch",
+                    "state": {
+                        "status": "completed",
+                        "title": "webfetch",
+                        "input": {"url": "https://example.test/empty", "format": "text"},
+                        "output": "",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        block = next(block for block in visible.split("\n\n") if "(webfetch)" in block)
+        self.assertIn("✓ Fetch web content (webfetch)", block)
+        self.assertIn(f"  │ {url}", block)
+        for line in (
+            "# asyncio — Asynchronous I/O",
+            "Retrieved content line two",
+            "Retrieved content line three",
+            "Retrieved content line four",
+            "Retrieved content line five",
+        ):
+            self.assertIn(line, block)
+        self.assertNotIn("sixth content line", block)
+        self.assertIn("... 1 additional line(s) omitted", block)
+        self.assertIn("✓ Fetch web content (webfetch)", visible)
+        self.assertIn("  │ https://example.test/empty\n  └ No output", visible)
+        self.assertNotIn('"url":', visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+        self.assertIn(b"sixth content line", log.read_bytes())
+
+    def test_opencode_file_and_webfetch_fallbacks_keep_results_without_guessing(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_family_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "edit",
+                    "state": {
+                        "status": "completed",
+                        "title": "edit",
+                        "input": {
+                            "path": "src/partial.py",
+                            "oldString": 42,
+                            "newString": "SECRET_UNSUPPORTED_REPLACEMENT",
+                        },
+                        "output": "Meaningful first edit result\nSecond edit result",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_family_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "webfetch",
+                    "state": {
+                        "status": "completed",
+                        "title": "webfetch",
+                        "input": {"url": 42, "format": "markdown"},
+                        "output": {"message": "Unsupported structured response remains visible"},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_family_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "patch_extension",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect extension output",
+                        "input": {"mode": "preview"},
+                        "output": "Success. Updated the following files:\n"
+                        "Keep this unrelated first line",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn('✓ Edit src/partial.py (edit)\n  │ {"path":"src/partial.py"}', visible)
+        self.assertIn("Meaningful first edit result", visible)
+        self.assertNotIn("SECRET_UNSUPPORTED_REPLACEMENT", visible)
+        self.assertIn('  │ {"url":42,"format":"markdown"}', visible)
+        self.assertIn('{"message":"Unsupported structured response remains visible"}', visible)
+        self.assertNotIn("  │ 42", visible)
+        extension_block = next(
+            block for block in visible.split("\n\n") if "Inspect extension output" in block
+        )
+        self.assertIn("Success. Updated the following files:", extension_block)
+        self.assertIn("Keep this unrelated first line", extension_block)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+
+    def test_opencode_file_and_webfetch_failures_keep_full_error_details(self) -> None:
+        failed_tools = (
+            ("patch", {"patchText": "SECRET_FAILURE_PATCH_INPUT"}),
+            (
+                "edit",
+                {"path": "src/edit.py", "oldString": "old", "newString": "new"},
+            ),
+            ("write", {"path": "src/write.py", "content": "new file contents"}),
+            ("webfetch", {"url": "https://example.test/failure", "format": "markdown"}),
+        )
+        events = []
+        for timestamp, (tool_name, input_value) in enumerate(failed_tools, start=1):
+            events.append(
+                {
+                    "type": "tool_use",
+                    "timestamp": timestamp,
+                    "sessionID": "ses_failed_file_tools",
+                    "part": {
+                        "partID": f"prt_{tool_name}",
+                        "sessionID": "ses_failed_file_tools",
+                        "messageID": "msg_failed_file_tools",
+                        "id": f"call_{tool_name}",
+                        "type": "tool",
+                        "tool": tool_name,
+                        "state": {
+                            "status": "error",
+                            "input": input_value,
+                            "error": "\n".join(f"{tool_name}_error_{line}" for line in range(1, 7)),
+                            "metadata": {
+                                "providerCall": {"executed": True},
+                                "providerResult": {"executed": True},
+                                "rawInput": json.dumps(input_value),
+                            },
+                            "time": {"start": timestamp, "end": timestamp + 1},
+                        },
+                    },
+                }
+            )
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        action_titles = {
+            "patch": "Apply patch",
+            "edit": "Edit src/edit.py",
+            "write": "Write src/write.py",
+            "webfetch": "Fetch web content",
+        }
+        for tool_name, _ in failed_tools:
+            block = next(block for block in visible.split("\n\n") if f"({tool_name})" in block)
+            self.assertIn(f"✗ {action_titles[tool_name]} ({tool_name})", block)
+            self.assertNotIn(f"✓ {action_titles[tool_name]}", block)
+            for line in range(1, 7):
+                self.assertIn(f"{tool_name}_error_{line}", block)
+            self.assertNotIn("additional line(s) omitted", block)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+
+    def test_opencode_failed_patch_keeps_any_available_output_unfiltered(self) -> None:
+        # OpenCode 2.1.4 failures carry error details; retain output too if an
+        # adapter includes it in a failed tool state.
+        output = "Success. Updated the following files:\n" + "\n".join(
+            f"partial-result-{line}" for line in range(1, 7)
+        )
+        event = {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_failed_patch_output",
+            "part": {
+                "type": "tool",
+                "tool": "patch",
+                "state": {
+                    "status": "error",
+                    "input": {"patchText": "SECRET_FAILED_PATCH_INPUT"},
+                    "error": "Patch failed after a partial application.",
+                    "output": output,
+                },
+            },
+        }
+
+        raw_output, visible, runs = self._run_opencode_events([event])
+
+        block = next(block for block in visible.split("\n\n") if "(patch)" in block)
+        self.assertIn("✗ Apply patch (patch)", block)
+        self.assertIn("Patch failed after a partial application.", block)
+        self.assertIn("Success. Updated the following files:", block)
+        for line in range(1, 7):
+            self.assertIn(f"partial-result-{line}", block)
+        self.assertNotIn("additional line(s) omitted", block)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+
+    def test_opencode_successful_reads_show_targets_and_reliable_counts_only(self) -> None:
         event = {
             "type": "tool_use",
             "timestamp": 1,
@@ -324,8 +1357,8 @@ class HarnessTests(LoopTestCase):
                 "state": {
                     "status": "completed",
                     "title": "read",
-                    "input": {"filePath": "src/private.py", "offset": 4, "limit": 3},
-                    "output": "SECRET_FILE_CONTENT\nmore private contents",
+                    "input": {"path": "src/private.py", "offset": 4, "limit": 3},
+                    "output": "Read file src/private.py, lines 4-6\nSECRET_FILE_CONTENT",
                     "metadata": {
                         "metadata": {
                             "display": {
@@ -339,7 +1372,7 @@ class HarnessTests(LoopTestCase):
             },
         }
 
-        direct_metadata_event = {
+        zero_directory_event = {
             "type": "tool_use",
             "timestamp": 2,
             "sessionID": "ses_read",
@@ -349,26 +1382,109 @@ class HarnessTests(LoopTestCase):
                 "state": {
                     "status": "completed",
                     "title": "read",
-                    "input": {"filePath": "src/summary.py"},
-                    "output": "SECRET_DIRECT_COUNT_CONTENT",
+                    "input": {"path": "empty-directory"},
+                    "output": "Read directory empty-directory, 0 entries",
+                    "metadata": {
+                        "metadata": {
+                            "display": {
+                                "type": "directory",
+                                "totalEntries": 0,
+                                "truncated": False,
+                            }
+                        }
+                    },
+                },
+            },
+        }
+
+        media_event = {
+            "type": "tool_use",
+            "timestamp": 3,
+            "sessionID": "ses_read",
+            "part": {
+                "type": "tool",
+                "tool": "read",
+                "state": {
+                    "status": "completed",
+                    "title": "Inspect image metadata",
+                    "input": {"path": "assets/diagram.png"},
+                    "output": "Image read successfully\nSECRET_IMAGE_CONTENT",
+                    "metadata": {
+                        "metadata": {
+                            "display": {
+                                "type": "media",
+                                "mime": "image/png",
+                                "totalLines": 99,
+                            },
+                            "content": [{"type": "file", "uri": "data:image/png;base64,SECRET"}],
+                            "totalLines": 99,
+                        }
+                    },
+                },
+            },
+        }
+
+        direct_metadata_event = {
+            "type": "tool_use",
+            "timestamp": 4,
+            "sessionID": "ses_read",
+            "part": {
+                "type": "tool",
+                "tool": "read",
+                "state": {
+                    "status": "completed",
+                    "title": "read",
+                    "input": {"path": "src/summary.py"},
+                    "output": "Read file src/summary.py, lines 1-12\nSECRET_DIRECT_COUNT_CONTENT",
                     "metadata": {"metadata": {"lineCount": 12, "truncated": False}},
                 },
             },
         }
 
-        raw_output, visible, runs = self._run_opencode_events([event, direct_metadata_event])
+        no_count_event = {
+            "type": "tool_use",
+            "timestamp": 5,
+            "sessionID": "ses_read",
+            "part": {
+                "type": "tool",
+                "tool": "read",
+                "state": {
+                    "status": "completed",
+                    "title": "read",
+                    "input": {"path": "src/no-metadata.py"},
+                    "output": "Read file src/no-metadata.py, lines 1-2",
+                    "metadata": {"metadata": {"truncated": False}},
+                },
+            },
+        }
 
-        self.assertIn("src/private.py", visible)
-        self.assertIn("lines: 120", visible)
-        self.assertIn("src/summary.py", visible)
-        self.assertIn("lines: 12", visible)
-        self.assertNotIn("SECRET_FILE_CONTENT", visible)
-        self.assertNotIn("more private contents", visible)
-        self.assertNotIn("SECRET_DIRECT_COUNT_CONTENT", visible)
+        raw_output, visible, runs = self._run_opencode_events(
+            [event, zero_directory_event, media_event, direct_metadata_event, no_count_event]
+        )
+
+        self.assertIn("✓ Read src/private.py (read)\n  └ 120 lines", visible)
+        self.assertIn("✓ Read empty-directory (read)\n  └ 0 entries", visible)
+        self.assertIn("✓ Inspect image metadata (read)\n  └ assets/diagram.png", visible)
+        self.assertIn("✓ Read src/summary.py (read)\n  └ 12 lines", visible)
+        self.assertNotIn("99 lines", visible)
+        no_count_block = next(
+            block for block in visible.split("\n\n") if "src/no-metadata.py" in block
+        )
+        self.assertEqual(no_count_block, "✓ Read src/no-metadata.py (read)")
+        for label in ("target:", "lines:", "entries:", "count:", "not provided"):
+            self.assertNotIn(label, visible)
+        for private_content in (
+            "SECRET_FILE_CONTENT",
+            "SECRET_DIRECT_COUNT_CONTENT",
+            "SECRET_IMAGE_CONTENT",
+            "data:image/png;base64,SECRET",
+        ):
+            self.assertNotIn(private_content, visible)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
         self.assertIn(b"SECRET_FILE_CONTENT", log.read_bytes())
         self.assertIn(b"SECRET_DIRECT_COUNT_CONTENT", log.read_bytes())
+        self.assertIn(b"SECRET_IMAGE_CONTENT", log.read_bytes())
 
     def test_opencode_reads_without_reliable_counts_still_hide_file_contents(self) -> None:
         event = {
@@ -381,7 +1497,7 @@ class HarnessTests(LoopTestCase):
                 "state": {
                     "status": "completed",
                     "title": "read",
-                    "input": {"filePath": "src/no-count.py"},
+                    "input": {"path": "src/no-count.py"},
                     "output": "SECRET_CONTENT_WITHOUT_METADATA",
                 },
             },
@@ -409,7 +1525,7 @@ class HarnessTests(LoopTestCase):
                 "state": {
                     "status": "completed",
                     "title": "read",
-                    "input": {"filePath": "src/large.py"},
+                    "input": {"path": "src/large.py"},
                     "output": "SECRET_TRUNCATED_READ_CONTENT",
                     "metadata": {
                         "metadata": {
@@ -427,7 +1543,7 @@ class HarnessTests(LoopTestCase):
         raw_output, visible, runs = self._run_opencode_events([event])
 
         self.assertIn("src/large.py", visible)
-        self.assertNotIn("lines: 999", visible)
+        self.assertNotIn("999 lines", visible)
         self.assertNotIn("SECRET_TRUNCATED_READ_CONTENT", visible)
         self.assertIn(b"SECRET_TRUNCATED_READ_CONTENT", raw_output.encode("utf-8"))
         self.assertEqual(
@@ -435,7 +1551,70 @@ class HarnessTests(LoopTestCase):
             raw_output.encode("utf-8"),
         )
 
-    def test_opencode_successful_searches_show_query_scope_and_only_emitted_counts(self) -> None:
+    def test_opencode_unsupported_read_shapes_keep_the_generic_result_fallback(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_read_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "read",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect unsupported read",
+                        "input": {"path": "src/private.py", "mode": "preview"},
+                        "output": "Unsupported read shape keeps this result visible.",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_read_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "read_extension",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect custom reader",
+                        "input": {"path": "src/custom.py"},
+                        "output": "Custom read output stays visible.",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_read_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "read",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect legacy read shape",
+                        "input": {"filePath": "src/legacy.py"},
+                        "output": "Unsupported read alias keeps this result visible.",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn("✓ Inspect unsupported read (read)", visible)
+        self.assertIn('{"path":"src/private.py","mode":"preview"}', visible)
+        self.assertIn("Unsupported read shape keeps this result visible.", visible)
+        self.assertIn("✓ Inspect custom reader (read_extension)", visible)
+        self.assertIn("Custom read output stays visible.", visible)
+        self.assertIn("✓ Inspect legacy read shape (read)", visible)
+        self.assertIn('{"filePath":"src/legacy.py"}', visible)
+        self.assertIn("Unsupported read alias keeps this result visible.", visible)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+
+    def test_opencode_successful_searches_show_natural_filters_and_reliable_counts(self) -> None:
         events = [
             {
                 "type": "tool_use",
@@ -451,10 +1630,12 @@ class HarnessTests(LoopTestCase):
                             "pattern": "NEEDLE_QUERY",
                             "path": "lib/",
                             "include": "*.py",
+                            "literal": True,
+                            "caseSensitive": False,
                             "limit": 10,
                         },
                         "output": "Found 2 matches\nSECRET_MATCH_ONE\nSECRET_MATCH_TWO",
-                        "metadata": {"metadata": {"matches": 2}},
+                        "metadata": {"metadata": {"matches": 2, "truncated": False}},
                     },
                 },
             },
@@ -468,8 +1649,61 @@ class HarnessTests(LoopTestCase):
                     "state": {
                         "status": "completed",
                         "title": "glob",
+                        "input": {
+                            "pattern": "empty/**",
+                            "path": "workspace/empty",
+                            "hidden": True,
+                        },
+                        "output": "No files found",
+                        "metadata": {"metadata": {"count": 0, "truncated": False}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_search",
+                "part": {
+                    "type": "tool",
+                    "tool": "glob",
+                    "state": {
+                        "status": "completed",
+                        "title": "glob",
                         "input": {"pattern": "src/**/*.py", "path": "workspace"},
                         "output": "Found 17 matches\nSECRET_GLOB_MATCH_ONE\nSECRET_GLOB_MATCH_TWO",
+                        "metadata": {"metadata": {"truncated": False}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 4,
+                "sessionID": "ses_search",
+                "part": {
+                    "type": "tool",
+                    "tool": "grep",
+                    "state": {
+                        "status": "completed",
+                        "title": "grep",
+                        "input": {"pattern": "capped-query"},
+                        "output": "Found 5 matches\nSECRET_CAPPED_MATCH",
+                        "metadata": {"metadata": {"matches": 5, "truncated": True}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 5,
+                "sessionID": "ses_search",
+                "part": {
+                    "type": "tool",
+                    "tool": "websearch",
+                    "state": {
+                        "status": "completed",
+                        "title": "websearch",
+                        "input": {"query": "OpenCode JSON event schema"},
+                        "output": "## [Result title](https://example.test)\nSECRET_WEB_RESULT",
+                        "metadata": {"metadata": {"provider": "fixture"}},
                     },
                 },
             },
@@ -477,24 +1711,96 @@ class HarnessTests(LoopTestCase):
 
         raw_output, visible, runs = self._run_opencode_events(events)
 
-        self.assertIn("NEEDLE_QUERY", visible)
-        self.assertIn("lib/", visible)
-        self.assertIn("matches: 2", visible)
-        self.assertIn("src/**/*.py", visible)
+        self.assertIn(
+            "✓ Search text (grep)\n"
+            "  ├ for NEEDLE_QUERY\n"
+            "  ├ in lib/\n"
+            "  ├ files matching *.py\n"
+            "  ├ literal text\n"
+            "  ├ case-insensitive\n"
+            "  ├ up to 10 matches\n"
+            "  └ 2 matches",
+            visible,
+        )
+        self.assertIn(
+            "✓ Find files (glob)\n"
+            "  ├ empty/**\n"
+            "  ├ in workspace/empty\n"
+            "  ├ including hidden files\n"
+            "  └ 0 files",
+            visible,
+        )
         self.assertIn("workspace", visible)
-        self.assertIn("count: not provided", visible)
+        self.assertIn("src/**/*.py", visible)
+        self.assertNotIn("17 files", visible)
+        self.assertNotIn("Found 2 matches", visible)
         self.assertNotIn("Found 17 matches", visible)
-        self.assertNotIn("results: 17", visible)
+        self.assertNotIn("count:", visible)
+        self.assertNotIn("not provided", visible)
+        self.assertIn("more than 5 matches", visible)
+        self.assertIn("✓ Search the web (websearch)\n  └ for OpenCode JSON event schema", visible)
+        self.assertNotIn("https://example.test", visible)
+        self.assertNotIn("OpenCode JSON event schema:", visible)
         for match in (
             "SECRET_MATCH_ONE",
             "SECRET_MATCH_TWO",
             "SECRET_GLOB_MATCH_ONE",
             "SECRET_GLOB_MATCH_TWO",
+            "SECRET_CAPPED_MATCH",
+            "SECRET_WEB_RESULT",
         ):
             self.assertNotIn(match, visible)
             self.assertIn(match.encode("utf-8"), raw_output.encode("utf-8"))
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+
+    def test_opencode_unsupported_search_shapes_keep_the_generic_result_fallback(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_search_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "grep",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect unsupported grep",
+                        "input": {"query": "not the verified pattern field"},
+                        "output": "Found 1 match\nUNSUPPORTED_GREP_RESULT",
+                        "metadata": {"metadata": {"matches": 1}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_search_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "grep_extension",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect custom grep",
+                        "input": {"pattern": "custom schema", "path": "src"},
+                        "output": "CUSTOM_GREP_RESULT",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn("✓ Inspect unsupported grep (grep)", visible)
+        self.assertIn('{"query":"not the verified pattern field"}', visible)
+        self.assertIn("Found 1 match", visible)
+        self.assertIn("UNSUPPORTED_GREP_RESULT", visible)
+        self.assertIn("✓ Inspect custom grep (grep_extension)", visible)
+        self.assertIn("CUSTOM_GREP_RESULT", visible)
+        self.assertNotIn("count: not provided", visible)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
 
     def test_opencode_identifies_parent_level_delegation_and_bounds_returned_results(self) -> None:
         events = [
@@ -514,8 +1820,9 @@ class HarnessTests(LoopTestCase):
                             "task_id": "ses_child_123",
                             "prompt": "A private task prompt that must not be displayed",
                         },
-                        "output": "finding-1\nfinding-2\nfinding-3\nfinding-4\n"
-                        "finding-5\nfinding-6\nfinding-7",
+                        "output": "task_id: ses_child_123\n<task_result>\n"
+                        "finding-1\nfinding-2\nfinding-3\nfinding-4\n"
+                        "finding-5\nfinding-6\nfinding-7\n</task_result>",
                     },
                 },
             },
@@ -525,15 +1832,21 @@ class HarnessTests(LoopTestCase):
                 "sessionID": "ses_delegation",
                 "part": {
                     "type": "tool",
-                    "tool": "invoke_worker",
+                    "tool": "subagent",
                     "state": {
                         "status": "completed",
-                        "title": "Review the failure path",
-                        "input": {"description": "Review the failure path"},
-                        "output": "A second parent-level delegated result.",
+                        "title": "subagent",
+                        "input": {
+                            "description": "Review the failure path",
+                            "agent": "reviewer",
+                            "sessionID": "ses_review_child",
+                            "prompt": "A private subagent prompt that must not be displayed",
+                        },
+                        "output": '<subagent sessionID="ses_review_child" state="completed">\n'
+                        "A second parent-level delegated result.\n</subagent>",
                         "metadata": {
                             "metadata": {
-                                "agent_type": "reviewer",
+                                "status": "completed",
                                 "sessionId": "ses_review_child",
                             }
                         },
@@ -546,6 +1859,92 @@ class HarnessTests(LoopTestCase):
                 "sessionID": "ses_delegation",
                 "part": {
                     "type": "tool",
+                    "tool": "job_dispatcher",
+                    "state": {
+                        "status": "completed",
+                        "title": "Run delegated work",
+                        "input": {
+                            "description": "Inspect the queue worker",
+                            "prompt": "A private explicit-delegation prompt",
+                        },
+                        "output": "Queue worker finding.",
+                        "metadata": {
+                            "metadata": {
+                                "delegated": True,
+                                "agent_name": "queue-agent",
+                                "sessionID": "ses_queue_child",
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 4,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "invoke_worker",
+                    "state": {
+                        "status": "completed",
+                        "title": "Review the failure path",
+                        "input": {"description": "Review the failure path"},
+                        "output": "Ambiguous worker output stays visible.",
+                        "metadata": {
+                            "metadata": {
+                                "agent_type": "reviewer",
+                                "sessionId": "ses_ambiguous_child",
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 5,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "subagent",
+                    "state": {
+                        "status": "completed",
+                        "title": "subagent",
+                        "input": {
+                            "description": "Check missing agent identity",
+                            "prompt": "A private prompt without agent identity",
+                        },
+                        "output": '<subagent sessionID="ses_no_agent" state="completed">\n'
+                        "Result without agent identity.\n</subagent>",
+                        "metadata": {"metadata": {"sessionID": "ses_no_agent"}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 6,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "subagent",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect malformed subagent result",
+                        "input": {
+                            "description": "Inspect malformed subagent result",
+                            "agent": "explore",
+                            "prompt": "A private unsupported-schema prompt",
+                            "extra": "not in the verified input schema",
+                        },
+                        "output": "Unsupported subagent result stays visible.",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 7,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
                     "tool": "workflow_runner",
                     "state": {
                         "status": "completed",
@@ -555,30 +1954,89 @@ class HarnessTests(LoopTestCase):
                     },
                 },
             },
+            {
+                "type": "tool_use",
+                "timestamp": 8,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "task",
+                    "state": {
+                        "status": "completed",
+                        "title": "task",
+                        "input": {
+                            "description": "Preserve task result text",
+                            "subagent_type": "explore",
+                            "task_id": "ses_task_456",
+                            "prompt": "A private task result-body prompt",
+                        },
+                        "output": "<task_result>\n"
+                        "task_id: This is a useful finding.\n"
+                        "A second finding.\n</task_result>",
+                    },
+                },
+            },
         ]
 
         raw_output, visible, runs = self._run_opencode_events(events)
 
-        self.assertIn("Delegated: Inspect parser behavior", visible)
-        self.assertIn("agent: explore", visible)
-        self.assertIn("task id: ses_child_123", visible)
+        self.assertIn("✓ Inspect parser behavior (task: explore)", visible)
         self.assertIn("finding-1", visible)
         self.assertIn("finding-5", visible)
         self.assertNotIn("finding-6", visible)
         self.assertNotIn("finding-7", visible)
         self.assertIn("... 2 additional line(s) omitted", visible)
-        self.assertIn("Delegated: Review the failure path", visible)
-        self.assertIn("agent: reviewer", visible)
-        self.assertIn("session: ses_review_child", visible)
+        self.assertIn(
+            "✓ Review the failure path (subagent: reviewer)\n"
+            "  └ A second parent-level delegated result.",
+            visible,
+        )
+        self.assertIn(
+            "✓ Inspect the queue worker (job_dispatcher: queue-agent)\n  └ Queue worker finding.",
+            visible,
+        )
+        self.assertIn("✓ Review the failure path (invoke_worker)", visible)
+        self.assertIn("Ambiguous worker output stays visible.", visible)
+        self.assertNotIn("Delegated: Review the failure path", visible)
+        self.assertIn(
+            "✓ Check missing agent identity (subagent)\n  └ Result without agent identity.",
+            visible,
+        )
+        self.assertIn("✓ Inspect malformed subagent result (subagent)", visible)
+        self.assertIn("Unsupported subagent result stays visible.", visible)
         self.assertIn("A second parent-level delegated result.", visible)
-        self.assertIn("✓ Run a task", visible)
-        self.assertIn("tool: workflow_runner", visible)
+        self.assertIn("✓ Run a task (workflow_runner)", visible)
+        self.assertNotIn("tool: workflow_runner", visible)
         self.assertNotIn("Delegated: Run a task", visible)
-        self.assertNotIn("A private task prompt", visible)
+        self.assertIn(
+            "✓ Preserve task result text (task: explore)\n"
+            "  └ task_id: This is a useful finding.\n"
+            "    A second finding.",
+            visible,
+        )
+        for private_value in (
+            "A private task prompt",
+            "A private subagent prompt",
+            "A private explicit-delegation prompt",
+            "A private prompt without agent identity",
+            "A private task result-body prompt",
+            "ses_child_123",
+            "ses_review_child",
+            "ses_queue_child",
+            "ses_no_agent",
+            "ses_task_456",
+            "<task_result>",
+            "<subagent ",
+            "agent: explore",
+            "task id:",
+            "session:",
+        ):
+            self.assertNotIn(private_value, visible)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
         self.assertIn(b"finding-7", log.read_bytes())
         self.assertIn(b"A private task prompt", log.read_bytes())
+        self.assertIn(b"ses_review_child", log.read_bytes())
 
     def test_opencode_exploration_and_delegation_failures_keep_full_error_details(self) -> None:
         events = [
@@ -592,8 +2050,9 @@ class HarnessTests(LoopTestCase):
                     "state": {
                         "status": "error",
                         "title": "Read failed",
-                        "input": {"filePath": "src/unavailable.py"},
+                        "input": {"path": "src/unavailable.py"},
                         "error": "READ_ERROR_DETAIL",
+                        "output": "\n".join(f"READ_OUTPUT_LINE_{line}" for line in range(1, 7)),
                     },
                 },
             },
@@ -609,6 +2068,7 @@ class HarnessTests(LoopTestCase):
                         "title": "Search failed",
                         "input": {"pattern": "private-pattern", "path": "src"},
                         "error": "SEARCH_ERROR_DETAIL",
+                        "output": "\n".join(f"SEARCH_OUTPUT_LINE_{line}" for line in range(1, 7)),
                     },
                 },
             },
@@ -622,10 +2082,18 @@ class HarnessTests(LoopTestCase):
                     "state": {
                         "status": "error",
                         "title": "Delegated task failed",
-                        "input": {"subagent_type": "explore"},
+                        "input": {
+                            "description": "Investigate delegated failure",
+                            "subagent_type": "explore",
+                            "task_id": "ses_failed_child",
+                            "prompt": "A private failed delegation prompt",
+                        },
                         "error": "DELEGATION_ERROR_LINE_1\nDELEGATION_ERROR_LINE_2\n"
                         "DELEGATION_ERROR_LINE_3\nDELEGATION_ERROR_LINE_4\n"
                         "DELEGATION_ERROR_LINE_5\nDELEGATION_ERROR_LINE_6",
+                        "output": "\n".join(
+                            f"DELEGATION_OUTPUT_LINE_{line}" for line in range(1, 7)
+                        ),
                     },
                 },
             },
@@ -633,22 +2101,32 @@ class HarnessTests(LoopTestCase):
 
         raw_output, visible, runs = self._run_opencode_events(events)
 
-        self.assertIn("✗ Read failed", visible)
+        self.assertIn("✗ Read failed (read)", visible)
         self.assertIn("READ_ERROR_DETAIL", visible)
-        self.assertIn("✗ Search failed", visible)
+        self.assertIn("✗ Search failed (grep)", visible)
         self.assertIn("SEARCH_ERROR_DETAIL", visible)
-        self.assertIn("✗ Delegated task failed", visible)
+        self.assertIn("✗ Investigate delegated failure (task: explore)", visible)
         for line in range(1, 7):
             self.assertIn(f"DELEGATION_ERROR_LINE_{line}", visible)
+            self.assertIn(f"READ_OUTPUT_LINE_{line}", visible)
+            self.assertIn(f"SEARCH_OUTPUT_LINE_{line}", visible)
+            self.assertIn(f"DELEGATION_OUTPUT_LINE_{line}", visible)
+        self.assertNotIn("ses_failed_child", visible)
+        self.assertNotIn("A private failed delegation prompt", visible)
         self.assertNotIn("additional line(s) omitted", visible)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
 
-    def _run_opencode_events(self, events: list[dict[str, object]]) -> tuple[str, str, list[Path]]:
+    def _run_opencode_events(
+        self,
+        events: list[dict[str, object]],
+        *,
+        extra_env: dict[str, str] | None = None,
+    ) -> tuple[str, str, list[Path]]:
         raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
         self.state["opencode_raw_output"] = raw_output
         self.save_state()
-        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+        result, runs = self.run_loop("--max-iterations", "1", harness=None, extra_env=extra_env)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         return raw_output, result.stdout.decode("utf-8"), runs
 
@@ -687,10 +2165,9 @@ class HarnessTests(LoopTestCase):
         ]
         raw_output, visible, runs = self._run_opencode_events(events)
         for title, command, _ in outputs:
-            self.assertIn(f"✓ {title}", visible)
-            self.assertIn("tool: shell", visible)
-            self.assertIn(f"command:\n    {command}", visible)
-        self.assertIn("(no output)", visible)
+            self.assertIn(f"✓ {title} (shell)", visible)
+            self.assertIn(f"  │ {command}", visible)
+        self.assertIn("  └ No output", visible)
         for line in ("short-1", "short-2", "short-3", "five-1", "five-5"):
             self.assertIn(line, visible)
         for line in ("long-1", "long-5"):
@@ -699,6 +2176,10 @@ class HarnessTests(LoopTestCase):
         self.assertNotIn("long-7", visible)
         self.assertEqual(visible.count("additional line(s) omitted"), 1)
         self.assertIn("... 2 additional line(s) omitted", visible)
+        self.assertNotIn("tool:", visible)
+        self.assertNotIn("command:", visible)
+        self.assertNotIn("output:", visible)
+        self.assertNotIn("input:", visible)
         self.assertNotIn('"command":', visible)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
@@ -747,16 +2228,18 @@ class HarnessTests(LoopTestCase):
             },
         ]
         raw_output, visible, runs = self._run_opencode_events(events)
-        self.assertIn("✗ Failed shell command", visible)
-        self.assertIn("tool: shell", visible)
-        self.assertIn("command:\n    git status --short", visible)
+        self.assertIn("✗ Failed shell command (shell)", visible)
+        self.assertIn("  │ git status --short", visible)
         for line in range(1, 7):
             self.assertIn(f"failure-{line}", visible)
-        self.assertIn('input: {"workdir":"/workspace"}', visible)
+        self.assertIn('  │ {"workdir":"/workspace"}', visible)
         self.assertIn("No command field is available.", visible)
-        self.assertIn("Tool result", visible)
+        self.assertIn("✗ Run command (shell)", visible)
         self.assertIn("No input details are available.", visible)
-        self.assertNotIn("command:\n", visible[visible.index("No command field is available.") :])
+        self.assertNotIn("tool:", visible)
+        self.assertNotIn("command:", visible)
+        self.assertNotIn("input:", visible)
+        self.assertNotIn("output:", visible)
         self.assertNotIn("additional line(s) omitted", visible)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
@@ -776,6 +2259,7 @@ class HarnessTests(LoopTestCase):
                         "error": "first error line\nsecond error line\nthird error line\n"
                         "fourth error line\nfifth error line\nsixth error line",
                         "title": "Failed inspection",
+                        "output": "output-1\noutput-2\noutput-3\noutput-4\noutput-5\noutput-6",
                     },
                 },
             },
@@ -794,11 +2278,17 @@ class HarnessTests(LoopTestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         visible = result.stdout.decode("utf-8")
-        self.assertIn("✗ Failed inspection", visible)
-        self.assertIn("tool: failing_tool", visible)
-        self.assertIn("error:", visible)
+        self.assertIn("✗ Failed inspection (failing_tool)", visible)
+        self.assertIn('  │ {"action":"inspect"}', visible)
+        self.assertIn("Error: first error line", visible)
         self.assertIn("sixth error line", visible)
+        self.assertIn("output-1", visible)
+        self.assertIn("output-6", visible)
         self.assertNotIn("additional line(s) omitted", visible)
+        self.assertNotIn("tool:", visible)
+        self.assertNotIn("input:", visible)
+        self.assertNotIn("error:", visible)
+        self.assertNotIn("output:", visible)
         self.assertIn("✗ OpenCode error", visible)
         self.assertIn("Run-level failure detail.", visible)
         attempt = runs[0] / "attempt-1-ticket-2"
@@ -1088,6 +2578,9 @@ class HarnessTests(LoopTestCase):
 
     def test_opencode_terminal_output_is_live_before_harness_exit(self) -> None:
         self._assert_live_harness_output("opencode", terminal=True)
+
+    def test_opencode_terminal_failed_tool_uses_red_cross(self) -> None:
+        self._assert_live_harness_output("opencode", terminal=True, include_failure=True)
 
     def test_opencode_terminal_output_honors_no_color_presence(self) -> None:
         self._assert_live_harness_output("opencode", terminal=True, no_color=True)

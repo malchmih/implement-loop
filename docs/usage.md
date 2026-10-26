@@ -203,28 +203,72 @@ documentation before using it. OpenCode V1 is not supported.
   remain in effect. These flags do not guarantee that every path, URL,
   permission, or clarification can be handled unattended.
 - OpenCode V2.1.4 JSON output is a newline-delimited stream of event records.
-  Implement Loop renders completed assistant text and completed or failed tool
-  results as separate scrolling blocks. Well-formed step-start and step-finish
-  bookkeeping is omitted, reasoning content is not displayed, and malformed
-  records receive visible fallbacks. The renderer does not promise text deltas,
-  live tool starts, or tool progress. Successful file reads show their available
-  target and reliable, explicit counts when emitted; file contents are omitted.
-  Searches such as `grep` and `glob` show available query and scope details plus
-  explicit metadata counts when present, rather than individual matches. Counts
-  are not inferred from output text; when supported count metadata is absent, the
-  transcript says the count was not provided. Parent-level delegated results are
-  identified from a delegation tool identity or explicit emitted agent/delegation
-  data, and show available task/agent identity with a five-line returned-result
-  preview.
-  If delegation is not identifiable, the tool uses the ordinary generic
-  presentation. The renderer does not subscribe to child sessions or display
-  delegated agents' internal tools, starts, progress, or nested transcripts. The
-  supported shell tool (`shell`) shows its available command beneath the tool
-  title. Successful shell and generic tool output is previewed to five lines,
-  with an omitted-line count when truncated; empty output is identified
-  explicitly. Failed tools show their available input and full error details,
-  even when no output field is present. No semantic command outcome is inferred
-  from a successful tool state.
+  Implement Loop renders assistant text unchanged, without an `Assistant`
+  heading, and renders completed or failed tool results as separate blocks. Tool
+  blocks use an ordinary `✓` or `✗`, a bold action title, a muted inline tool
+  name, and indented tree-connected details. Wrapper colors and emphasis are
+  enabled only for terminal output when `NO_COLOR` is unset; redirected output
+  stays unstyled. ANSI sequences already present in result content pass through
+  without wrapper styling around that content. Well-formed step-start and
+  step-finish bookkeeping is omitted, reasoning content is not displayed, and
+  malformed records receive visible fallbacks. The renderer does not promise
+  text deltas, live tool starts, or tool progress.
+
+  The supported shell tool (`shell`) shows its actual command as a connected
+  detail, followed by at most five returned lines. Empty successful output says
+  `No output`; a longer preview reports how many lines were omitted. Unfamiliar
+  tools use the same block layout, a compact bounded JSON input fallback when
+  available, and the same five-line successful-result preview without implying
+  knowledge of the tool's semantics. Failed tools retain all available error
+  details and output without the success-preview limit. A success mark applies
+  only to that tool call; process status and the separate completion-result file
+  remain authoritative for Attempt completion.
+
+  Successful reads show the requested path in the title or a connected detail,
+  plus only explicit metadata counts that remain reliable: file line counts and
+  directory entry counts. File and media contents are omitted, and a count found
+  only in returned prose is not inferred. Verified `grep` and `glob` inputs show
+  their pattern, scope, and applicable filters; metadata-supplied match/file
+  counts include reliable zeroes, while truncated counts are described as
+  lower bounds and unavailable counts are omitted. `websearch` shows its query
+  without result dumps. Unsupported tool names or input shapes retain the
+  generic input/result fallback rather than suppressing output.
+
+  Parent-level delegation is recognized from supported `task`/`subagent` input
+  shapes or explicit delegation metadata. Its task description is the action
+  title, and the muted suffix combines the actual tool and supplied agent when
+  available. Normal blocks omit separate agent lines and task/session IDs, and
+  preview up to five returned-result lines. Standard result wrappers are removed
+  only for recognized delegation tools. The renderer does not subscribe to child
+  sessions or display child tools, starts, progress, or nested transcripts. A
+  success mark applies only to the represented tool call and does not establish
+  that downstream delegated objectives were achieved.
+
+  Successful `patch`, `edit`, and `write` results show up to five returned lines
+  with their wording intact. The recognized patch header
+  `Success. Updated the following files:` is removed before preview selection;
+  other tools' first lines are not discarded. Successful modification blocks do
+  not show patch text, replacement text, full written contents, or metadata
+  diffs. A diff already present in returned output is previewed as ordinary
+  output. Successful `webfetch` blocks show the requested URL and up to five
+  returned content lines. Both families use the shared omission notice and
+  `No output` indication. If a tailored input shape is unavailable, the renderer
+  keeps the result intelligible through its bounded fallback without guessing
+  file or URL semantics. Failures bypass successful-output cleanup and limits,
+  retaining all available errors and output.
+
+  Successful `skill` blocks require the verified `id` input and the returned
+  `name`/`directory` metadata. They identify the skill, say `Loaded <id>`, and
+  suppress the loaded instruction text. Successful `question` blocks use verified
+  question prompts and matching `metadata.answers` arrays; they keep each answer
+  paired with its question, show selected option values, and display free-form
+  values as supplied without paraphrasing. Empty answer lists say
+  `No answer supplied`; explicit blank string values display as `""`. Missing or
+  unsupported fields retain the generic input/result fallback rather than
+  inventing a skill confirmation or question answer. Failures keep all available
+  error/output details, and pending, running, or canceled interactions are not
+  presented as successful summaries.
+
 - OpenCode's private per-attempt `agent.log` retains the complete emitted JSON
   event stream before display filtering or truncation. It is raw evidence, not a
   copy of the rendered transcript. Copilot keeps its existing native-text
@@ -242,6 +286,10 @@ Official references for these contracts:
 - [OpenCode V2 permissions](https://opencode.ai/v2/docs/permissions/)
 - [OpenCode 2.1.4 noninteractive JSON renderer](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/cli/src/run/noninteractive.ts)
 - [OpenCode 2.1.4 noninteractive tests](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/cli/test/run/noninteractive.test.ts)
+- OpenCode 2.1.4 [read tool](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/read.ts), [grep tool](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/grep.ts), and [glob tool](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/glob.ts) schemas and metadata
+- OpenCode 2.1.4 [websearch tool](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/websearch.ts) and [subagent tool](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/subagent.ts) schemas and metadata
+- OpenCode 2.1.4 built-in [patch](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/patch.ts), [edit](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/edit.ts), [write](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/write.ts), and [webfetch](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/webfetch.ts) tool schemas and outputs
+- OpenCode 2.1.4 [skill](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/skill.ts) and [question](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/question.ts) tool contracts, plus the [question prompt/answer schema](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/schema/src/question.ts)
 - [Copilot CLI command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
 - [Copilot CLI programmatic reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference)
 - [Copilot CLI skill setup](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills)
@@ -299,24 +347,43 @@ not claim a push, merge, or PR. Already-committed work can instead be
 ## Output and record boundaries
 
 OpenCode's `--format json` stream is parsed incrementally at the existing harness
-output boundary. Completed assistant text and tool results appear promptly in
-separate blocks, before the process exits. Shell blocks show the actual command
-from the available tool input separately from the result. Successful shell output
-and other generic successful tool output are limited to five preview lines and
-report how many additional lines were omitted; empty shell output is marked
-`(no output)`. Successful reads show target details and only reliable emitted
-counts, not file contents. Search results show available query/scope details and
-explicit metadata counts, not the matches themselves; missing count metadata is
-identified without deriving a number from output text. Identifiable parent-level
-delegation shows available task/agent identity and the same bounded five-line
-result preview; otherwise the generic tool fallback is used. There are no
-delegated-agent start/progress blocks or child-session transcripts. Available
-failure details are not preview-limited. To inspect omitted output or the complete
-command/result events, read the private raw `agent.log` in the Attempt records.
-Unknown or malformed records and merged-stream diagnostics remain visible through
-readable fallbacks. The renderer does not infer completion from tool markers,
-step-finish events, or the absence of an error event. Process status and the
-separate completion-result file remain authoritative for Attempt completion.
+output boundary. Assistant text and tool results appear incrementally, before
+the process exits. Assistant wording and Markdown are passed through without a
+repeated heading. Completed and failed tool blocks use a check/cross, action
+title, inline tool name, connected details, and whitespace separation. Shell
+blocks show the actual command followed by up to five result lines; empty
+successful output says `No output`, and longer results include a brief omission
+notice. Other unfamiliar tools retain a compact bounded JSON input fallback and
+the same successful-result preview limit. Failed tool errors and output are not
+truncated. Wrapper-added terminal styling follows the existing TTY and
+`NO_COLOR` policy, while supplied ANSI sequences in result content are passed
+through unchanged.
+
+Successful reads show the requested target and only reliable explicit metadata
+counts for files or directories, never file/media contents or counts inferred
+from returned prose. Verified `grep` and `glob` schemas show patterns, scope, and
+applicable filters; their explicit metadata counts retain zero, describe
+truncated results as lower bounds, and omit unavailable counts. Search match
+dumps and `websearch` result dumps remain hidden. Unsupported tools and shapes
+use the generic fallback so their result preview stays visible. Recognized
+parent-level delegation uses its task description as the title, combines tool
+and agent identity in the suffix when available, omits standalone IDs/agent
+lines, and previews up to five returned-result lines. It does not display child
+transcripts or progress. To inspect omitted output or complete command/result
+events, read the private raw `agent.log` in the Attempt records. Unknown or
+malformed records and merged-stream diagnostics remain visible through readable
+fallbacks. The renderer does not infer completion from tool markers, step-finish
+events, or the absence of an error event. Process status and the separate
+completion-result file remain authoritative for Attempt completion.
+
+Successful `patch`, `edit`, and `write` blocks preview up to five returned result
+lines; only the recognized patch success header is removed, and modification
+inputs or metadata diffs are not added to successful blocks. `webfetch` blocks
+show the requested URL and up to five returned content lines. Both use the same
+omission notice and empty-output indication. Failure blocks preserve available
+error details and output without success-only filtering or limits. These
+family-specific displays do not alter incremental delivery, raw-log bytes, or
+the independent process/result-file completion evidence.
 
 OpenCode's private per-attempt `agent.log` preserves every emitted byte before
 rendering, filtering, or truncation, so it contains raw JSON events rather than
