@@ -13,30 +13,14 @@ jobs:
     name: macOS arm64 executable
     runs-on: macos-26
     timeout-minutes: 30
-    env:
-      UV_PYTHON: "3.11"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.11"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with:
-          version: "0.13.5"
-          enable-cache: false
-
-      - name: Build and validate the packaged executable
-        run: make test-packaged
-
-      - name: Archive the executable with its permissions
-        run: tar -czf build/implement-loop-macos-arm64.tar.gz -C dist implement-loop
+      - name: Build packaged executable archive
+        uses: ./.github/actions/package-macos
 
       - name: Upload validated archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
