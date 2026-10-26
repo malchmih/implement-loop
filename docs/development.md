@@ -26,6 +26,31 @@ fail if the project dependencies and lockfile need to be reconciled. ShellCheck
 must be installed separately. These public Make targets are also the commands
 used by CI. The checks make no live model calls or GitHub writes.
 
+## macOS arm64 executable
+
+On Apple Silicon macOS, `make build` creates the one-file PyInstaller executable
+at `dist/implement-loop`. It packages the application files currently on disk,
+including uncommitted edits; no clean checkout or commit is required. The
+project's `.python-version` selects Python 3.11, and uv provisions that Python
+and resolves the separately locked `build` dependency group. The executable
+includes its Python runtime and runs independently of the source checkout.
+PyInstaller's local ad-hoc signing needs no Developer ID credentials or
+notarization; a downloaded copy may still encounter Gatekeeper restrictions.
+
+Contributors may install the optional pinned tools with `mise install` (uv and
+ShellCheck only); uv owns Python provisioning. mise is not required when uv,
+ShellCheck, and the other Make prerequisites are already available. Run
+`make test-packaged` to build and exercise the executable outside the checkout
+with fake GitHub and harness commands; the checks make no live GitHub writes or
+model calls. This focused target can be used by CI without running the behavioral
+suite against the frozen binary.
+
+At runtime, Git, an authenticated GitHub CLI session, the selected harness CLI,
+and the external `implement` skill remain required. The executable does not
+bundle those integrations or credentials. Binary builds are intentionally
+limited to macOS arm64; Linux source execution and the existing source-based
+test matrix remain supported.
+
 ## GitHub Actions
 
 The `Quality checks` workflow runs for pull requests targeting `main` (including

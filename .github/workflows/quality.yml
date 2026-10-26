@@ -81,4 +81,6 @@ jobs:
           enable-cache: false
 
       - name: Run behavioral tests
+        env:
+          UV_PYTHON: ${{ matrix.python-version }}
         run: make test
