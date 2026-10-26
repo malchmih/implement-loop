@@ -657,7 +657,10 @@ class _OpenCodeRenderer:
     def _question_answer(question: dict[str, Any], answers: list[str]) -> str:
         if not answers:
             return "No answer supplied"
-        answer = ", ".join(answers)
+        answer = ", ".join(
+            json.dumps(value, ensure_ascii=False) if not value.strip() else value
+            for value in answers
+        )
         option_labels = {option["label"] for option in question["options"]}
         if all(value in option_labels for value in answers):
             return f"Selected {answer}"

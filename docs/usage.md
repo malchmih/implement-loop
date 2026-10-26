@@ -262,11 +262,12 @@ documentation before using it. OpenCode V1 is not supported.
   suppress the loaded instruction text. Successful `question` blocks use verified
   question prompts and matching `metadata.answers` arrays; they keep each answer
   paired with its question, show selected option values, and display free-form
-  values as supplied without paraphrasing. Empty answers say `No answer supplied`.
-  Missing or unsupported fields retain the generic input/result fallback rather
-  than inventing a skill confirmation or question answer. Failures keep all
-  available error/output details, and pending, running, or canceled interactions
-  are not presented as successful summaries.
+  values as supplied without paraphrasing. Empty answer lists say
+  `No answer supplied`; explicit blank string values display as `""`. Missing or
+  unsupported fields retain the generic input/result fallback rather than
+  inventing a skill confirmation or question answer. Failures keep all available
+  error/output details, and pending, running, or canceled interactions are not
+  presented as successful summaries.
 
 - OpenCode's private per-attempt `agent.log` retains the complete emitted JSON
   event stream before display filtering or truncation. It is raw evidence, not a

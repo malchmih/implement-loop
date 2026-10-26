@@ -535,6 +535,30 @@ class HarnessTests(LoopTestCase):
                     },
                 },
             },
+            {
+                "type": "tool_use",
+                "timestamp": 4,
+                "sessionID": "ses_question",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Submit a blank note",
+                                    "header": "Notes",
+                                    "options": [],
+                                }
+                            ]
+                        },
+                        "output": "PRIVATE_EMPTY_STRING_QUESTION_OUTPUT",
+                        "metadata": {"metadata": {"answers": [[""]]}},
+                    },
+                },
+            },
         ]
 
         raw_output, visible, runs = self._run_opencode_events(events)
@@ -557,9 +581,14 @@ class HarnessTests(LoopTestCase):
             "✓ Share optional notes (question)\n  └ No answer supplied",
             visible,
         )
+        self.assertIn(
+            '✓ Submit a blank note (question)\n  └ ""',
+            visible,
+        )
         self.assertNotIn("PRIVATE_QUESTION_MODEL_TEXT", visible)
         self.assertNotIn("PRIVATE_MULTI_QUESTION_MODEL_TEXT", visible)
         self.assertNotIn("PRIVATE_NO_ANSWER_MODEL_TEXT", visible)
+        self.assertNotIn("PRIVATE_EMPTY_STRING_QUESTION_OUTPUT", visible)
         self.assertNotIn("Relational database", visible)
         self.assertNotIn("Embedded database", visible)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
@@ -567,6 +596,7 @@ class HarnessTests(LoopTestCase):
         self.assertIn(b"PRIVATE_QUESTION_MODEL_TEXT", log.read_bytes())
         self.assertIn(b"PRIVATE_MULTI_QUESTION_MODEL_TEXT", log.read_bytes())
         self.assertIn(b"PRIVATE_NO_ANSWER_MODEL_TEXT", log.read_bytes())
+        self.assertIn(b"PRIVATE_EMPTY_STRING_QUESTION_OUTPUT", log.read_bytes())
         self.assertIn("preserve naïve labels".encode(), log.read_bytes())
 
     def test_opencode_partial_skill_and_question_schemas_keep_generic_results(self) -> None:
