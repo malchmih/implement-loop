@@ -108,9 +108,9 @@ Dependencies are run with the committed lockfile and locked uv operations.
 
 Superseded runs of the same PR are cancelled. Different PRs and manual runs use
 separate concurrency groups. Matrix fail-fast is disabled so the other
-platform/Python results can finish after a failure. Every job has a 15-minute
-timeout, and ordinary Actions logs are retained using the repository's existing
-settings.
+platform/Python results can finish after a failure. Static and behavioral jobs
+have 15-minute timeouts; the packaged macOS job has a 30-minute timeout. Ordinary
+Actions logs are retained using the repository's existing settings.
 
 The workflow uses standard GitHub-hosted `ubuntu-24.04` and `macos-26` runners
 in this public repository. Standard hosted runners are free for public
