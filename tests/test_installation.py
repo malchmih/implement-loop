@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 from support import SCRIPT, LoopTestCase, TemporaryHomeTestCase
@@ -25,6 +25,7 @@ class MakeInstallCommandTests(TemporaryHomeTestCase):
         self.env.pop("PREFIX", None)
         self.env["IMPLEMENT_LOOP_TEST_BUILD_LOG"] = str(self.build_log)
         self.env["IMPLEMENT_LOOP_TEST_BUILD_PAYLOAD"] = "fake executable\n"
+        self.env["IMPLEMENT_LOOP_TEST_PYTHON"] = sys.executable
         self.env["PATH"] = str(self.build_tools) + os.pathsep + self.env["PATH"]
 
         self._write_command(
@@ -41,6 +42,18 @@ class MakeInstallCommandTests(TemporaryHomeTestCase):
             "#!/bin/sh\n"
             "set -eu\n"
             'printf \'%s\\n\' "$*" >> "$IMPLEMENT_LOOP_TEST_BUILD_LOG"\n'
+            'if [ "$1" = run ] && [ "$3" = python ]; then\n'
+            '  if [ "${IMPLEMENT_LOOP_TEST_REPLACEMENT_FAIL:-}" = 1 ]; then\n'
+            "    printf 'simulated replacement failure\\n' >&2\n"
+            "    exit 73\n"
+            "  fi\n"
+            '  if [ -n "${IMPLEMENT_LOOP_TEST_RACE_DESTINATION:-}" ]; then\n'
+            '    ln -s "$IMPLEMENT_LOOP_TEST_RACE_TARGET" "$IMPLEMENT_LOOP_TEST_RACE_DESTINATION"\n'
+            "  fi\n"
+            "  shift 2\n"
+            "  shift\n"
+            '  exec "$IMPLEMENT_LOOP_TEST_PYTHON" "$@"\n'
+            "fi\n"
             'if [ "${IMPLEMENT_LOOP_TEST_BUILD_FAIL:-}" = 1 ]; then\n'
             "  printf 'simulated build failure\\n' >&2\n"
             "  exit 73\n"
@@ -159,25 +172,13 @@ class MakeInstallCommandTests(TemporaryHomeTestCase):
         self.assertTrue(os.access(installed, os.X_OK))
 
     def test_make_install_replacement_failure_preserves_existing_executable(self) -> None:
-        real_mv = shutil.which("mv")
-        self.assertIsNotNone(real_mv, "test environment needs mv")
-        assert real_mv is not None
-        self._write_command(
-            "mv",
-            "#!/bin/sh\n"
-            'if [ "${IMPLEMENT_LOOP_TEST_MOVE_FAIL:-}" = 1 ]; then\n'
-            "  printf 'simulated replacement failure\\n' >&2\n"
-            "  exit 73\n"
-            "fi\n"
-            f'exec {shlex.quote(real_mv)} "$@"\n',
-        )
         prefix = self.home / "existing install prefix"
         installed = prefix / "bin/implement-loop"
         installed.parent.mkdir(parents=True)
         installed.write_text("previous working executable\n")
         installed.chmod(0o755)
         failed_replacement_env = dict(self.env)
-        failed_replacement_env["IMPLEMENT_LOOP_TEST_MOVE_FAIL"] = "1"
+        failed_replacement_env["IMPLEMENT_LOOP_TEST_REPLACEMENT_FAIL"] = "1"
 
         result = self._run_make_install(prefix=prefix, env=failed_replacement_env)
 
@@ -185,6 +186,25 @@ class MakeInstallCommandTests(TemporaryHomeTestCase):
         self.assertIn("cannot replace the installed executable", result.stderr)
         self.assertEqual(installed.read_text(), "previous working executable\n")
         self.assertTrue(os.access(installed, os.X_OK))
+        self.assertEqual(list(installed.parent.glob(".implement-loop.*")), [])
+
+    def test_make_install_does_not_follow_a_symlink_created_before_replacement(self) -> None:
+        prefix = self.home / "racing install prefix"
+        installed = prefix / "bin/implement-loop"
+        installed.parent.mkdir(parents=True)
+        target_directory = self.home / "symlink target"
+        target_directory.mkdir()
+        race_env = dict(self.env)
+        race_env["IMPLEMENT_LOOP_TEST_RACE_DESTINATION"] = str(installed)
+        race_env["IMPLEMENT_LOOP_TEST_RACE_TARGET"] = str(target_directory)
+
+        result = self._run_make_install(prefix=prefix, env=race_env)
+
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("refusing to replace symlink", result.stderr)
+        self.assertTrue(installed.is_symlink())
+        self.assertEqual(os.readlink(installed), str(target_directory))
+        self.assertEqual(list(target_directory.iterdir()), [])
         self.assertEqual(list(installed.parent.glob(".implement-loop.*")), [])
 
 

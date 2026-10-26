@@ -18,36 +18,16 @@ fi
 bin_directory=$prefix/bin
 destination=$bin_directory/implement-loop
 
-refuse_unsafe_destination() {
-    if [ -L "$destination" ]; then
-        printf 'Error: refusing to replace symlink at %s; remove an old source-checkout symlink manually after verifying its target, then retry.\n' \
-            "$destination" >&2
-        return 1
-    fi
-    if [ -d "$destination" ]; then
-        printf 'Error: refusing to replace directory at %s; choose another PREFIX or remove it manually after verifying its contents.\n' \
-            "$destination" >&2
-        return 1
-    fi
-    if [ -e "$destination" ] && [ ! -f "$destination" ]; then
-        printf 'Error: refusing to replace non-regular destination at %s; choose another PREFIX or move it manually after verifying it is safe.\n' \
-            "$destination" >&2
-        return 1
-    fi
-}
-
 if [ ! -f "$source_binary" ] || [ ! -x "$source_binary" ]; then
     printf 'Error: expected an executable regular file at %s; run make build first.\n' \
         "$source_binary" >&2
     exit 1
 fi
 
-refuse_unsafe_destination
 if ! mkdir -p "$bin_directory"; then
     printf 'Error: cannot create installation directory %s.\n' "$bin_directory" >&2
     exit 1
 fi
-refuse_unsafe_destination
 
 temporary_file=
 cleanup() {
@@ -66,8 +46,7 @@ if ! install -m 755 "$source_binary" "$temporary_file"; then
     printf 'Error: cannot stage the executable for installation in %s.\n' "$bin_directory" >&2
     exit 1
 fi
-refuse_unsafe_destination
-if ! mv -f "$temporary_file" "$destination"; then
+if ! uv run --locked python scripts/replace_binary.py "$temporary_file" "$destination"; then
     printf 'Error: cannot replace the installed executable at %s; the previous file was left in place.\n' \
         "$destination" >&2
     exit 1
