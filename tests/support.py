@@ -784,7 +784,8 @@ class LoopTestCase(TemporaryHomeTestCase):
         terminal: bool,
         no_color: bool = False,
         include_failure: bool = False,
-    ) -> None:
+        live_output_fragment: bytes = LIVE_OUTPUT_FRAGMENT,
+    ) -> bytes:
         ready_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         ready_listener.bind(("127.0.0.1", 0))
         ready_listener.listen()
@@ -796,7 +797,7 @@ class LoopTestCase(TemporaryHomeTestCase):
 
         try:
             env = dict(self.env)
-            env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT"] = LIVE_OUTPUT_FRAGMENT.decode("ascii")
+            env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT"] = live_output_fragment.decode("utf-8")
             env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"] = str(ready_listener.getsockname()[1])
             if include_failure:
                 env["IMPLEMENT_LOOP_TEST_LIVE_FAILURE"] = "1"
@@ -843,7 +844,7 @@ class LoopTestCase(TemporaryHomeTestCase):
             self._read_until_output(
                 output_descriptor,
                 output,
-                LIVE_OUTPUT_FRAGMENT,
+                live_output_fragment.splitlines()[0],
                 timeout=LIVE_OUTPUT_TIMEOUT,
             )
             if include_failure:
@@ -861,7 +862,8 @@ class LoopTestCase(TemporaryHomeTestCase):
             self.assertEqual(len(attempt_dirs), 1)
             attempt_dir = attempt_dirs[0]
             self.assertTrue((attempt_dir.parent / "active.pid").is_file())
-            self.assertIn(LIVE_OUTPUT_FRAGMENT, output)
+            for fragment_line in live_output_fragment.splitlines():
+                self.assertIn(fragment_line, output)
             if harness == "opencode":
                 if terminal and not no_color:
                     self.assertIn(
@@ -895,7 +897,7 @@ class LoopTestCase(TemporaryHomeTestCase):
                             "status": "completed",
                             "title": "Live completed tool",
                             "input": {"fixture": "live"},
-                            "output": LIVE_OUTPUT_FRAGMENT.decode("ascii"),
+                            "output": live_output_fragment.decode("utf-8"),
                         },
                     },
                 }
@@ -923,7 +925,7 @@ class LoopTestCase(TemporaryHomeTestCase):
                 ).encode("utf-8")
                 self.assertEqual((attempt_dir / "agent.log").read_bytes(), expected_log)
             else:
-                self.assertEqual((attempt_dir / "agent.log").read_bytes(), LIVE_OUTPUT_FRAGMENT)
+                self.assertEqual((attempt_dir / "agent.log").read_bytes(), live_output_fragment)
 
             assert process.stdin is not None
             process.stdin.write(b"x")
@@ -940,6 +942,7 @@ class LoopTestCase(TemporaryHomeTestCase):
             expected_force_color = "1" if terminal and not no_color else "0"
             self.assertEqual(call["no_color"], expected_no_color)
             self.assertEqual(call["force_color"], expected_force_color)
+            return bytes(output)
         finally:
             if process is not None:
                 if process.stdin is not None and not process.stdin.closed:

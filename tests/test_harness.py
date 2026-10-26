@@ -948,6 +948,18 @@ class HarnessTests(LoopTestCase):
         )
         self.assertIn(b"\\u001b[31mred first line", raw_output.encode("utf-8"))
 
+    def test_opencode_terminal_multiline_tool_output_preserves_supplied_color(self) -> None:
+        output = self._assert_live_harness_output(
+            "opencode",
+            terminal=True,
+            live_output_fragment=b"\x1b[31mred first line\nred second line\x1b[0m",
+        ).replace(b"\r\n", b"\n")
+
+        self.assertIn(
+            b"\x1b[31mred first line\n  \x1b[2m\xe2\x94\x94\x1b[22m red second line\x1b[0m",
+            output,
+        )
+
     def test_opencode_file_modification_results_hide_inputs_and_strip_patch_header(self) -> None:
         patch_input = (
             "*** Begin Patch\n*** Update File: src/settings.py\n+SECRET_PATCH_INPUT\n*** End Patch"
