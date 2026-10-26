@@ -4,12 +4,10 @@ import platform
 import shutil
 import subprocess
 import sys
-from pathlib import Path
 
-from support import LoopTestCase
+from support import SCRIPT, LoopTestCase
 
-ROOT = Path(__file__).resolve().parents[1]
-PACKAGED_EXECUTABLE = ROOT / "dist" / "implement-loop"
+PACKAGED_EXECUTABLE = SCRIPT.parent / "dist" / "implement-loop"
 
 
 class PackagedExecutableTests(LoopTestCase):

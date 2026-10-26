@@ -7,7 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from support import SCRIPT
+
 MAKE = shutil.which("make")
 
 
@@ -32,7 +33,7 @@ class BuildCommandTests(unittest.TestCase):
 
             result = subprocess.run(
                 [MAKE, "build"],
-                cwd=ROOT,
+                cwd=SCRIPT.parent,
                 env=environment,
                 capture_output=True,
                 text=True,
