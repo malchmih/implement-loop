@@ -979,7 +979,7 @@ class HarnessTests(LoopTestCase):
                 "state": {
                     "status": "completed",
                     "title": "read",
-                    "input": {"filePath": "src/no-count.py"},
+                    "input": {"path": "src/no-count.py"},
                     "output": "SECRET_CONTENT_WITHOUT_METADATA",
                 },
             },
@@ -1007,7 +1007,7 @@ class HarnessTests(LoopTestCase):
                 "state": {
                     "status": "completed",
                     "title": "read",
-                    "input": {"filePath": "src/large.py"},
+                    "input": {"path": "src/large.py"},
                     "output": "SECRET_TRUNCATED_READ_CONTENT",
                     "metadata": {
                         "metadata": {
@@ -1065,6 +1065,21 @@ class HarnessTests(LoopTestCase):
                     },
                 },
             },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_read_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "read",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect legacy read shape",
+                        "input": {"filePath": "src/legacy.py"},
+                        "output": "Unsupported read alias keeps this result visible.",
+                    },
+                },
+            },
         ]
 
         raw_output, visible, runs = self._run_opencode_events(events)
@@ -1074,6 +1089,9 @@ class HarnessTests(LoopTestCase):
         self.assertIn("Unsupported read shape keeps this result visible.", visible)
         self.assertIn("✓ Inspect custom reader (read_extension)", visible)
         self.assertIn("Custom read output stays visible.", visible)
+        self.assertIn("✓ Inspect legacy read shape (read)", visible)
+        self.assertIn('{"filePath":"src/legacy.py"}', visible)
+        self.assertIn("Unsupported read alias keeps this result visible.", visible)
         self.assertEqual(
             (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
         )
@@ -1514,7 +1532,7 @@ class HarnessTests(LoopTestCase):
                     "state": {
                         "status": "error",
                         "title": "Read failed",
-                        "input": {"filePath": "src/unavailable.py"},
+                        "input": {"path": "src/unavailable.py"},
                         "error": "READ_ERROR_DETAIL",
                         "output": "\n".join(f"READ_OUTPUT_LINE_{line}" for line in range(1, 7)),
                     },

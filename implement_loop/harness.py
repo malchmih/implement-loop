@@ -503,15 +503,9 @@ class _OpenCodeRenderer:
     def _read_input_supported(input_value: Any) -> bool:
         if not isinstance(input_value, dict):
             return False
-        target_keys = ("path", "filePath", "file_path", "file", "target")
-        target_fields = [key for key in target_keys if key in input_value]
-        allowed = {*target_keys, "offset", "limit"}
-        if len(target_fields) != 1 or set(input_value) - allowed:
+        if "path" not in input_value or set(input_value) - {"path", "offset", "limit"}:
             return False
-        if (
-            not isinstance(input_value[target_fields[0]], str)
-            or not input_value[target_fields[0]].strip()
-        ):
+        if not isinstance(input_value["path"], str) or not input_value["path"].strip():
             return False
         return all(
             key not in input_value or _OpenCodeRenderer._count_value(input_value[key]) is not None
@@ -523,11 +517,7 @@ class _OpenCodeRenderer:
         if not _OpenCodeRenderer._read_input_supported(input_value):
             return None
         assert isinstance(input_value, dict)
-        for key in ("path", "filePath", "file_path", "file", "target"):
-            value = input_value.get(key)
-            if isinstance(value, str):
-                return _OpenCodeRenderer._bounded_single_line(value)
-        return None
+        return _OpenCodeRenderer._bounded_single_line(input_value["path"])
 
     def _failure_detail(self, error: Any, output: Any) -> str:
         error_text = self._display_value(error) if error is not None else ""
