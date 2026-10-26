@@ -65,8 +65,9 @@ independent proof of semantic correctness.
 
 ## Troubleshoot missing output
 
-Terminal previews can abbreviate tool output. After a harness starts, its full
-raw output remains in the ticket's private `agent.log`; see
+Terminal previews can abbreviate tool output. When log persistence succeeds, the
+full raw output is in the ticket's private `agent.log`; a log-write failure is
+reported and can leave it incomplete. See
 [record location and privacy](configuration.md#record-location-and-privacy).
 
 ## Recovery
@@ -105,11 +106,18 @@ gh issue view "$TICKET" --json state,assignees --jq '{state, assignees: [.assign
 gh issue view "$TICKET" --comments
 ```
 
-An issue still assigned to you is skipped on the next run. For an uncertain
-closure, inspect `closure-comment.txt`, `checks.json`, and `closed-ticket.json`
-in the ticket records when present. A missing `closed-ticket.json` does not
-prove that closure failed. Decide from the live issue and records; the runner
-does not retry or repair partial GitHub writes.
+An issue still assigned to you is skipped on the next run. If it is open and
+still assigned to you, remove your assignment deliberately before retrying:
+
+```bash
+gh issue edit "$TICKET" --remove-assignee @me
+```
+
+For an uncertain closure, inspect `closure-comment.txt`, `checks.json`, and
+`closed-ticket.json` in the ticket records when present. A missing
+`closed-ticket.json` does not prove that closure failed. If the issue is closed,
+do not close it again; if it is still open, review the commit and records before
+retrying or [manually finalizing approved work](#manually-finalize-approved-committed-work).
 
 ### Stale lock or active-run marker
 
