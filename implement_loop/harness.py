@@ -367,6 +367,25 @@ class _OpenCodeRenderer:
             )
             return
 
+        if tool_name.casefold() == "skill":
+            skill = self._skill_result(input_value, metadata, output)
+            if skill is not None:
+                skill_id, _ = skill
+                self._render_action_block(
+                    title,
+                    tool_name,
+                    failed=False,
+                    details=[("└", f"Loaded {skill_id}")],
+                )
+                return
+
+        if tool_name.casefold() == "question":
+            questions = self._question_prompts(input_value)
+            answers = self._question_answers(metadata, len(questions)) if questions else None
+            if questions is not None and answers is not None and isinstance(output, str):
+                self._render_question_summary(title, tool_name, questions, answers)
+                return
+
         if delegated:
             self._render_delegated_result(
                 title,
@@ -431,6 +450,19 @@ class _OpenCodeRenderer:
         normalized_tool = tool_name.casefold()
         if normalized_tool == "shell":
             return "Run command"
+        if normalized_tool == "skill":
+            skill_id = self._skill_id(input_value)
+            skill_metadata = self._skill_metadata(metadata)
+            if skill_id is not None and skill_metadata is not None:
+                skill_name = skill_metadata[0]
+                return f"Load {skill_name} instructions"
+        if normalized_tool == "question":
+            questions = self._question_prompts(input_value)
+            answers = self._question_answers(metadata, len(questions)) if questions else None
+            if questions is not None and answers is not None:
+                if len(questions) == 1:
+                    return self._bounded_single_line(questions[0]["question"]) or "Answer question"
+                return f"Answer {len(questions)} questions"
         if normalized_tool == "read":
             target = (
                 self._read_target(input_value) if self._read_input_supported(input_value) else None
@@ -485,6 +517,142 @@ class _OpenCodeRenderer:
     def _input_summary(self, input_value: Any) -> str:
         summary = self._compact(input_value)
         return summary if len(summary) <= 240 else summary[:237] + "..."
+
+    @staticmethod
+    def _skill_id(input_value: Any) -> str | None:
+        if not isinstance(input_value, dict) or set(input_value) != {"id"}:
+            return None
+        value = input_value.get("id")
+        if not isinstance(value, str) or not value or value != value.strip() or len(value) > 240:
+            return None
+        if any(character.isspace() for character in value):
+            return None
+        return value
+
+    @staticmethod
+    def _skill_metadata(metadata: Any) -> tuple[str, str] | None:
+        for layer in reversed(_OpenCodeRenderer._metadata_layers(metadata)):
+            if "name" not in layer and "directory" not in layer:
+                continue
+            name = layer.get("name")
+            directory = layer.get("directory")
+            if (
+                not isinstance(name, str)
+                or not name.strip()
+                or not isinstance(directory, str)
+                or not directory.strip()
+            ):
+                return None
+            display_name = _OpenCodeRenderer._bounded_single_line(name)
+            if display_name is None:
+                return None
+            return display_name, directory
+        return None
+
+    @staticmethod
+    def _skill_result(input_value: Any, metadata: Any, output: Any) -> tuple[str, str] | None:
+        skill_id = _OpenCodeRenderer._skill_id(input_value)
+        skill_metadata = _OpenCodeRenderer._skill_metadata(metadata)
+        if skill_id is None or skill_metadata is None or not isinstance(output, str):
+            return None
+        return skill_id, skill_metadata[0]
+
+    @staticmethod
+    def _question_prompts(input_value: Any) -> list[dict[str, Any]] | None:
+        if not isinstance(input_value, dict) or set(input_value) != {"questions"}:
+            return None
+        questions = input_value.get("questions")
+        if not isinstance(questions, list) or not questions:
+            return None
+
+        supported: list[dict[str, Any]] = []
+        for question in questions:
+            required = {"question", "header", "options"}
+            allowed = required | {"multiple"}
+            if (
+                not isinstance(question, dict)
+                or required - set(question)
+                or set(question) - allowed
+            ):
+                return None
+            if (
+                not isinstance(question.get("question"), str)
+                or not question["question"].strip()
+                or not isinstance(question.get("header"), str)
+                or not question["header"].strip()
+                or not isinstance(question.get("options"), list)
+                or ("multiple" in question and not isinstance(question["multiple"], bool))
+            ):
+                return None
+            for option in question["options"]:
+                if (
+                    not isinstance(option, dict)
+                    or set(option) != {"label", "description"}
+                    or not isinstance(option.get("label"), str)
+                    or not isinstance(option.get("description"), str)
+                ):
+                    return None
+            supported.append(question)
+        return supported
+
+    @staticmethod
+    def _question_answers(metadata: Any, question_count: int) -> list[list[str]] | None:
+        for layer in reversed(_OpenCodeRenderer._metadata_layers(metadata)):
+            if "answers" not in layer:
+                continue
+            answers = layer.get("answers")
+            if (
+                not isinstance(answers, list)
+                or len(answers) != question_count
+                or any(
+                    not isinstance(answer, list)
+                    or any(not isinstance(value, str) for value in answer)
+                    for answer in answers
+                )
+            ):
+                return None
+            return answers
+        return None
+
+    def _render_question_summary(
+        self,
+        title: str,
+        tool_name: str,
+        questions: list[dict[str, Any]],
+        answers: list[list[str]],
+    ) -> None:
+        details: list[tuple[str, str]] = []
+        if len(questions) == 1:
+            question = questions[0]
+            prompt = self._bounded_single_line(question["question"])
+            if prompt is not None and title.casefold() != prompt.casefold():
+                details.append(("├", f"{question['header']}: {prompt}"))
+            details.append(("└", self._question_answer(question, answers[0])))
+        else:
+            for index, (question, answer) in enumerate(zip(questions, answers, strict=True)):
+                prompt = self._bounded_single_line(question["question"])
+                if prompt is None:
+                    prompt = question["header"]
+                label = question["header"]
+                if label.casefold() != prompt.casefold():
+                    label = f"{label}: {prompt}"
+                details.append(
+                    (
+                        "└" if index == len(questions) - 1 else "├",
+                        f"{label}\n{self._question_answer(question, answer)}",
+                    )
+                )
+        self._render_action_block(title, tool_name, failed=False, details=details)
+
+    @staticmethod
+    def _question_answer(question: dict[str, Any], answers: list[str]) -> str:
+        if not answers:
+            return "No answer supplied"
+        answer = ", ".join(answers)
+        option_labels = {option["label"] for option in question["options"]}
+        if all(value in option_labels for value in answers):
+            return f"Selected {answer}"
+        return answer
 
     @staticmethod
     def _bounded_single_line(value: str) -> str | None:

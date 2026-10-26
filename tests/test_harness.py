@@ -382,6 +382,437 @@ class HarnessTests(LoopTestCase):
             (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
         )
 
+    def test_opencode_successful_skill_loads_suppress_instructions_and_keep_raw_event(self) -> None:
+        instruction_payload = (
+            '<skill_content name="Test-driven development">\n'
+            "PRIVATE_SKILL_INSTRUCTIONS\n"
+            "PRIVATE_SKILL_REFERENCE\n"
+            "</skill_content>"
+        )
+        event = {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_skill",
+            "part": {
+                "type": "tool",
+                "tool": "skill",
+                "state": {
+                    "status": "completed",
+                    "title": "skill",
+                    "input": {"id": "tdd"},
+                    "output": instruction_payload,
+                    "metadata": {
+                        "metadata": {
+                            "name": "Test-driven development",
+                            "directory": "/skills/tdd",
+                        },
+                        "content": [{"type": "text", "text": instruction_payload}],
+                        "rawInput": '{"id":"tdd"}',
+                    },
+                },
+            },
+        }
+
+        raw_output, visible, runs = self._run_opencode_events([event])
+
+        self.assertIn(
+            "✓ Load Test-driven development instructions (skill)\n  └ Loaded tdd",
+            visible,
+        )
+        self.assertNotIn("PRIVATE_SKILL_INSTRUCTIONS", visible)
+        self.assertNotIn("PRIVATE_SKILL_REFERENCE", visible)
+        self.assertNotIn("<skill_content", visible)
+        self.assertNotIn('{"id":"tdd"}', visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+        self.assertIn(b"PRIVATE_SKILL_INSTRUCTIONS", log.read_bytes())
+        self.assertIn(b"PRIVATE_SKILL_REFERENCE", log.read_bytes())
+
+    def test_opencode_successful_questions_show_supplied_answers_and_keep_question_relationships(
+        self,
+    ) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_question",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a database",
+                                    "header": "Database",
+                                    "options": [
+                                        {
+                                            "label": "PostgreSQL",
+                                            "description": "Relational database",
+                                        },
+                                        {"label": "SQLite", "description": "Embedded database"},
+                                    ],
+                                }
+                            ]
+                        },
+                        "output": "PRIVATE_QUESTION_MODEL_TEXT",
+                        "metadata": {"metadata": {"answers": [["PostgreSQL"]]}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_question",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Which databases do you prefer?",
+                                    "header": "Databases",
+                                    "options": [
+                                        {"label": "PostgreSQL", "description": "Relational"},
+                                        {"label": "SQLite", "description": "Embedded"},
+                                    ],
+                                    "multiple": True,
+                                },
+                                {
+                                    "question": "What must the migration preserve?",
+                                    "header": "Constraints",
+                                    "options": [],
+                                },
+                                {
+                                    "question": "Choose a deployment region",
+                                    "header": "Region",
+                                    "options": [
+                                        {"label": "EU West", "description": "Europe"},
+                                        {"label": "US East", "description": "North America"},
+                                    ],
+                                },
+                            ]
+                        },
+                        "output": "PRIVATE_MULTI_QUESTION_MODEL_TEXT",
+                        "metadata": {
+                            "metadata": {
+                                "answers": [
+                                    ["PostgreSQL", "SQLite"],
+                                    ["Keep the current table names; preserve naïve labels."],
+                                    ["EU West"],
+                                ]
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_question",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Share optional notes",
+                                    "header": "Notes",
+                                    "options": [],
+                                }
+                            ]
+                        },
+                        "output": "PRIVATE_NO_ANSWER_MODEL_TEXT",
+                        "metadata": {"metadata": {"answers": [[]]}},
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn(
+            "✓ Choose a database (question)\n  └ Selected PostgreSQL",
+            visible,
+        )
+        self.assertIn(
+            "✓ Answer 3 questions (question)\n"
+            "  ├ Databases: Which databases do you prefer?\n"
+            "    Selected PostgreSQL, SQLite\n"
+            "  ├ Constraints: What must the migration preserve?\n"
+            "    Keep the current table names; preserve naïve labels.\n"
+            "  └ Region: Choose a deployment region\n"
+            "    Selected EU West",
+            visible,
+        )
+        self.assertIn(
+            "✓ Share optional notes (question)\n  └ No answer supplied",
+            visible,
+        )
+        self.assertNotIn("PRIVATE_QUESTION_MODEL_TEXT", visible)
+        self.assertNotIn("PRIVATE_MULTI_QUESTION_MODEL_TEXT", visible)
+        self.assertNotIn("PRIVATE_NO_ANSWER_MODEL_TEXT", visible)
+        self.assertNotIn("Relational database", visible)
+        self.assertNotIn("Embedded database", visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+        self.assertIn(b"PRIVATE_QUESTION_MODEL_TEXT", log.read_bytes())
+        self.assertIn(b"PRIVATE_MULTI_QUESTION_MODEL_TEXT", log.read_bytes())
+        self.assertIn(b"PRIVATE_NO_ANSWER_MODEL_TEXT", log.read_bytes())
+        self.assertIn("preserve naïve labels".encode(), log.read_bytes())
+
+    def test_opencode_partial_skill_and_question_schemas_keep_generic_results(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_partial_summaries",
+                "part": {
+                    "type": "tool",
+                    "tool": "skill",
+                    "state": {
+                        "status": "completed",
+                        "title": "skill",
+                        "input": {"id": "incomplete-skill"},
+                        "output": "PARTIAL_SKILL_RESULT",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_partial_summaries",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a database",
+                                    "header": "Database",
+                                    "options": [
+                                        {"label": "PostgreSQL", "description": "Relational"},
+                                    ],
+                                }
+                            ]
+                        },
+                        "output": "PARTIAL_QUESTION_RESULT",
+                        "metadata": {"metadata": {"answers": []}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_partial_summaries",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a database",
+                                    "header": "Database",
+                                    "options": [],
+                                    "extra": "unsupported prompt field",
+                                }
+                            ]
+                        },
+                        "output": "UNSUPPORTED_QUESTION_RESULT",
+                        "metadata": {"metadata": {"answers": [["PostgreSQL"]]}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 4,
+                "sessionID": "ses_partial_summaries",
+                "part": {
+                    "type": "tool",
+                    "tool": "question_extension",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect extension question result",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a database",
+                                    "header": "Database",
+                                    "options": [],
+                                }
+                            ]
+                        },
+                        "output": "EXTENSION_QUESTION_RESULT",
+                        "metadata": {"metadata": {"answers": [["PostgreSQL"]]}},
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn("✓ Use tool (skill)", visible)
+        self.assertNotIn("Loaded incomplete-skill", visible)
+        self.assertIn("PARTIAL_SKILL_RESULT", visible)
+        self.assertIn("✓ Use tool (question)", visible)
+        self.assertNotIn("Selected PostgreSQL", visible)
+        self.assertIn("PARTIAL_QUESTION_RESULT", visible)
+        self.assertIn("✓ Use tool (question)", visible)
+        self.assertIn("UNSUPPORTED_QUESTION_RESULT", visible)
+        self.assertIn("✓ Inspect extension question result (question_extension)", visible)
+        self.assertIn("EXTENSION_QUESTION_RESULT", visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+
+    def test_opencode_incomplete_questions_do_not_get_success_summaries(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_incomplete_question",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "running",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a pending database",
+                                    "header": "Database",
+                                    "options": [
+                                        {"label": "PostgreSQL", "description": "Relational"},
+                                    ],
+                                }
+                            ]
+                        },
+                        "output": "PENDING_QUESTION_OUTPUT",
+                        "metadata": {"metadata": {"answers": [["PostgreSQL"]]}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_incomplete_question",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "cancelled",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a cancelled region",
+                                    "header": "Region",
+                                    "options": [{"label": "EU", "description": "Europe"}],
+                                }
+                            ]
+                        },
+                        "output": "CANCELLED_QUESTION_OUTPUT",
+                        "metadata": {"metadata": {"answers": [["EU"]]}},
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertNotIn("✓ Choose a pending database (question)", visible)
+        self.assertNotIn("✓ Choose a cancelled region (question)", visible)
+        self.assertNotIn("Selected PostgreSQL", visible)
+        self.assertNotIn("Selected EU", visible)
+        self.assertIn("OpenCode tool event", visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+
+    def test_opencode_failed_skill_and_question_calls_keep_full_evidence(self) -> None:
+        skill_error = "\n".join(f"SKILL_ERROR_LINE_{line}" for line in range(1, 7))
+        skill_output = "\n".join(f"SKILL_OUTPUT_LINE_{line}" for line in range(1, 7))
+        question_error = "\n".join(f"QUESTION_ERROR_LINE_{line}" for line in range(1, 7))
+        question_output = "\n".join(f"QUESTION_OUTPUT_LINE_{line}" for line in range(1, 7))
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_summary_failures",
+                "part": {
+                    "type": "tool",
+                    "tool": "skill",
+                    "state": {
+                        "status": "error",
+                        "title": "skill",
+                        "input": {"id": "tdd"},
+                        "error": skill_error,
+                        "output": skill_output,
+                        "metadata": {
+                            "metadata": {
+                                "name": "Test-driven development",
+                                "directory": "/skills/tdd",
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_summary_failures",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "error",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a database",
+                                    "header": "Database",
+                                    "options": [
+                                        {"label": "PostgreSQL", "description": "Relational"},
+                                    ],
+                                }
+                            ]
+                        },
+                        "error": question_error,
+                        "output": question_output,
+                        "metadata": {"metadata": {"answers": [["PostgreSQL"]]}},
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn("✗ Load Test-driven development instructions (skill)", visible)
+        self.assertNotIn("Loaded tdd", visible)
+        self.assertIn("✗ Choose a database (question)", visible)
+        for line in range(1, 7):
+            self.assertIn(f"SKILL_ERROR_LINE_{line}", visible)
+            self.assertIn(f"SKILL_OUTPUT_LINE_{line}", visible)
+            self.assertIn(f"QUESTION_ERROR_LINE_{line}", visible)
+            self.assertIn(f"QUESTION_OUTPUT_LINE_{line}", visible)
+        self.assertNotIn("additional line(s) omitted", visible)
+        log = runs[0] / "attempt-1-ticket-2/agent.log"
+        self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+
     def test_opencode_tool_output_preserves_supplied_ansi_in_preview_and_raw_log(self) -> None:
         colored_output = "\x1b[31mred first line\nred second line\x1b[0m"
         event = {

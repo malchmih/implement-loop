@@ -257,6 +257,17 @@ documentation before using it. OpenCode V1 is not supported.
   file or URL semantics. Failures bypass successful-output cleanup and limits,
   retaining all available errors and output.
 
+  Successful `skill` blocks require the verified `id` input and the returned
+  `name`/`directory` metadata. They identify the skill, say `Loaded <id>`, and
+  suppress the loaded instruction text. Successful `question` blocks use verified
+  question prompts and matching `metadata.answers` arrays; they keep each answer
+  paired with its question, show selected option values, and display free-form
+  values as supplied without paraphrasing. Empty answers say `No answer supplied`.
+  Missing or unsupported fields retain the generic input/result fallback rather
+  than inventing a skill confirmation or question answer. Failures keep all
+  available error/output details, and pending, running, or canceled interactions
+  are not presented as successful summaries.
+
 - OpenCode's private per-attempt `agent.log` retains the complete emitted JSON
   event stream before display filtering or truncation. It is raw evidence, not a
   copy of the rendered transcript. Copilot keeps its existing native-text
@@ -277,6 +288,7 @@ Official references for these contracts:
 - OpenCode 2.1.4 [read tool](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/read.ts), [grep tool](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/grep.ts), and [glob tool](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/glob.ts) schemas and metadata
 - OpenCode 2.1.4 [websearch tool](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/websearch.ts) and [subagent tool](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/subagent.ts) schemas and metadata
 - OpenCode 2.1.4 built-in [patch](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/patch.ts), [edit](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/edit.ts), [write](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/write.ts), and [webfetch](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/webfetch.ts) tool schemas and outputs
+- OpenCode 2.1.4 [skill](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/skill.ts) and [question](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool/plugin/question.ts) tool contracts, plus the [question prompt/answer schema](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/schema/src/question.ts)
 - [Copilot CLI command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
 - [Copilot CLI programmatic reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference)
 - [Copilot CLI skill setup](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills)

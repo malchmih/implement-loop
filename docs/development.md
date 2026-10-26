@@ -107,6 +107,11 @@ schemas for `patch`, `edit`, `write`, and `webfetch`. Their integration tests
 cover result previews, patch-only success-header removal, first-line
 preservation, unsupported-shape fallback, full failures, tool-supplied colors,
 and raw-log retention of filtered or omitted content.
+Skill and question fixtures follow the verified OpenCode 2.1.4 built-in tool and
+question prompt/answer schemas. Their CLI tests cover instruction-payload
+suppression with raw-log retention, single and multiple questions, selected and
+free-form answers, empty answers, partial/unsupported fallback, incomplete
+interactions, and complete failure details.
 CLI references and locally verified versions for native skill loading and
 invocation flags are recorded in [workflow and recovery](usage.md); fake
 executables do not prove that a live model loads a user's skill.
