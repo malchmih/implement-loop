@@ -94,6 +94,10 @@ class MakeInstallCommandTests(TemporaryHomeTestCase):
         installed.chmod(0o755)
         return installed
 
+    def _assert_existing_executable_unchanged(self, installed: Path) -> None:
+        self.assertEqual(installed.read_text(), "previous working executable\n")
+        self.assertTrue(os.access(installed, os.X_OK))
+
     def test_make_install_builds_and_installs_default_user_executable(self) -> None:
         result = self._run_make_install()
 
@@ -172,8 +176,7 @@ class MakeInstallCommandTests(TemporaryHomeTestCase):
 
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("simulated build failure", result.stderr)
-        self.assertEqual(installed.read_text(), "previous working executable\n")
-        self.assertTrue(os.access(installed, os.X_OK))
+        self._assert_existing_executable_unchanged(installed)
 
     def test_make_install_replacement_failure_preserves_existing_executable(self) -> None:
         prefix = self.home / "existing install prefix"
@@ -185,8 +188,7 @@ class MakeInstallCommandTests(TemporaryHomeTestCase):
 
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("cannot replace the installed executable", result.stderr)
-        self.assertEqual(installed.read_text(), "previous working executable\n")
-        self.assertTrue(os.access(installed, os.X_OK))
+        self._assert_existing_executable_unchanged(installed)
         self.assertEqual(list(installed.parent.glob(".implement-loop.*")), [])
 
     def test_make_install_does_not_follow_a_symlink_created_before_replacement(self) -> None:

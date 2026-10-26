@@ -8,6 +8,15 @@ import sys
 from pathlib import Path
 
 
+def _refuse_symlink(destination: Path) -> int:
+    print(
+        f"Error: refusing to replace symlink at {destination}; remove an old "
+        "source-checkout symlink manually after verifying its target, then retry.",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         print("Usage: replace_binary.py STAGED_EXECUTABLE DESTINATION", file=sys.stderr)
@@ -20,12 +29,7 @@ def main() -> int:
         pass
     else:
         if stat.S_ISLNK(mode):
-            print(
-                f"Error: refusing to replace symlink at {destination}; remove an old "
-                "source-checkout symlink manually after verifying its target, then retry.",
-                file=sys.stderr,
-            )
-            return 1
+            return _refuse_symlink(destination)
         if stat.S_ISDIR(mode):
             print(
                 f"Error: refusing to replace directory at {destination}; choose another "
@@ -33,7 +37,7 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
-        if not stat.S_ISREG(mode):
+        elif not stat.S_ISREG(mode):
             print(
                 f"Error: refusing to replace non-regular destination at {destination}; "
                 "choose another PREFIX or move it manually after verifying it is safe.",
