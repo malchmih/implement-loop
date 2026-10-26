@@ -1,0 +1,111 @@
+name: Publish rolling macOS prerelease
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  packaged:
+    name: macOS arm64 executable
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      UV_PYTHON: "3.11"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.5"
+          enable-cache: false
+
+      - name: Build and validate the packaged executable
+        run: make test-packaged
+
+      - name: Archive the executable with its permissions
+        run: tar -czf build/implement-loop-macos-arm64.tar.gz -C dist implement-loop
+
+      - name: Upload validated archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: implement-loop-macos-arm64
+          path: build/implement-loop-macos-arm64.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    name: Publish rolling prerelease
+    if: github.ref == 'refs/heads/main'
+    needs: packaged
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    concurrency:
+      group: rolling-macos-prerelease
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Skip stale main builds
+        id: current
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$head_sha" == "$GITHUB_SHA" ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping stale executable from ${GITHUB_SHA}; main is at ${head_sha}."
+          fi
+
+      - name: Download validated archive
+        if: steps.current.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/release
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name implement-loop-macos-arm64 \
+            --dir build/release
+
+      - name: Create or update rolling prerelease
+        if: steps.current.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tag=rolling
+          archive=build/release/implement-loop-macos-arm64.tar.gz
+          if [[ ! -f "$archive" ]]; then
+            echo "Expected packaged archive was not downloaded: $archive" >&2
+            exit 1
+          fi
+
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$release_tag" "$archive" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$release_tag" "$archive" \
+              --repo "$GITHUB_REPOSITORY" \
+              --prerelease \
+              --title "Rolling Apple silicon macOS build" \
+              --notes "Latest successfully built and smoke-tested Apple silicon macOS executable. See the README for download and runtime requirements." \
+              --target "$GITHUB_SHA"
+          fi

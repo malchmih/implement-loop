@@ -9,7 +9,29 @@ setup and permissions.
 
 ## Install and run
 
-On macOS arm64, install the standalone executable from the source checkout:
+### Download the rolling macOS build
+
+Download the [latest Apple silicon macOS prerelease](https://github.com/malchmih/implement-loop/releases/download/rolling/implement-loop-macos-arm64.tar.gz):
+
+```bash
+curl -fL https://github.com/malchmih/implement-loop/releases/download/rolling/implement-loop-macos-arm64.tar.gz \
+  -o implement-loop-macos-arm64.tar.gz
+mkdir implement-loop-macos-arm64
+tar -xzf implement-loop-macos-arm64.tar.gz -C implement-loop-macos-arm64
+./implement-loop-macos-arm64/implement-loop --help
+```
+
+The archive preserves the executable permission. From a target repository, run
+`/path/to/implement-loop-macos-arm64/implement-loop ISSUE_NUMBER`. This Apple
+silicon macOS executable includes its Python runtime, so Python and build tools
+are not needed at runtime. It still requires Git, an authenticated `gh` session,
+a supported harness CLI, and the external `implement` skill. The binary is
+unsigned and not notarized; macOS Gatekeeper may warn or block it. Do not disable
+Gatekeeper globally.
+
+### Build and install from source
+
+On macOS arm64, build and install the standalone executable from the source checkout:
 
 ```bash
 make install
