@@ -30,13 +30,12 @@ class PackagedExecutableTests(LoopTestCase):
         self.empty_path = self.home / "empty path"
         self.empty_path.mkdir()
 
-    def _runtime_environment(self, *, no_external_tools: bool) -> dict[str, str]:
+    def _runtime_environment(self) -> dict[str, str]:
         environment = dict(self.env)
         environment.pop("PYTHONPATH", None)
         environment.pop("PYTHONHOME", None)
         environment["TMPDIR"] = str(self.temporary_directory)
-        if no_external_tools:
-            environment["PATH"] = str(self.empty_path)
+        environment["PATH"] = str(self.empty_path)
         return environment
 
     def _run_binary_without_external_tools(
@@ -45,13 +44,13 @@ class PackagedExecutableTests(LoopTestCase):
         return subprocess.run(
             [str(self.executable), *arguments],
             cwd=self.home,
-            env=self._runtime_environment(no_external_tools=True),
+            env=self._runtime_environment(),
             capture_output=True,
             timeout=60,
         )
 
     def test_help_runs_outside_checkout_without_python_on_path(self) -> None:
-        environment = self._runtime_environment(no_external_tools=True)
+        environment = self._runtime_environment()
         self.assertIsNone(shutil.which("python3", path=environment["PATH"]))
 
         result = self._run_binary_without_external_tools("--help")
