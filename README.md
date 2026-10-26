@@ -48,6 +48,26 @@ cd /path/to/target-repository
 python3 /path/to/implement-loop/implement-loop 123
 ```
 
+## Try a CI preview
+
+After the packaged job succeeds, the `Quality checks` workflow provides an
+artifact named `implement-loop-macos-arm64`. For a pull request, open the
+`Quality checks` run from its **Checks** tab; for a manual run, open that run
+under **Actions**. Download the artifact from the run summary. The downloaded zip
+contains a tar archive:
+
+```bash
+unzip implement-loop-macos-arm64.zip
+tar -xzf implement-loop-macos-arm64.tar.gz
+./implement-loop --help
+```
+
+The tar archive preserves executable permissions. To run a ticket, invoke
+`/path/to/implement-loop SPEC_NUMBER` from the target repository. These are
+preview builds, not Developer ID-signed or notarized releases; macOS Gatekeeper
+may warn or block them. Only run an artifact from a workflow and revision you
+trust, and do not disable Gatekeeper globally.
+
 The default limit is five harness invocations. Only the selected harness CLI is
 required.
 

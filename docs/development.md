@@ -77,6 +77,16 @@ CI runs the same commands as the local targets above:
 | `Behavioral tests (Linux, Python 3.15)` | `ubuntu-24.04` | 3.15 | `make test` |
 | `Behavioral tests (macOS, Python 3.11)` | `macos-26` (ARM64) | 3.11 | `make test` |
 | `Behavioral tests (macOS, Python 3.15)` | `macos-26` (ARM64) | 3.15 | `make test` |
+| `macOS arm64 executable` | `macos-26` (ARM64) | 3.11 | `make test-packaged` |
+
+The packaged job runs `make test-packaged`, which installs through Make's public
+`install` and `build` targets, then exercises the installed executable outside
+the checkout with fake GitHub and harness commands. It makes no live GitHub
+writes or model calls. After the smoke tests pass, CI uploads
+`implement-loop-macos-arm64`, containing a tar archive so the executable
+permission survives Actions artifact download. See the
+[README](../README.md#try-a-ci-preview) for download and extraction steps and the
+Gatekeeper warning.
 
 Install the Python version for the CI job you want to reproduce (3.11 or 3.15),
 uv, `make`, Git, and ShellCheck for static checks. Run `make check-static` or
@@ -92,9 +102,9 @@ the jobs. Each reusable action is pinned to a full commit SHA verified against
 its official upstream release, with the release version annotated in the
 workflow. When updating an action, verify the release in its upstream
 repository and update the SHA and annotation together. The setup-uv cache is
-explicitly disabled, and uv itself is pinned to 0.13.5. The workflow uploads no
-artifacts. Dependencies are run with the committed lockfile and locked uv
-operations.
+explicitly disabled, and uv itself is pinned to 0.13.5. The workflow uploads the
+validated macOS arm64 preview described above, and no other artifacts.
+Dependencies are run with the committed lockfile and locked uv operations.
 
 Superseded runs of the same PR are cancelled. Different PRs and manual runs use
 separate concurrency groups. Matrix fail-fast is disabled so the other
