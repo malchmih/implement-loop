@@ -68,8 +68,6 @@ independent proof of semantic correctness.
 Terminal previews can abbreviate tool output. After a harness starts, its full
 raw output remains in the ticket's private `agent.log`; see
 [record location and privacy](configuration.md#record-location-and-privacy).
-Because ticket records can be created before a harness starts, a record
-directory alone does not prove an attempt occurred.
 
 ## Recovery
 
