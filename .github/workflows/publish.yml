@@ -8,12 +8,6 @@ on:
 permissions:
   contents: read
 
-# Serialize the build and its publisher together; otherwise an older, slower
-# package job could displace a newer publisher from the concurrency queue.
-concurrency:
-  group: rolling-macos-prerelease
-  cancel-in-progress: false
-
 jobs:
   packaged:
     name: macOS arm64 executable
@@ -37,20 +31,49 @@ jobs:
           compression-level: 0
           retention-days: 1
 
+  current:
+    name: Check publication eligibility
+    needs: packaged
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Skip stale main builds before publication queue
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$head_sha" == "$GITHUB_SHA" ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping stale executable from ${GITHUB_SHA}; main is at ${head_sha}."
+          fi
+
   publish:
     name: Publish rolling prerelease
-    if: github.ref == 'refs/heads/main'
-    needs: packaged
+    if: github.ref == 'refs/heads/main' && needs.current.outputs.publish == 'true'
+    needs:
+      - packaged
+      - current
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       actions: read
       contents: write
+    concurrency:
+      group: rolling-macos-prerelease
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Skip stale main builds
-        id: current
+      - name: Recheck main before publishing
+        id: recheck
         shell: bash
         run: |
           set -euo pipefail
@@ -63,7 +86,7 @@ jobs:
           fi
 
       - name: Download validated archive
-        if: steps.current.outputs.publish == 'true'
+        if: needs.current.outputs.publish == 'true' && steps.recheck.outputs.publish == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -74,7 +97,7 @@ jobs:
             --dir build/release
 
       - name: Create or update rolling prerelease
-        if: steps.current.outputs.publish == 'true'
+        if: needs.current.outputs.publish == 'true' && steps.recheck.outputs.publish == 'true'
         shell: bash
         run: |
           set -euo pipefail
