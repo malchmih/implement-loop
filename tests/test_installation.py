@@ -4,178 +4,216 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
 from support import SCRIPT, LoopTestCase, TemporaryHomeTestCase
 
-_INSTALLER_SERVICE_COMMANDS = ("gh", "opencode", "copilot")
-_INSTALLER_UTILITIES = ("dirname", "mkdir", "ln", "readlink", "git")
 
-
-class InstallationOnlyTests(TemporaryHomeTestCase):
+class MakeInstallCommandTests(TemporaryHomeTestCase):
     def setUp(self) -> None:
         super().setUp()
-        for utility in _INSTALLER_UTILITIES:
-            target = shutil.which(utility)
-            self.assertIsNotNone(target, f"test environment needs {utility}")
-            (self.bin / utility).symlink_to(target)
-        (self.bin / "python3").symlink_to(sys.executable)
-        for tool in _INSTALLER_SERVICE_COMMANDS:
-            self.add_invocation_marker(tool)
-        self.env["PATH"] = str(self.bin)
+        self.make = shutil.which("make")
+        self.assertIsNotNone(self.make, "test environment needs make")
+        assert self.make is not None
 
-    def _home_entries(self) -> set[Path]:
-        return {path.relative_to(self.home) for path in self.home.rglob("*")}
+        self.source = self.copy_source_tree()
+        self.build_tools = self.home / "build tools"
+        self.build_tools.mkdir()
+        self.build_log = self.home / "build invocation.log"
+        self.env.pop("PREFIX", None)
+        self.env["IMPLEMENT_LOOP_TEST_BUILD_LOG"] = str(self.build_log)
+        self.env["IMPLEMENT_LOOP_TEST_BUILD_PAYLOAD"] = "fake executable\n"
+        self.env["IMPLEMENT_LOOP_TEST_PYTHON"] = sys.executable
+        self.env["PATH"] = str(self.build_tools) + os.pathsep + self.env["PATH"]
 
-    def _assert_home_entry_delta(
+        self._write_command(
+            "uname",
+            "#!/bin/sh\n"
+            'case "$1" in\n'
+            "  -s) printf 'Darwin\\n' ;;\n"
+            "  -m) printf 'arm64\\n' ;;\n"
+            "  *) exit 1 ;;\n"
+            "esac\n",
+        )
+        self._write_command(
+            "uv",
+            "#!/bin/sh\n"
+            "set -eu\n"
+            'printf \'%s\\n\' "$*" >> "$IMPLEMENT_LOOP_TEST_BUILD_LOG"\n'
+            'if [ "$1" = run ] && [ "$3" = python ]; then\n'
+            '  if [ "${IMPLEMENT_LOOP_TEST_REPLACEMENT_FAIL:-}" = 1 ]; then\n'
+            "    printf 'simulated replacement failure\\n' >&2\n"
+            "    exit 73\n"
+            "  fi\n"
+            '  if [ -n "${IMPLEMENT_LOOP_TEST_RACE_DESTINATION:-}" ]; then\n'
+            '    ln -s "$IMPLEMENT_LOOP_TEST_RACE_TARGET" "$IMPLEMENT_LOOP_TEST_RACE_DESTINATION"\n'
+            "  fi\n"
+            "  shift 2\n"
+            "  shift\n"
+            '  exec "$IMPLEMENT_LOOP_TEST_PYTHON" "$@"\n'
+            "fi\n"
+            'if [ "${IMPLEMENT_LOOP_TEST_BUILD_FAIL:-}" = 1 ]; then\n'
+            "  printf 'simulated build failure\\n' >&2\n"
+            "  exit 73\n"
+            "fi\n"
+            "mkdir -p dist\n"
+            "printf '%s' \"$IMPLEMENT_LOOP_TEST_BUILD_PAYLOAD\" > dist/implement-loop\n"
+            "chmod 755 dist/implement-loop\n",
+        )
+
+    def _write_command(self, name: str, contents: str) -> Path:
+        command = self.build_tools / name
+        command.write_text(contents)
+        command.chmod(0o700)
+        return command
+
+    def _run_make_install(
         self,
-        existing_entries: set[Path],
-        expected_new_entries: set[Path],
-    ) -> None:
-        self.assertEqual(self._home_entries() - existing_entries, expected_new_entries)
-
-    def test_installer_custom_destination_is_created_and_repeat_safe(self) -> None:
-        source = self.copy_source_tree()
-        destination = self.home / "chosen executable directory" / "nested"
-
-        first = self.run_installer(source, destination)
-        installed = destination / "implement-loop"
-        self.assertEqual(first.returncode, 0, first.stderr.decode())
-        self.assertTrue(installed.is_symlink())
-        self.assertEqual(os.readlink(installed), str(source.resolve() / SCRIPT.name))
-
-        path_env = dict(self.env)
-        path_env["PATH"] = str(destination.resolve()) + os.pathsep + path_env["PATH"]
-        second = self.run_installer(source, destination, env=path_env)
-        self.assertEqual(second.returncode, 0, second.stderr.decode())
-        self.assertIn(b"PATH already includes", second.stdout)
-        self.assertTrue(installed.is_symlink())
-        self.assertEqual(os.readlink(installed), str(source.resolve() / SCRIPT.name))
-        self.assert_commands_not_invoked(*_INSTALLER_SERVICE_COMMANDS)
-
-    def test_installer_refuses_unrelated_file_directory_and_link_collisions(self) -> None:
-        source = self.copy_source_tree()
-        unrelated_target = self.home / "unrelated executable"
-        unrelated_target.write_text("keep this target\n")
-
-        for kind in ("file", "directory", "symlink", "dangling symlink"):
-            with self.subTest(kind=kind):
-                destination = self.home / f"collision destination {kind}"
-                destination.mkdir()
-                link = destination / "implement-loop"
-                marker = destination / "keep.txt"
-                if kind == "file":
-                    link.write_text("keep this file\n")
-                elif kind == "directory":
-                    link.mkdir()
-                    marker.write_text("keep this directory\n")
-                elif kind == "symlink":
-                    link.symlink_to(unrelated_target)
-                else:
-                    link.symlink_to(self.home / "missing unrelated target")
-                original_link = os.readlink(link) if link.is_symlink() else None
-
-                result = self.run_installer(source, destination)
-
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(str(link).encode(), result.stderr)
-                self.assertIn(b"Choose another destination", result.stderr)
-                self.assertIn(b"manually", result.stderr)
-                if kind == "file":
-                    self.assertEqual(link.read_text(), "keep this file\n")
-                elif kind == "directory":
-                    self.assertTrue(link.is_dir())
-                    self.assertEqual(marker.read_text(), "keep this directory\n")
-                else:
-                    self.assertTrue(link.is_symlink())
-                    self.assertEqual(os.readlink(link), original_link)
-                self.assert_commands_not_invoked(*_INSTALLER_SERVICE_COMMANDS)
-
-    def test_installer_reports_prerequisites_and_path_without_mutating_user_settings(self) -> None:
-        source = self.copy_source_tree()
-        # Tool names in checkout paths are not runtime prerequisite reports.
-        source = source.rename(self.home / "uv source checkout")
-        profile_contents = {
-            self.home / ".bashrc": b"# keep shell settings\n",
-            self.home / ".zshrc": b"# keep shell settings\n",
-            self.home / ".config/opencode/opencode.json": b"keep opencode settings\n",
-            self.home / ".config/github-copilot/config.json": b"keep copilot settings\n",
-        }
-        for path, contents in profile_contents.items():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(contents)
-
-        limited_path = self.home / "installer-prerequisites"
-        limited_path.mkdir()
-        for utility in _INSTALLER_UTILITIES:
-            (limited_path / utility).symlink_to(self.bin / utility)
-        for tool in ("python3", "gh", "opencode"):
-            (limited_path / tool).symlink_to(self.bin / tool)
-
-        env = dict(self.env, PATH=str(limited_path))
-        self.assertFalse((limited_path / "copilot").exists())
-        existing_entries = self._home_entries()
-
-        result = self.run_installer(source, env=env)
-
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(result.stderr, b"")
-        output = result.stdout.decode()
-        for prerequisite in ("Python 3.11", "git", "gh", "opencode", "copilot"):
-            self.assertIn(prerequisite, output)
-        self.assertIn("PATH", output)
-        self.assertIn("PATH does not include", output)
-        self.assertIn(str(self.home / ".local/bin"), output)
-        self.assertIn("optional", output.lower())
-        self.assertIn("Missing: copilot", output)
-        self.assertNotRegex(output, r"(?im)^(?:Available|Missing):\s*uv\b")
-        self._assert_home_entry_delta(
-            existing_entries,
-            {Path(".local"), Path(".local/bin"), Path(".local/bin/implement-loop")},
+        *,
+        prefix: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        command = [self.make, "install"]
+        if prefix is not None:
+            command.append(f"PREFIX={prefix}")
+        return subprocess.run(
+            command,
+            cwd=self.source,
+            env=env if env is not None else self.env,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
-        for path, contents in profile_contents.items():
-            self.assertEqual(path.read_bytes(), contents)
-        self.assert_commands_not_invoked("gh", "opencode")
 
-    def test_installer_requires_home_when_destination_is_omitted(self) -> None:
-        source = self.copy_source_tree()
-        env = dict(self.env)
-        env.pop("HOME")
-        existing_entries = self._home_entries()
+    def _write_existing_executable(self, prefix: Path) -> Path:
+        installed = prefix / "bin/implement-loop"
+        installed.parent.mkdir(parents=True)
+        installed.write_text("previous working executable\n")
+        installed.chmod(0o755)
+        return installed
 
-        result = self.run_installer(source, env=env)
+    def _assert_existing_executable_unchanged(self, installed: Path) -> None:
+        self.assertEqual(installed.read_text(), "previous working executable\n")
+        self.assertTrue(os.access(installed, os.X_OK))
 
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual(
-            result.stderr,
-            b"Error: HOME is not set; pass a destination directory explicitly.\n",
-        )
-        self.assertEqual(result.stdout, b"")
-        self._assert_home_entry_delta(existing_entries, set())
-        self.assertFalse((self.home / ".local/bin/implement-loop").exists())
-        self.assert_commands_not_invoked(*_INSTALLER_SERVICE_COMMANDS)
+    def test_make_install_builds_and_installs_default_user_executable(self) -> None:
+        result = self._run_make_install()
 
-    def test_installer_rejects_an_empty_destination_without_side_effects(self) -> None:
-        source = self.copy_source_tree()
-        existing_entries = self._home_entries()
+        installed = self.home / ".local/bin/implement-loop"
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(installed.is_file())
+        self.assertFalse(installed.is_symlink())
+        self.assertTrue(os.access(installed, os.X_OK))
+        self.assertEqual(installed.read_text(), "fake executable\n")
+        self.assertIn("run --locked --group build pyinstaller", self.build_log.read_text())
 
-        result = self.run_installer(source, "")
+    def test_make_install_uses_custom_prefix_and_replaces_regular_executable(self) -> None:
+        prefix = self.home / "chosen install prefix"
+        first = self._run_make_install(prefix=prefix)
 
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(result.stderr, b"Error: destination must be a non-empty directory path.\n")
-        self.assertEqual(result.stdout, b"")
-        self._assert_home_entry_delta(existing_entries, set())
-        self.assertFalse((self.home / "implement-loop").exists())
-        self.assert_commands_not_invoked(*_INSTALLER_SERVICE_COMMANDS)
+        installed = prefix / "bin/implement-loop"
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(installed.read_text(), "fake executable\n")
+        self.assertFalse(installed.is_symlink())
 
+        upgrade_env = dict(self.env)
+        upgrade_env["IMPLEMENT_LOOP_TEST_BUILD_PAYLOAD"] = "upgraded executable\n"
+        second = self._run_make_install(prefix=prefix, env=upgrade_env)
 
-class InstalledCommandIntegrationTests(LoopTestCase):
-    def test_installed_command_runs_from_a_target_checkout_subdirectory(self) -> None:
-        source, installed = self.install_test_command()
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual(installed.read_text(), "upgraded executable\n")
+        self.assertTrue(os.access(installed, os.X_OK))
+
+    def test_make_install_refuses_symlink_and_directory_destinations(self) -> None:
+        prefix = self.home / "collision prefix"
+        bin_directory = prefix / "bin"
+        bin_directory.mkdir(parents=True)
+        destination = bin_directory / "implement-loop"
+        target = self.home / "preserved target"
+        target.write_text("keep this target\n")
+
+        destination.symlink_to(target)
+        symlink_result = self._run_make_install(prefix=prefix)
+
+        self.assertNotEqual(symlink_result.returncode, 0, symlink_result.stdout)
+        self.assertIn("refusing to replace", symlink_result.stderr)
+        self.assertTrue(destination.is_symlink())
+        self.assertEqual(os.readlink(destination), str(target))
+        self.assertEqual(target.read_text(), "keep this target\n")
+
+        destination.unlink()
+        destination.mkdir()
+        marker = destination / "keep.txt"
+        marker.write_text("keep this directory\n")
+        directory_result = self._run_make_install(prefix=prefix)
+
+        self.assertNotEqual(directory_result.returncode, 0, directory_result.stdout)
+        self.assertIn("refusing to replace", directory_result.stderr)
+        self.assertTrue(destination.is_dir())
+        self.assertEqual(marker.read_text(), "keep this directory\n")
+
+        marker.unlink()
+        destination.rmdir()
+        missing_target = self.home / "missing executable target"
+        destination.symlink_to(missing_target)
+        dangling_result = self._run_make_install(prefix=prefix)
+
+        self.assertNotEqual(dangling_result.returncode, 0, dangling_result.stdout)
+        self.assertIn("refusing to replace", dangling_result.stderr)
+        self.assertTrue(destination.is_symlink())
+        self.assertEqual(os.readlink(destination), str(missing_target))
+        self.assertFalse(missing_target.exists())
+
+    def test_make_install_build_failure_preserves_existing_executable(self) -> None:
+        prefix = self.home / "existing install prefix"
+        installed = self._write_existing_executable(prefix)
+        failed_build_env = dict(self.env)
+        failed_build_env["IMPLEMENT_LOOP_TEST_BUILD_FAIL"] = "1"
+
+        result = self._run_make_install(prefix=prefix, env=failed_build_env)
+
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("simulated build failure", result.stderr)
+        self._assert_existing_executable_unchanged(installed)
+
+    def test_make_install_replacement_failure_preserves_existing_executable(self) -> None:
+        prefix = self.home / "existing install prefix"
+        installed = self._write_existing_executable(prefix)
+        failed_replacement_env = dict(self.env)
+        failed_replacement_env["IMPLEMENT_LOOP_TEST_REPLACEMENT_FAIL"] = "1"
+
+        result = self._run_make_install(prefix=prefix, env=failed_replacement_env)
+
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("cannot replace the installed executable", result.stderr)
+        self._assert_existing_executable_unchanged(installed)
+        self.assertEqual(list(installed.parent.glob(".implement-loop.*")), [])
+
+    def test_make_install_does_not_follow_a_symlink_created_before_replacement(self) -> None:
+        prefix = self.home / "racing install prefix"
+        installed = prefix / "bin/implement-loop"
+        installed.parent.mkdir(parents=True)
+        target_directory = self.home / "symlink target"
+        target_directory.mkdir()
+        race_env = dict(self.env)
+        race_env["IMPLEMENT_LOOP_TEST_RACE_DESTINATION"] = str(installed)
+        race_env["IMPLEMENT_LOOP_TEST_RACE_TARGET"] = str(target_directory)
+
+        result = self._run_make_install(prefix=prefix, env=race_env)
+
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("refusing to replace symlink", result.stderr)
         self.assertTrue(installed.is_symlink())
-        self.assertEqual(os.readlink(installed), str(source.resolve() / SCRIPT.name))
+        self.assertEqual(os.readlink(installed), str(target_directory))
+        self.assertEqual(list(target_directory.iterdir()), [])
+        self.assertEqual(list(installed.parent.glob(".implement-loop.*")), [])
 
+
+class SourceCommandIntegrationTests(LoopTestCase):
+    def test_source_command_runs_from_a_target_checkout_subdirectory(self) -> None:
+        source = SCRIPT.parent
         nested = self.repo / "nested"
         nested.mkdir()
         (nested / "tracked.txt").write_text("target checkout fixture\n")
@@ -187,7 +225,7 @@ class InstalledCommandIntegrationTests(LoopTestCase):
             "1",
             harness=None,
             cwd=nested,
-            executable=installed,
+            executable=SCRIPT,
         )
 
         state = self.load_state()
@@ -197,8 +235,8 @@ class InstalledCommandIntegrationTests(LoopTestCase):
         self.assertFalse((source / "implementation-2.txt").exists())
         self.assertEqual(self.git("status", "--porcelain"), "")
 
-    def test_installed_default_opencode_honors_config_and_progresses_returned_queue(self) -> None:
-        source, installed = self.install_test_command()
+    def test_source_default_opencode_honors_config_and_progresses_returned_queue(self) -> None:
+        source = SCRIPT.parent
 
         records_dir = self.home / "configured private records"
         config_home = self.home / "configured user settings"
@@ -231,7 +269,7 @@ class InstalledCommandIntegrationTests(LoopTestCase):
         result, _ = self.run_loop(
             harness=None,
             cwd=nested,
-            executable=installed,
+            executable=SCRIPT,
             extra_env={
                 "XDG_CONFIG_HOME": str(config_home),
                 "XDG_STATE_HOME": str(state_home),
@@ -306,9 +344,7 @@ class InstalledCommandIntegrationTests(LoopTestCase):
             self.assertFalse((source / f"implementation-{ticket_number}.txt").exists())
         self.assertEqual(self.git("status", "--porcelain"), "")
 
-    def test_installed_copilot_requires_new_commit_for_already_committed_work(self) -> None:
-        _, installed = self.install_test_command()
-
+    def test_source_copilot_requires_new_commit_for_already_committed_work(self) -> None:
         existing_implementation = self.repo / "implementation-2.txt"
         existing_implementation.write_text("implementation committed before approval\n")
         self.git("add", existing_implementation.name)
@@ -340,7 +376,7 @@ class InstalledCommandIntegrationTests(LoopTestCase):
 
         result, _ = self.run_loop(
             harness="copilot",
-            executable=installed,
+            executable=SCRIPT,
             extra_env={"XDG_CONFIG_HOME": str(config_home)},
         )
 

@@ -1,23 +1,56 @@
 # Implement Loop
 
 Implement prepared direct child GitHub issues sequentially from the target
-checkout. The installer and runner support macOS and Linux. Python 3.11+ is
-required; the runner has no third-party runtime dependencies. A run also needs
-Git, `gh` with an authenticated GitHub CLI session, the selected harness CLI
-(OpenCode V2 by default; Copilot is optional), and the external `implement`
-skill.
+checkout. The standalone executable is supported on Apple silicon macOS. Linux
+remains supported through source execution with Python 3.11+. A run also needs
+Git, an authenticated `gh` session, a supported harness CLI, and the external
+`implement` skill. See [workflow prerequisites](docs/usage.md#before-a-run) for
+setup and permissions.
 
 ## Install and run
 
-From the source checkout, install a link into `~/.local/bin` (or choose a
-destination):
+### Download the rolling macOS build
+
+Download the [latest Apple silicon macOS prerelease](https://github.com/malchmih/implement-loop/releases/download/rolling/implement-loop-macos-arm64.tar.gz):
 
 ```bash
-./install.sh
-# or: ./install.sh "$HOME/bin"
+curl -fL https://github.com/malchmih/implement-loop/releases/download/rolling/implement-loop-macos-arm64.tar.gz \
+  -o implement-loop-macos-arm64.tar.gz
+mkdir implement-loop-macos-arm64
+tar -xzf implement-loop-macos-arm64.tar.gz -C implement-loop-macos-arm64
+./implement-loop-macos-arm64/implement-loop --help
 ```
 
-Then run the compact command from the target repository:
+The archive preserves the executable permission. From a target repository, run
+`/path/to/implement-loop-macos-arm64/implement-loop ISSUE_NUMBER`. This Apple
+silicon macOS executable includes its Python runtime, so Python and build tools
+are not needed at runtime. It still requires Git, an authenticated `gh` session,
+a supported harness CLI, and the external `implement` skill. The binary is
+not Developer ID-signed or notarized; macOS Gatekeeper may warn or block it. Do
+not disable Gatekeeper globally.
+
+### Build and install from source
+
+On macOS arm64, build and install the standalone executable from the source checkout:
+
+```bash
+make install
+# or choose a prefix; the executable is installed in PREFIX/bin:
+make install PREFIX="$HOME/tools"
+```
+
+The default destination is `~/.local/bin/implement-loop`. `make` and
+[uv](https://docs.astral.sh/uv/) are needed to build and install; uv provisions
+the project's Python 3.11 and locked build dependencies. The installed
+executable includes Python and does not need the source checkout or build tools
+at runtime. Add `~/.local/bin` to `PATH` yourself if needed; the command does
+not edit shell profiles. Installation safely replaces an existing regular
+executable; a failed build or replacement leaves it in place. `make install`
+refuses to replace a symlink or directory.
+Reinstall after changing the checkout to build and install its current files;
+editing the checkout alone does not update the executable.
+
+After installation on macOS, run the command from the target repository:
 
 ```bash
 cd /path/to/target-repository
@@ -25,17 +58,36 @@ implement-loop 123
 implement-loop 123 --harness copilot
 ```
 
-The default limit is five harness invocations. Only the selected harness CLI is
-required. Installation symlinks to the source checkout: updating it updates the
-command, while moving or deleting it breaks the link. The installer does not edit
-shell profiles; add the destination to `PATH` yourself if needed.
+On Linux (or when running from source on macOS), use Python 3.11 or later and
+invoke the checkout's command from the target repository:
 
-Run only against trusted repositories, skills, and issue content: this is local
-automation, not a sandbox, and agent guidance is not an enforcement boundary. The
-wrapper closes issues after a clean-checkout check and, by default, a new local
-commit; it does not push commits, open PRs, or merge work. Completion includes the
-external skill's validation/review and result-file attestation, not independent
-proof of semantic correctness.
+```bash
+cd /path/to/target-repository
+python3 /path/to/implement-loop/implement-loop 123
+```
+
+## Try a CI preview
+
+After the packaged job succeeds, the `Quality checks` workflow provides an
+artifact named `implement-loop-macos-arm64`. For a pull request, open the
+`Quality checks` run from its **Checks** tab; for a manual run, open that run
+under **Actions**. Download the artifact from the run summary. The downloaded zip
+contains a tar archive:
+
+```bash
+unzip implement-loop-macos-arm64.zip
+tar -xzf implement-loop-macos-arm64.tar.gz
+./implement-loop --help
+```
+
+The tar archive preserves executable permissions. To run a ticket, invoke
+`/path/to/implement-loop SPEC_NUMBER` from the target repository. These are
+preview builds, not Developer ID-signed or notarized releases; macOS Gatekeeper
+may warn or block them. Only run an artifact from a workflow and revision you
+trust, and do not disable Gatekeeper globally.
+
+Before running, review [permissions, commits, and closure](docs/usage.md#permissions-commits-and-closure)
+for trust, permission, side-effect, and completion limits.
 
 - [Configuration and private records](docs/configuration.md)
 - [Workflow and recovery](docs/usage.md)

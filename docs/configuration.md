@@ -83,16 +83,13 @@ possibly shared directory. The selected directory must be dedicated and outside
 the target checkout: the runner rejects locations that contain or are contained
 by the checkout, the home directory itself, and filesystem root.
 
-Each private run stores repository and user metadata, issue/comment snapshots,
-the prompt, harness output, process outcome, raw and validated result evidence,
-selected harness/model/reasoning settings, the selected configuration-file path,
-retention policy, and successful commit references. OpenCode's `agent.log`
-contains the complete raw JSON event stream emitted by `--format json`, not the
-compact terminal transcript; Copilot's `agent.log` remains native text. The
-renderer does not change the private record permissions or retain a second
-rendered transcript. This metadata records the root harness selection; it does
-not assert the effective settings of every configured subagent. Run and attempt
-directories are private (`0700`), and files are private (`0600`).
+Run and ticket records can contain repository paths, issue and comment snapshots,
+prompts, full harness output, process results, and completion evidence. Treat
+them as sensitive. When log persistence succeeds, the full output is in the
+ticket's `agent.log`; a log-write failure is reported and can leave it
+incomplete. OpenCode records raw harness output and Copilot preserves its native
+text. Run and attempt directories are private (`0700`), and files are private
+(`0600`).
 
 ## Retention
 
@@ -103,10 +100,8 @@ on a later startup. Seven days is the default; `keep_forever = true` or
 `--keep-records-forever` disables expiry.
 
 Cleanup is conservative: marked runs are kept even when a marker appears stale;
-symlinked run directories are neither followed nor removed, and unrecognized
-entries and legacy `copilot-ralph` data are preserved. Cleanup errors warn
-without blocking a new run. This policy controls only Implement Loop records.
-Harness-native sessions, logs,
-telemetry, and other storage are separate and must be managed through each
-harness's own settings. OpenCode private-server mode does not suppress its native
-session persistence; see [harness capabilities and skill setup](usage.md#harness-capabilities-and-external-skill-setup).
+symlinked run directories and unrecognized entries are preserved. Cleanup errors
+warn without blocking a new run. Retention controls only Implement Loop records.
+Harness-native sessions, logs, telemetry, and other storage are separate; manage
+them through the selected harness's settings. OpenCode private-server mode does
+not disable native session persistence.

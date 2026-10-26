@@ -1,15 +1,10 @@
 # Development and testing
 
-## Prerequisites and local checks
+## Prerequisites and checks
 
-Python 3.11+, [uv](https://docs.astral.sh/uv/), `make`, Git, and ShellCheck are
-used for development. ShellCheck is a separate developer prerequisite, not a
-Python or runtime dependency. The runtime executable itself uses only the Python
-standard library; Git, `gh`, and the selected OpenCode or Copilot CLI are
-subprocess integrations.
-
-Run either validation group independently, or use `make check` for the complete
-local validation:
+Development uses `make`, Git, [uv](https://docs.astral.sh/uv/), and ShellCheck.
+Install ShellCheck separately. uv provisions the Python version in
+`.python-version` and uses the committed lockfile.
 
 ```bash
 make check-static
@@ -17,101 +12,39 @@ make test
 make check
 ```
 
-`make check-static` runs ShellCheck on `install.sh`, Ruff linting and format
-validation, and mypy. `make test` runs the existing behavioral unittest suite.
-Both targets use `uv run --locked`, which prepares the development environment
-from committed `uv.lock` when needed. `make check` first runs `uv sync --locked`,
-then invokes both targets. Locked uv operations do not rewrite the lockfile; they
-fail if the project dependencies and lockfile need to be reconciled. ShellCheck
-must be installed separately. These public Make targets are also the commands
-used by CI. The checks make no live model calls or GitHub writes.
+`make check-static` runs ShellCheck, Ruff, and mypy; `make test` runs the
+behavioral unittest suite. `make check` syncs locked dependencies, then runs both.
+Locked uv commands do not rewrite `uv.lock` and fail if it needs reconciliation.
+CI runs the first two targets. Tests use fake integrations and make no live model
+calls or GitHub writes.
 
-## GitHub Actions
+## Apple silicon macOS executable
 
-The `Quality checks` workflow runs for pull requests targeting `main` (including
-new commits pushed to a PR) and supports manual dispatch. It has no push,
-scheduled, privileged pull-request, or merge-queue trigger. Manual dispatch is
-available after the workflow is present on the default branch. In the Actions
-interface, select a branch to validate; the run checks its current revision.
+```bash
+make build
+make install
+make install PREFIX="$HOME/tools"
+make test-packaged
+```
 
-CI runs the same commands as the local targets above:
+Build and install are supported on Apple silicon macOS only. `make build` creates
+`dist/implement-loop` from the files currently on disk, including uncommitted
+changes. `make install` rebuilds and installs to `$(PREFIX)/bin/implement-loop`
+(`~/.local/bin/implement-loop` by default); rerun it after source changes. uv
+provisions Python 3.11 and the locked build dependencies. The executable includes
+Python but does not bundle Git, authenticated `gh`, a harness CLI, or the external
+`implement` skill. It is not Developer ID-signed or notarized, so Gatekeeper may
+warn or block it. Linux remains supported through direct source execution. See the
+[README](../README.md#install-and-run) for download, installation, and runtime
+guidance.
 
-| Check name | Runner | Python | Command |
-| --- | --- | --- | --- |
-| `Static checks` | `ubuntu-24.04` | 3.11 | `make check-static` |
-| `Behavioral tests (Linux, Python 3.11)` | `ubuntu-24.04` | 3.11 | `make test` |
-| `Behavioral tests (Linux, Python 3.15)` | `ubuntu-24.04` | 3.15 | `make test` |
-| `Behavioral tests (macOS, Python 3.11)` | `macos-26` (ARM64) | 3.11 | `make test` |
-| `Behavioral tests (macOS, Python 3.15)` | `macos-26` (ARM64) | 3.15 | `make test` |
+`make test-packaged` installs into a smoke-test prefix and runs the installed
+executable outside the checkout with fake `gh` and harness commands; it makes no
+live model calls or GitHub writes.
 
-Install the Python version for the CI job you want to reproduce (3.11 or 3.15),
-uv, `make`, Git, and ShellCheck for static checks. Run `make check-static` or
-`make test` to isolate a failed job; run `make check` for the complete local
-validation. The behavioral suite uses fake GitHub and harness commands, so CI
-and local tests need no real `gh`, OpenCode, Copilot, model credentials, or
-authenticated harness session.
+## CI
 
-The workflow grants only repository-content read permission and uses the
-ordinary `pull_request` security context. Checkout does not persist Git
-authentication, and no repository secrets or personal tokens are supplied to
-the jobs. Each reusable action is pinned to a full commit SHA verified against
-its official upstream release, with the release version annotated in the
-workflow. When updating an action, verify the release in its upstream
-repository and update the SHA and annotation together. The setup-uv cache is
-explicitly disabled, and uv itself is pinned to 0.13.5. The workflow uploads no
-artifacts. Dependencies are run with the committed lockfile and locked uv
-operations.
-
-Superseded runs of the same PR are cancelled. Different PRs and manual runs use
-separate concurrency groups. Matrix fail-fast is disabled so the other
-platform/Python results can finish after a failure. Every job has a 15-minute
-timeout, and ordinary Actions logs are retained using the repository's existing
-settings.
-
-The workflow uses standard GitHub-hosted `ubuntu-24.04` and `macos-26` runners
-in this public repository. Standard hosted runners are free for public
-repositories; larger runners and storage have separate billing rules and are
-not configured here. Reassess that assumption if the repository visibility or
-runner choices change.
-
-## Behavioral tests
-
-Runner integration tests invoke the public executable in temporary real Git
-repositories and use fake `gh`, OpenCode, and Copilot commands on `PATH`. They
-verify observable issue state, Git history and status, harness selection and
-invocation, the shared result contract, private records, output, and retention
-behavior. They do not make live issue writes or model calls and do not depend on
-the runner's private module layout. The help smoke test and installation-only
-tests use lightweight isolated homes; installed-command integration tests retain
-real target repositories, including a scenario that invokes the installed link
-from a target-checkout subdirectory.
-
-The OpenCode fake emits representative JSON-lines records from the inspected
-2.1.4 contract, including split-stream and malformed-output cases. Acceptance
-checks observe the rendered CLI output, raw private `agent.log`, and output
-delivered before the fake process exits. CLI fixtures cover unchanged assistant
-text, the shared tool-block layout, bounded shell and generic previews, full
-failure details, wrapper styling policy, and pass-through of tool-supplied ANSI
-sequences. Read fixtures cover file, directory, and media-shaped events,
-metadata-supplied zero/reliable counts, truncated or missing counts, and content
-suppression without changing raw events. Search fixtures cover verified `grep`,
-`glob`, and `websearch` inputs, natural query/scope/filter details, count
-semantics, omitted result dumps, and generic fallback for unsupported shapes.
-Delegation fixtures cover `task`, `subagent`, explicit delegation metadata,
-missing agent identity, ID/wrapper omission, bounded result previews, and
-unrecognized tools that must keep their generic results. Failure fixtures verify
-complete read/search/delegation error and output details. Copilot fixtures
-continue to verify its native byte relay and record format.
-File-modification and web-fetch fixtures follow the verified OpenCode 2.1.4
-schemas for `patch`, `edit`, `write`, and `webfetch`. Their integration tests
-cover result previews, patch-only success-header removal, first-line
-preservation, unsupported-shape fallback, full failures, tool-supplied colors,
-and raw-log retention of filtered or omitted content.
-Skill and question fixtures follow the verified OpenCode 2.1.4 built-in tool and
-question prompt/answer schemas. Their CLI tests cover instruction-payload
-suppression with raw-log retention, single and multiple questions, selected and
-free-form answers, empty answers, partial/unsupported fallback, incomplete
-interactions, and complete failure details.
-CLI references and locally verified versions for native skill loading and
-invocation flags are recorded in [workflow and recovery](usage.md); fake
-executables do not prove that a live model loads a user's skill.
+Pull requests and manual runs perform static checks, behavioral tests, and the
+packaged macOS arm64 smoke test, retaining a preview artifact. Pushes to `main`
+build and smoke-test the archive before updating the rolling prerelease; they do
+not repeat the PR quality suite.

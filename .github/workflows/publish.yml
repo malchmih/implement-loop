@@ -1,0 +1,121 @@
+name: Publish rolling macOS prerelease
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  packaged:
+    name: macOS arm64 executable
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build packaged executable archive
+        uses: ./.github/actions/package-macos
+
+      - name: Upload validated archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: implement-loop-macos-arm64
+          path: build/implement-loop-macos-arm64.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  current:
+    name: Check publication eligibility
+    needs: packaged
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Skip stale main builds before publication queue
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$head_sha" == "$GITHUB_SHA" ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping stale executable from ${GITHUB_SHA}; main is at ${head_sha}."
+          fi
+
+  publish:
+    name: Publish rolling prerelease
+    if: github.ref == 'refs/heads/main' && needs.current.outputs.publish == 'true'
+    needs:
+      - packaged
+      - current
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    concurrency:
+      group: rolling-macos-prerelease
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Recheck main before publishing
+        id: recheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$head_sha" == "$GITHUB_SHA" ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping stale executable from ${GITHUB_SHA}; main is at ${head_sha}."
+          fi
+
+      - name: Download validated archive
+        if: needs.current.outputs.publish == 'true' && steps.recheck.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/release
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name implement-loop-macos-arm64 \
+            --dir build/release
+
+      - name: Create or update rolling prerelease
+        if: needs.current.outputs.publish == 'true' && steps.recheck.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tag=rolling
+          archive=build/release/implement-loop-macos-arm64.tar.gz
+          if [[ ! -f "$archive" ]]; then
+            echo "Expected packaged archive was not downloaded: $archive" >&2
+            exit 1
+          fi
+
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$release_tag" "$archive" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$release_tag" "$archive" \
+              --repo "$GITHUB_REPOSITORY" \
+              --prerelease \
+              --title "Rolling Apple silicon macOS build" \
+              --notes "Latest successfully built and smoke-tested Apple silicon macOS executable. See the README for download and runtime requirements." \
+              --target "$GITHUB_SHA"
+          fi

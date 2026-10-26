@@ -504,8 +504,17 @@ class _OpenCodeRenderer:
         ]
         for connector, detail in details:
             detail_lines = detail.splitlines() or [""]
-            lines.append(f"  {self._style(connector, '2')} {detail_lines[0]}")
-            lines.extend(f"    {line}" for line in detail_lines[1:])
+            for index, detail_line in enumerate(detail_lines):
+                if connector == "└":
+                    line_connector = "└" if index == len(detail_lines) - 1 else "│"
+                else:
+                    line_connector = connector if index == 0 else "│"
+                styled_connector = (
+                    self._style(line_connector, "2")
+                    if index == 0
+                    else self._style_tree_connector(line_connector, detail)
+                )
+                lines.append(f"  {styled_connector} {detail_line}")
         self._render_block(lines)
 
     @staticmethod
@@ -1170,6 +1179,12 @@ class _OpenCodeRenderer:
 
     def _style(self, text: str, code: str) -> str:
         return f"\x1b[{code}m{text}\x1b[0m" if self._color else text
+
+    def _style_tree_connector(self, connector: str, detail: str) -> str:
+        if "\x1b[" in detail:
+            # Do not reset tool-supplied SGR state that may span a newline.
+            return connector
+        return self._style(connector, "2")
 
     @staticmethod
     def _has_event_envelope(record: dict[str, Any]) -> bool:

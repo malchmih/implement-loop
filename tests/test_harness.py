@@ -337,6 +337,25 @@ class HarnessTests(LoopTestCase):
         self.assertIn("... 2 additional line(s) omitted", visible)
         self.assertIn("✓ Preview seven (unfamiliar_tool)", visible)
         self.assertIn('  │ {"target":"Preview seven"}', visible)
+        self.assertIn(
+            "✓ Preview three (unfamiliar_tool)\n"
+            '  │ {"target":"Preview three"}\n'
+            "  │ three-1\n"
+            "  │ three-2\n"
+            "  └ three-3",
+            visible,
+        )
+        self.assertIn(
+            "✓ Preview seven (unfamiliar_tool)\n"
+            '  │ {"target":"Preview seven"}\n'
+            "  ├ seven-1\n"
+            "  │ seven-2\n"
+            "  │ seven-3\n"
+            "  │ seven-4\n"
+            "  │ seven-5\n"
+            "  └ ... 2 additional line(s) omitted",
+            visible,
+        )
         self.assertNotIn("tool:", visible)
         self.assertNotIn("input:", visible)
         self.assertNotIn("output:", visible)
@@ -570,11 +589,11 @@ class HarnessTests(LoopTestCase):
         self.assertIn(
             "✓ Answer 3 questions (question)\n"
             "  ├ Databases: Which databases do you prefer?\n"
-            "    Selected PostgreSQL, SQLite\n"
+            "  │ Selected PostgreSQL, SQLite\n"
             "  ├ Constraints and risks: What must the migration preserve?\n"
-            "    Keep the current table names; preserve naïve labels.\n"
-            "  └ Region: Choose a deployment region\n"
-            "    Selected EU West",
+            "  │ Keep the current table names; preserve naïve labels.\n"
+            "  │ Region: Choose a deployment region\n"
+            "  └ Selected EU West",
             visible,
         )
         self.assertIn(
@@ -921,13 +940,25 @@ class HarnessTests(LoopTestCase):
 
         self.assertIn("✓ Show colored output (ansi_tool)", visible)
         self.assertIn(
-            "  └ \x1b[31mred first line\n    red second line\x1b[0m",
+            "  │ \x1b[31mred first line\n  └ red second line\x1b[0m",
             visible,
         )
         self.assertEqual(
             (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
         )
         self.assertIn(b"\\u001b[31mred first line", raw_output.encode("utf-8"))
+
+    def test_opencode_terminal_multiline_tool_output_preserves_supplied_ansi_styles(self) -> None:
+        output = self._assert_live_harness_output(
+            "opencode",
+            terminal=True,
+            live_output_fragment=b"\x1b[1;2;31mred first line\nred second line\x1b[0m",
+        ).replace(b"\r\n", b"\n")
+
+        self.assertIn(
+            b"\x1b[1;2;31mred first line\n  \xe2\x94\x94 red second line\x1b[0m",
+            output,
+        )
 
     def test_opencode_file_modification_results_hide_inputs_and_strip_patch_header(self) -> None:
         patch_input = (
@@ -2010,8 +2041,8 @@ class HarnessTests(LoopTestCase):
         self.assertNotIn("Delegated: Run a task", visible)
         self.assertIn(
             "✓ Preserve task result text (task: explore)\n"
-            "  └ task_id: This is a useful finding.\n"
-            "    A second finding.",
+            "  │ task_id: This is a useful finding.\n"
+            "  └ A second finding.",
             visible,
         )
         for private_value in (
@@ -2144,6 +2175,11 @@ class HarnessTests(LoopTestCase):
                 "printf long",
                 "long-1\nlong-2\nlong-3\nlong-4\nlong-5\nlong-6\nlong-7",
             ),
+            (
+                "Multiline command",
+                "printf first\nprintf second",
+                "multiline-1\n\nmultiline-3",
+            ),
         )
         events = [
             {
@@ -2166,7 +2202,36 @@ class HarnessTests(LoopTestCase):
         raw_output, visible, runs = self._run_opencode_events(events)
         for title, command, _ in outputs:
             self.assertIn(f"✓ {title} (shell)", visible)
-            self.assertIn(f"  │ {command}", visible)
+            rendered_command = command.replace("\n", "\n  │ ")
+            self.assertIn(f"  │ {rendered_command}", visible)
+        self.assertEqual(
+            [block[block.index("✓ ") :] for block in visible.split("\n\n") if " (shell)" in block],
+            [
+                "✓ Empty result (shell)\n  │ printf ''\n  └ No output",
+                "✓ Short result (shell)\n  │ printf short\n  │ short-1\n  │ short-2\n  └ short-3",
+                "✓ Five-line result (shell)\n"
+                "  │ printf five\n"
+                "  │ five-1\n"
+                "  │ five-2\n"
+                "  │ five-3\n"
+                "  │ five-4\n"
+                "  └ five-5",
+                "✓ Long result (shell)\n"
+                "  │ printf long\n"
+                "  ├ long-1\n"
+                "  │ long-2\n"
+                "  │ long-3\n"
+                "  │ long-4\n"
+                "  │ long-5\n"
+                "  └ ... 2 additional line(s) omitted",
+                "✓ Multiline command (shell)\n"
+                "  │ printf first\n"
+                "  │ printf second\n"
+                "  │ multiline-1\n"
+                "  │ \n"
+                "  └ multiline-3",
+            ],
+        )
         self.assertIn("  └ No output", visible)
         for line in ("short-1", "short-2", "short-3", "five-1", "five-5"):
             self.assertIn(line, visible)
@@ -2280,6 +2345,23 @@ class HarnessTests(LoopTestCase):
         visible = result.stdout.decode("utf-8")
         self.assertIn("✗ Failed inspection (failing_tool)", visible)
         self.assertIn('  │ {"action":"inspect"}', visible)
+        self.assertIn(
+            "✗ Failed inspection (failing_tool)\n"
+            '  │ {"action":"inspect"}\n'
+            "  │ Error: first error line\n"
+            "  │ second error line\n"
+            "  │ third error line\n"
+            "  │ fourth error line\n"
+            "  │ fifth error line\n"
+            "  │ sixth error line\n"
+            "  │ output-1\n"
+            "  │ output-2\n"
+            "  │ output-3\n"
+            "  │ output-4\n"
+            "  │ output-5\n"
+            "  └ output-6",
+            visible,
+        )
         self.assertIn("Error: first error line", visible)
         self.assertIn("sixth error line", visible)
         self.assertIn("output-1", visible)
