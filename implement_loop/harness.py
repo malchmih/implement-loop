@@ -336,26 +336,38 @@ class _OpenCodeRenderer:
             " ".join(tool.split()) if isinstance(tool, str) and tool.strip() else "unknown tool"
         )
         input_value = state.get("input", part.get("input", payload.get("input")))
+        metadata = state.get("metadata")
+        delegated = self._is_delegated_result(tool_name, input_value, metadata)
         title = self._action_title(
             tool_name,
             input_value,
             state.get("title", part.get("title", payload.get("title"))),
-            state.get("metadata"),
+            metadata,
         )
         shell_command = self._shell_command(tool_name, input_value)
         output = state.get("output")
         if failed:
             failure_details: list[tuple[str, str]] = []
-            if shell_command is not None:
+            if delegated:
+                failure_details.append(("└", self._failure_detail(error, output)))
+            elif shell_command is not None:
                 failure_details.append(("│", shell_command))
             elif input_value is not None:
                 failure_details.append(("│", self._input_summary(input_value)))
-            failure_details.append(("└", self._failure_detail(error, output)))
-            self._render_action_block(title, tool_name, failed=True, details=failure_details)
+            if not delegated:
+                failure_details.append(("└", self._failure_detail(error, output)))
+            self._render_action_block(
+                title,
+                tool_name,
+                failed=True,
+                details=failure_details,
+                tool_identity=self._delegated_suffix(tool_name, input_value, metadata)
+                if delegated
+                else None,
+            )
             return
 
-        metadata = state.get("metadata")
-        if self._is_delegated_result(tool_name, input_value, metadata):
+        if delegated:
             self._render_delegated_result(
                 title,
                 tool_name,
@@ -365,24 +377,27 @@ class _OpenCodeRenderer:
             )
             return
 
-        if tool_name.casefold() == "read":
-            target = self._input_value(
-                input_value, ("filePath", "file_path", "path", "file", "target")
-            )
+        if tool_name.casefold() == "read" and self._read_input_supported(input_value):
+            target = self._read_target(input_value)
             read_details: list[str] = []
-            if target is not None:
-                read_details.append(f"target: {target}")
+            if target is not None and target.casefold() not in title.casefold():
+                read_details.append(target)
             count = self._read_count(metadata)
             if count is not None:
                 label, value = count
-                read_details.append(f"{label}: {value}")
+                if label == "lines":
+                    description = f"{value} {'line' if value == 1 else 'lines'}"
+                else:
+                    description = f"{value} {'entry' if value == 1 else 'entries'}"
+                read_details.append(description)
             self._render_action_block(
                 title, tool_name, failed=False, details=self._tree_details(read_details)
             )
             return
 
-        if self._is_search_tool(tool_name):
-            self._render_search(title, tool_name, input_value, metadata)
+        search_family = self._search_family(tool_name, input_value)
+        if search_family is not None:
+            self._render_search(title, tool_name, input_value, metadata, search_family)
             return
 
         if self._is_file_modification_tool(tool_name):
@@ -402,6 +417,12 @@ class _OpenCodeRenderer:
         self._render_action_block(title, tool_name, failed=False, details=action_details)
 
     def _action_title(self, tool_name: str, input_value: Any, supplied: Any, metadata: Any) -> str:
+        if self._is_delegated_result(tool_name, input_value, metadata):
+            description = self._input_value(
+                input_value, ("description", "task_description", "taskDescription")
+            )
+            if description is not None:
+                return description
         if isinstance(supplied, str):
             title = " ".join(supplied.split())
             if title and title.casefold() != tool_name.casefold():
@@ -411,8 +432,8 @@ class _OpenCodeRenderer:
         if normalized_tool == "shell":
             return "Run command"
         if normalized_tool == "read":
-            target = self._input_value(
-                input_value, ("filePath", "file_path", "path", "file", "target")
+            target = (
+                self._read_target(input_value) if self._read_input_supported(input_value) else None
             )
             return f"Read {target}" if target is not None else "Read file"
         modification = _FILE_MODIFICATION_CONTRACTS.get(normalized_tool)
@@ -423,13 +444,15 @@ class _OpenCodeRenderer:
             return modification.fallback_title
         if normalized_tool == "webfetch":
             return "Fetch web content"
-        if self._is_search_tool(tool_name):
-            return "Search"
+        search_family = self._search_family(tool_name, input_value)
+        if search_family == "grep":
+            return "Search text"
+        if search_family == "glob":
+            return "Find files"
+        if search_family == "websearch":
+            return "Search the web"
         if self._is_delegated_result(tool_name, input_value, metadata):
-            description = self._input_value(
-                input_value, ("description", "task_description", "taskDescription")
-            )
-            return f"Delegated: {description}" if description else "Delegated agent result"
+            return "Run delegated task"
         return "Use tool"
 
     def _render_action_block(
@@ -439,12 +462,13 @@ class _OpenCodeRenderer:
         *,
         failed: bool,
         details: list[tuple[str, str]],
+        tool_identity: str | None = None,
     ) -> None:
         marker = "✗" if failed else "✓"
         marker_color = "31" if failed else "32"
         lines = [
             f"{self._style(marker, marker_color)} {self._style(title, '1')} "
-            f"{self._style(f'({tool_name})', '2')}"
+            f"{self._style(f'({tool_identity or tool_name})', '2')}"
         ]
         for connector, detail in details:
             detail_lines = detail.splitlines() or [""]
@@ -474,6 +498,36 @@ class _OpenCodeRenderer:
         if not isinstance(input_value, dict) or not isinstance(input_value.get(key), str):
             return None
         return _OpenCodeRenderer._bounded_single_line(input_value[key])
+
+    @staticmethod
+    def _read_input_supported(input_value: Any) -> bool:
+        if not isinstance(input_value, dict):
+            return False
+        target_keys = ("path", "filePath", "file_path", "file", "target")
+        target_fields = [key for key in target_keys if key in input_value]
+        allowed = {*target_keys, "offset", "limit"}
+        if len(target_fields) != 1 or set(input_value) - allowed:
+            return False
+        if (
+            not isinstance(input_value[target_fields[0]], str)
+            or not input_value[target_fields[0]].strip()
+        ):
+            return False
+        return all(
+            key not in input_value or _OpenCodeRenderer._count_value(input_value[key]) is not None
+            for key in ("offset", "limit")
+        )
+
+    @staticmethod
+    def _read_target(input_value: Any) -> str | None:
+        if not _OpenCodeRenderer._read_input_supported(input_value):
+            return None
+        assert isinstance(input_value, dict)
+        for key in ("path", "filePath", "file_path", "file", "target"):
+            value = input_value.get(key)
+            if isinstance(value, str):
+                return _OpenCodeRenderer._bounded_single_line(value)
+        return None
 
     def _failure_detail(self, error: Any, output: Any) -> str:
         error_text = self._display_value(error) if error is not None else ""
@@ -608,15 +662,24 @@ class _OpenCodeRenderer:
             return None
         for layer in layers:
             display = layer.get("display")
-            if isinstance(display, dict):
-                if display.get("type") == "file":
-                    count = _OpenCodeRenderer._count_value(display.get("totalLines"))
-                    if count is not None:
-                        return "lines", count
-                if display.get("type") == "directory":
-                    count = _OpenCodeRenderer._count_value(display.get("totalEntries"))
-                    if count is not None:
-                        return "entries", count
+            display_layer = display if isinstance(display, dict) else {}
+            display_type = display_layer.get("type")
+            if display_type == "media":
+                continue
+            if display_type == "file":
+                for source in (display_layer, layer):
+                    for key in ("totalLines", "lineCount"):
+                        count = _OpenCodeRenderer._count_value(source.get(key))
+                        if count is not None:
+                            return "lines", count
+                continue
+            if display_type == "directory":
+                for source in (display_layer, layer):
+                    for key in ("totalEntries", "entryCount"):
+                        count = _OpenCodeRenderer._count_value(source.get(key))
+                        if count is not None:
+                            return "entries", count
+                continue
             for label, keys in (
                 ("lines", ("totalLines", "lineCount")),
                 ("entries", ("totalEntries", "entryCount")),
@@ -638,27 +701,103 @@ class _OpenCodeRenderer:
         return layers
 
     @staticmethod
-    def _is_search_tool(tool_name: str) -> bool:
-        normalized = tool_name.casefold().replace("-", "_").replace(".", "_")
-        parts = set(normalized.split("_"))
-        return bool(parts & {"grep", "glob", "search"}) or normalized in {"codesearch", "websearch"}
+    def _search_family(tool_name: str, input_value: Any) -> str | None:
+        if not isinstance(input_value, dict):
+            return None
+
+        normalized = tool_name.casefold()
+        if normalized == "grep":
+            allowed = {"pattern", "path", "include", "literal", "caseSensitive", "limit"}
+            if (
+                set(input_value) - allowed
+                or not isinstance(input_value.get("pattern"), str)
+                or not input_value["pattern"].strip()
+                or ("path" in input_value and not isinstance(input_value["path"], str))
+                or ("include" in input_value and not isinstance(input_value["include"], str))
+                or ("literal" in input_value and not isinstance(input_value["literal"], bool))
+                or (
+                    "caseSensitive" in input_value
+                    and not isinstance(input_value["caseSensitive"], bool)
+                )
+                or (
+                    "limit" in input_value
+                    and _OpenCodeRenderer._count_value(input_value["limit"]) is None
+                )
+            ):
+                return None
+            return "grep"
+
+        if normalized == "glob":
+            allowed = {"pattern", "path", "hidden", "limit"}
+            if (
+                set(input_value) - allowed
+                or not isinstance(input_value.get("pattern"), str)
+                or not input_value["pattern"].strip()
+                or ("path" in input_value and not isinstance(input_value["path"], str))
+                or ("hidden" in input_value and not isinstance(input_value["hidden"], bool))
+                or (
+                    "limit" in input_value
+                    and _OpenCodeRenderer._count_value(input_value["limit"]) is None
+                )
+            ):
+                return None
+            return "glob"
+
+        if normalized == "websearch":
+            if set(input_value) != {"query"}:
+                return None
+            if not isinstance(input_value.get("query"), str) or not input_value["query"].strip():
+                return None
+            return "websearch"
+
+        return None
 
     @staticmethod
     def _is_delegated_result(tool_name: str, input_value: Any, metadata: Any) -> bool:
-        normalized = tool_name.casefold().replace("-", "_").replace(".", "_")
-        parts = set(normalized.split("_"))
-        if (
-            normalized == "task"
-            or bool(parts & {"delegate", "delegation", "subagent"})
-            or {"agent", "task"}.issubset(parts)
-        ):
-            return True
-        if _OpenCodeRenderer._delegated_agent(input_value, metadata) is not None:
-            return True
-        return any(
+        if any(
             layer.get("delegated") is True or layer.get("isDelegated") is True
             for layer in _OpenCodeRenderer._metadata_layers(metadata)
-        )
+        ):
+            return True
+        if not isinstance(input_value, dict):
+            return False
+
+        normalized = tool_name.casefold()
+        if normalized == "subagent":
+            allowed = {"agent", "description", "prompt", "model", "sessionID", "background"}
+            return (
+                not set(input_value) - allowed
+                and isinstance(input_value.get("description"), str)
+                and isinstance(input_value.get("prompt"), str)
+                and ("agent" not in input_value or isinstance(input_value["agent"], str))
+                and ("model" not in input_value or isinstance(input_value["model"], str))
+                and ("sessionID" not in input_value or isinstance(input_value["sessionID"], str))
+                and ("background" not in input_value or isinstance(input_value["background"], bool))
+            )
+
+        if normalized == "task":
+            allowed = {
+                "description",
+                "prompt",
+                "subagent_type",
+                "subagentType",
+                "agent",
+                "task_id",
+                "taskId",
+            }
+            string_fields = allowed
+            return (
+                not set(input_value) - allowed
+                and all(
+                    isinstance(input_value[key], str) for key in string_fields if key in input_value
+                )
+                and any(
+                    isinstance(input_value.get(key), str) and bool(input_value[key].strip())
+                    for key in ("description", "prompt", "subagent_type", "subagentType", "agent")
+                )
+            )
+
+        return False
 
     @staticmethod
     def _delegated_agent(input_value: Any, metadata: Any) -> str | None:
@@ -683,14 +822,23 @@ class _OpenCodeRenderer:
             for key in keys:
                 value = source.get(key)
                 if isinstance(value, dict):
-                    value = _OpenCodeRenderer._input_value(value, ("name", "type", "id"))
-                    if value is not None:
-                        return value
-                elif isinstance(value, (str, int, float)):
-                    rendered = _OpenCodeRenderer._input_value({key: value}, (key,))
+                    value = next(
+                        (
+                            value[candidate]
+                            for candidate in ("name", "type", "id")
+                            if isinstance(value.get(candidate), str)
+                        ),
+                        None,
+                    )
+                if isinstance(value, str):
+                    rendered = _OpenCodeRenderer._bounded_single_line(value)
                     if rendered is not None:
                         return rendered
         return None
+
+    def _delegated_suffix(self, tool_name: str, input_value: Any, metadata: Any) -> str:
+        agent = self._delegated_agent(input_value, metadata)
+        return f"{tool_name}: {agent}" if agent is not None else tool_name
 
     def _render_delegated_result(
         self,
@@ -703,30 +851,44 @@ class _OpenCodeRenderer:
         description = self._input_value(
             input_value, ("description", "task_description", "taskDescription")
         )
-        heading = f"Delegated: {description}" if description else title
-        detail_values = []
-        agent = self._delegated_agent(input_value, metadata)
-        if agent is not None:
-            detail_values.append(f"agent: {agent}")
-        task_id = self._input_value(input_value, ("task_id", "taskId"))
-        if task_id is not None:
-            detail_values.append(f"task id: {task_id}")
-        else:
-            session_id = self._metadata_value(metadata, ("sessionId", "sessionID", "session_id"))
-            if session_id is not None:
-                detail_values.append(f"session: {session_id}")
-
-        details = [("│", value) for value in detail_values]
-        details.extend(self._success_preview(output))
-        self._render_action_block(heading, tool_name, failed=False, details=details)
+        heading = description or title
+        details = self._success_preview(self._delegated_output(tool_name, output))
+        self._render_action_block(
+            heading,
+            tool_name,
+            failed=False,
+            details=details,
+            tool_identity=self._delegated_suffix(tool_name, input_value, metadata),
+        )
 
     @staticmethod
-    def _metadata_value(metadata: Any, keys: tuple[str, ...]) -> str | None:
-        for layer in _OpenCodeRenderer._metadata_layers(metadata):
-            value = _OpenCodeRenderer._input_value(layer, keys)
-            if value is not None:
-                return value
-        return None
+    def _delegated_output(tool_name: str, output: Any) -> Any:
+        if not isinstance(output, str):
+            return output
+
+        normalized = tool_name.casefold()
+        if normalized == "subagent":
+            opening, separator, content = output.partition("\n")
+            closing = "\n</subagent>"
+            if (
+                separator
+                and opening.startswith('<subagent sessionID="')
+                and opening.endswith(' state="completed">')
+                and content.endswith(closing)
+            ):
+                return content[: -len(closing)]
+
+        if normalized == "task":
+            content = "\n".join(
+                line for line in output.splitlines() if not line.startswith("task_id:")
+            ).strip()
+            opening = "<task_result>"
+            closing = "</task_result>"
+            if content.startswith(opening) and content.endswith(closing):
+                return content[len(opening) : -len(closing)].strip()
+            return content
+
+        return output
 
     def _render_search(
         self,
@@ -734,38 +896,69 @@ class _OpenCodeRenderer:
         tool_name: str,
         input_value: Any,
         metadata: Any,
+        family: str,
     ) -> None:
-        details = []
-        query = self._input_value(input_value, ("pattern", "query", "term", "searchTerm"))
-        if query is not None:
-            details.append(f"query: {query}")
-        scope = self._input_value(input_value, ("path", "directory", "root", "scope", "url"))
-        if scope is not None:
-            details.append(f"scope: {scope}")
-        include = self._input_value(input_value, ("include", "filePattern", "file_pattern"))
-        if include is not None:
-            details.append(f"include: {include}")
-        count = self._search_count(metadata)
-        if count is not None:
-            label, value = count
-            details.append(f"{label}: {value}")
+        details: list[str] = []
+        if family == "grep":
+            pattern = self._input_string(input_value, "pattern")
+            if pattern is not None:
+                details.append(f"for {pattern}")
+            scope = self._input_string(input_value, "path")
+            if scope is not None:
+                details.append(f"in {scope}")
+            include = self._input_string(input_value, "include")
+            if include is not None:
+                details.append(f"files matching {include}")
+            if input_value.get("literal") is True:
+                details.append("literal text")
+            if input_value.get("caseSensitive") is False:
+                details.append("case-insensitive")
+            limit = self._count_value(input_value.get("limit"))
+            if limit is not None:
+                details.append(f"up to {limit} matches")
+        elif family == "glob":
+            pattern = self._input_string(input_value, "pattern")
+            if pattern is not None:
+                details.append(pattern)
+            scope = self._input_string(input_value, "path")
+            if scope is not None:
+                details.append(f"in {scope}")
+            if input_value.get("hidden") is True:
+                details.append("including hidden files")
+            limit = self._count_value(input_value.get("limit"))
+            if limit is not None:
+                details.append(f"up to {limit} files")
         else:
-            details.append("count: not provided")
+            query = self._input_string(input_value, "query")
+            if query is not None:
+                details.append(f"for {query}")
+
+        count = self._search_count(metadata, family)
+        if count is not None:
+            value, truncated = count
+            if family == "glob":
+                quantity = "file" if value == 1 else "files"
+            else:
+                quantity = "match" if value == 1 else "matches"
+            description = f"more than {value} {quantity}" if truncated else f"{value} {quantity}"
+            details.append(description)
         self._render_action_block(
             title, tool_name, failed=False, details=self._tree_details(details)
         )
 
     @staticmethod
-    def _search_count(metadata: Any) -> tuple[str, int] | None:
+    def _search_count(metadata: Any, family: str) -> tuple[int, bool] | None:
+        key = {"grep": "matches", "glob": "count"}.get(family)
+        if key is None:
+            return None
         for layer in _OpenCodeRenderer._metadata_layers(metadata):
-            for key in ("matches", "matchCount", "totalMatches"):
-                count = _OpenCodeRenderer._count_value(layer.get(key))
-                if count is not None:
-                    return "matches", count
-            for key in ("count", "resultCount", "totalResults", "numResults"):
-                count = _OpenCodeRenderer._count_value(layer.get(key))
-                if count is not None:
-                    return "results", count
+            count = _OpenCodeRenderer._count_value(layer.get(key))
+            if count is not None:
+                truncated = any(
+                    item.get("truncated") is True
+                    for item in _OpenCodeRenderer._metadata_layers(metadata)
+                )
+                return count, truncated
         return None
 
     def _render_error(self, title: str, error: Any) -> None:

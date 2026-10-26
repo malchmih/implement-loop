@@ -92,9 +92,15 @@ checks observe the rendered CLI output, raw private `agent.log`, and output
 delivered before the fake process exits. CLI fixtures cover unchanged assistant
 text, the shared tool-block layout, bounded shell and generic previews, full
 failure details, wrapper styling policy, and pass-through of tool-supplied ANSI
-sequences. They also verify that successful read/search results and identifiable
-parent-level delegation retain their current summaries without losing their full
-raw events, while unfamiliar tools use the generic fallback. Copilot fixtures
+sequences. Read fixtures cover file, directory, and media-shaped events,
+metadata-supplied zero/reliable counts, truncated or missing counts, and content
+suppression without changing raw events. Search fixtures cover verified `grep`,
+`glob`, and `websearch` inputs, natural query/scope/filter details, count
+semantics, omitted result dumps, and generic fallback for unsupported shapes.
+Delegation fixtures cover `task`, `subagent`, explicit delegation metadata,
+missing agent identity, ID/wrapper omission, bounded result previews, and
+unrecognized tools that must keep their generic results. Failure fixtures verify
+complete read/search/delegation error and output details. Copilot fixtures
 continue to verify its native byte relay and record format.
 File-modification and web-fetch fixtures follow the verified OpenCode 2.1.4
 schemas for `patch`, `edit`, `write`, and `webfetch`. Their integration tests

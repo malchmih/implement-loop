@@ -828,9 +828,7 @@ class HarnessTests(LoopTestCase):
             (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
         )
 
-    def test_opencode_successful_file_reads_summarize_target_without_displaying_contents(
-        self,
-    ) -> None:
+    def test_opencode_successful_reads_show_targets_and_reliable_counts_only(self) -> None:
         event = {
             "type": "tool_use",
             "timestamp": 1,
@@ -841,8 +839,8 @@ class HarnessTests(LoopTestCase):
                 "state": {
                     "status": "completed",
                     "title": "read",
-                    "input": {"filePath": "src/private.py", "offset": 4, "limit": 3},
-                    "output": "SECRET_FILE_CONTENT\nmore private contents",
+                    "input": {"path": "src/private.py", "offset": 4, "limit": 3},
+                    "output": "Read file src/private.py, lines 4-6\nSECRET_FILE_CONTENT",
                     "metadata": {
                         "metadata": {
                             "display": {
@@ -856,7 +854,7 @@ class HarnessTests(LoopTestCase):
             },
         }
 
-        direct_metadata_event = {
+        zero_directory_event = {
             "type": "tool_use",
             "timestamp": 2,
             "sessionID": "ses_read",
@@ -866,26 +864,109 @@ class HarnessTests(LoopTestCase):
                 "state": {
                     "status": "completed",
                     "title": "read",
-                    "input": {"filePath": "src/summary.py"},
-                    "output": "SECRET_DIRECT_COUNT_CONTENT",
+                    "input": {"path": "empty-directory"},
+                    "output": "Read directory empty-directory, 0 entries",
+                    "metadata": {
+                        "metadata": {
+                            "display": {
+                                "type": "directory",
+                                "totalEntries": 0,
+                                "truncated": False,
+                            }
+                        }
+                    },
+                },
+            },
+        }
+
+        media_event = {
+            "type": "tool_use",
+            "timestamp": 3,
+            "sessionID": "ses_read",
+            "part": {
+                "type": "tool",
+                "tool": "read",
+                "state": {
+                    "status": "completed",
+                    "title": "Inspect image metadata",
+                    "input": {"path": "assets/diagram.png"},
+                    "output": "Image read successfully\nSECRET_IMAGE_CONTENT",
+                    "metadata": {
+                        "metadata": {
+                            "display": {
+                                "type": "media",
+                                "mime": "image/png",
+                                "totalLines": 99,
+                            },
+                            "content": [{"type": "file", "uri": "data:image/png;base64,SECRET"}],
+                            "totalLines": 99,
+                        }
+                    },
+                },
+            },
+        }
+
+        direct_metadata_event = {
+            "type": "tool_use",
+            "timestamp": 4,
+            "sessionID": "ses_read",
+            "part": {
+                "type": "tool",
+                "tool": "read",
+                "state": {
+                    "status": "completed",
+                    "title": "read",
+                    "input": {"path": "src/summary.py"},
+                    "output": "Read file src/summary.py, lines 1-12\nSECRET_DIRECT_COUNT_CONTENT",
                     "metadata": {"metadata": {"lineCount": 12, "truncated": False}},
                 },
             },
         }
 
-        raw_output, visible, runs = self._run_opencode_events([event, direct_metadata_event])
+        no_count_event = {
+            "type": "tool_use",
+            "timestamp": 5,
+            "sessionID": "ses_read",
+            "part": {
+                "type": "tool",
+                "tool": "read",
+                "state": {
+                    "status": "completed",
+                    "title": "read",
+                    "input": {"path": "src/no-metadata.py"},
+                    "output": "Read file src/no-metadata.py, lines 1-2",
+                    "metadata": {"metadata": {"truncated": False}},
+                },
+            },
+        }
 
-        self.assertIn("src/private.py", visible)
-        self.assertIn("lines: 120", visible)
-        self.assertIn("src/summary.py", visible)
-        self.assertIn("lines: 12", visible)
-        self.assertNotIn("SECRET_FILE_CONTENT", visible)
-        self.assertNotIn("more private contents", visible)
-        self.assertNotIn("SECRET_DIRECT_COUNT_CONTENT", visible)
+        raw_output, visible, runs = self._run_opencode_events(
+            [event, zero_directory_event, media_event, direct_metadata_event, no_count_event]
+        )
+
+        self.assertIn("✓ Read src/private.py (read)\n  └ 120 lines", visible)
+        self.assertIn("✓ Read empty-directory (read)\n  └ 0 entries", visible)
+        self.assertIn("✓ Inspect image metadata (read)\n  └ assets/diagram.png", visible)
+        self.assertIn("✓ Read src/summary.py (read)\n  └ 12 lines", visible)
+        self.assertNotIn("99 lines", visible)
+        no_count_block = next(
+            block for block in visible.split("\n\n") if "src/no-metadata.py" in block
+        )
+        self.assertEqual(no_count_block, "✓ Read src/no-metadata.py (read)")
+        for label in ("target:", "lines:", "entries:", "count:", "not provided"):
+            self.assertNotIn(label, visible)
+        for private_content in (
+            "SECRET_FILE_CONTENT",
+            "SECRET_DIRECT_COUNT_CONTENT",
+            "SECRET_IMAGE_CONTENT",
+            "data:image/png;base64,SECRET",
+        ):
+            self.assertNotIn(private_content, visible)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
         self.assertIn(b"SECRET_FILE_CONTENT", log.read_bytes())
         self.assertIn(b"SECRET_DIRECT_COUNT_CONTENT", log.read_bytes())
+        self.assertIn(b"SECRET_IMAGE_CONTENT", log.read_bytes())
 
     def test_opencode_reads_without_reliable_counts_still_hide_file_contents(self) -> None:
         event = {
@@ -944,7 +1025,7 @@ class HarnessTests(LoopTestCase):
         raw_output, visible, runs = self._run_opencode_events([event])
 
         self.assertIn("src/large.py", visible)
-        self.assertNotIn("lines: 999", visible)
+        self.assertNotIn("999 lines", visible)
         self.assertNotIn("SECRET_TRUNCATED_READ_CONTENT", visible)
         self.assertIn(b"SECRET_TRUNCATED_READ_CONTENT", raw_output.encode("utf-8"))
         self.assertEqual(
@@ -952,7 +1033,52 @@ class HarnessTests(LoopTestCase):
             raw_output.encode("utf-8"),
         )
 
-    def test_opencode_successful_searches_show_query_scope_and_only_emitted_counts(self) -> None:
+    def test_opencode_unsupported_read_shapes_keep_the_generic_result_fallback(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_read_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "read",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect unsupported read",
+                        "input": {"path": "src/private.py", "mode": "preview"},
+                        "output": "Unsupported read shape keeps this result visible.",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_read_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "read_extension",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect custom reader",
+                        "input": {"path": "src/custom.py"},
+                        "output": "Custom read output stays visible.",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn("✓ Inspect unsupported read (read)", visible)
+        self.assertIn('{"path":"src/private.py","mode":"preview"}', visible)
+        self.assertIn("Unsupported read shape keeps this result visible.", visible)
+        self.assertIn("✓ Inspect custom reader (read_extension)", visible)
+        self.assertIn("Custom read output stays visible.", visible)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+
+    def test_opencode_successful_searches_show_natural_filters_and_reliable_counts(self) -> None:
         events = [
             {
                 "type": "tool_use",
@@ -968,10 +1094,12 @@ class HarnessTests(LoopTestCase):
                             "pattern": "NEEDLE_QUERY",
                             "path": "lib/",
                             "include": "*.py",
+                            "literal": True,
+                            "caseSensitive": False,
                             "limit": 10,
                         },
                         "output": "Found 2 matches\nSECRET_MATCH_ONE\nSECRET_MATCH_TWO",
-                        "metadata": {"metadata": {"matches": 2}},
+                        "metadata": {"metadata": {"matches": 2, "truncated": False}},
                     },
                 },
             },
@@ -985,8 +1113,61 @@ class HarnessTests(LoopTestCase):
                     "state": {
                         "status": "completed",
                         "title": "glob",
+                        "input": {
+                            "pattern": "empty/**",
+                            "path": "workspace/empty",
+                            "hidden": True,
+                        },
+                        "output": "No files found",
+                        "metadata": {"metadata": {"count": 0, "truncated": False}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 3,
+                "sessionID": "ses_search",
+                "part": {
+                    "type": "tool",
+                    "tool": "glob",
+                    "state": {
+                        "status": "completed",
+                        "title": "glob",
                         "input": {"pattern": "src/**/*.py", "path": "workspace"},
                         "output": "Found 17 matches\nSECRET_GLOB_MATCH_ONE\nSECRET_GLOB_MATCH_TWO",
+                        "metadata": {"metadata": {"truncated": False}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 4,
+                "sessionID": "ses_search",
+                "part": {
+                    "type": "tool",
+                    "tool": "grep",
+                    "state": {
+                        "status": "completed",
+                        "title": "grep",
+                        "input": {"pattern": "capped-query"},
+                        "output": "Found 5 matches\nSECRET_CAPPED_MATCH",
+                        "metadata": {"metadata": {"matches": 5, "truncated": True}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 5,
+                "sessionID": "ses_search",
+                "part": {
+                    "type": "tool",
+                    "tool": "websearch",
+                    "state": {
+                        "status": "completed",
+                        "title": "websearch",
+                        "input": {"query": "OpenCode JSON event schema"},
+                        "output": "## [Result title](https://example.test)\nSECRET_WEB_RESULT",
+                        "metadata": {"metadata": {"provider": "fixture"}},
                     },
                 },
             },
@@ -994,24 +1175,96 @@ class HarnessTests(LoopTestCase):
 
         raw_output, visible, runs = self._run_opencode_events(events)
 
-        self.assertIn("NEEDLE_QUERY", visible)
-        self.assertIn("lib/", visible)
-        self.assertIn("matches: 2", visible)
-        self.assertIn("src/**/*.py", visible)
+        self.assertIn(
+            "✓ Search text (grep)\n"
+            "  ├ for NEEDLE_QUERY\n"
+            "  ├ in lib/\n"
+            "  ├ files matching *.py\n"
+            "  ├ literal text\n"
+            "  ├ case-insensitive\n"
+            "  ├ up to 10 matches\n"
+            "  └ 2 matches",
+            visible,
+        )
+        self.assertIn(
+            "✓ Find files (glob)\n"
+            "  ├ empty/**\n"
+            "  ├ in workspace/empty\n"
+            "  ├ including hidden files\n"
+            "  └ 0 files",
+            visible,
+        )
         self.assertIn("workspace", visible)
-        self.assertIn("count: not provided", visible)
+        self.assertIn("src/**/*.py", visible)
+        self.assertNotIn("17 files", visible)
+        self.assertNotIn("Found 2 matches", visible)
         self.assertNotIn("Found 17 matches", visible)
-        self.assertNotIn("results: 17", visible)
+        self.assertNotIn("count:", visible)
+        self.assertNotIn("not provided", visible)
+        self.assertIn("more than 5 matches", visible)
+        self.assertIn("✓ Search the web (websearch)\n  └ for OpenCode JSON event schema", visible)
+        self.assertNotIn("https://example.test", visible)
+        self.assertNotIn("OpenCode JSON event schema:", visible)
         for match in (
             "SECRET_MATCH_ONE",
             "SECRET_MATCH_TWO",
             "SECRET_GLOB_MATCH_ONE",
             "SECRET_GLOB_MATCH_TWO",
+            "SECRET_CAPPED_MATCH",
+            "SECRET_WEB_RESULT",
         ):
             self.assertNotIn(match, visible)
             self.assertIn(match.encode("utf-8"), raw_output.encode("utf-8"))
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
+
+    def test_opencode_unsupported_search_shapes_keep_the_generic_result_fallback(self) -> None:
+        events = [
+            {
+                "type": "tool_use",
+                "timestamp": 1,
+                "sessionID": "ses_search_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "grep",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect unsupported grep",
+                        "input": {"query": "not the verified pattern field"},
+                        "output": "Found 1 match\nUNSUPPORTED_GREP_RESULT",
+                        "metadata": {"metadata": {"matches": 1}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 2,
+                "sessionID": "ses_search_fallback",
+                "part": {
+                    "type": "tool",
+                    "tool": "grep_extension",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect custom grep",
+                        "input": {"pattern": "custom schema", "path": "src"},
+                        "output": "CUSTOM_GREP_RESULT",
+                    },
+                },
+            },
+        ]
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        self.assertIn("✓ Inspect unsupported grep (grep)", visible)
+        self.assertIn('{"query":"not the verified pattern field"}', visible)
+        self.assertIn("Found 1 match", visible)
+        self.assertIn("UNSUPPORTED_GREP_RESULT", visible)
+        self.assertIn("✓ Inspect custom grep (grep_extension)", visible)
+        self.assertIn("CUSTOM_GREP_RESULT", visible)
+        self.assertNotIn("count: not provided", visible)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
 
     def test_opencode_identifies_parent_level_delegation_and_bounds_returned_results(self) -> None:
         events = [
@@ -1031,8 +1284,9 @@ class HarnessTests(LoopTestCase):
                             "task_id": "ses_child_123",
                             "prompt": "A private task prompt that must not be displayed",
                         },
-                        "output": "finding-1\nfinding-2\nfinding-3\nfinding-4\n"
-                        "finding-5\nfinding-6\nfinding-7",
+                        "output": "task_id: ses_child_123\n<task_result>\n"
+                        "finding-1\nfinding-2\nfinding-3\nfinding-4\n"
+                        "finding-5\nfinding-6\nfinding-7\n</task_result>",
                     },
                 },
             },
@@ -1042,15 +1296,21 @@ class HarnessTests(LoopTestCase):
                 "sessionID": "ses_delegation",
                 "part": {
                     "type": "tool",
-                    "tool": "invoke_worker",
+                    "tool": "subagent",
                     "state": {
                         "status": "completed",
-                        "title": "Review the failure path",
-                        "input": {"description": "Review the failure path"},
-                        "output": "A second parent-level delegated result.",
+                        "title": "subagent",
+                        "input": {
+                            "description": "Review the failure path",
+                            "agent": "reviewer",
+                            "sessionID": "ses_review_child",
+                            "prompt": "A private subagent prompt that must not be displayed",
+                        },
+                        "output": '<subagent sessionID="ses_review_child" state="completed">\n'
+                        "A second parent-level delegated result.\n</subagent>",
                         "metadata": {
                             "metadata": {
-                                "agent_type": "reviewer",
+                                "status": "completed",
                                 "sessionId": "ses_review_child",
                             }
                         },
@@ -1060,6 +1320,92 @@ class HarnessTests(LoopTestCase):
             {
                 "type": "tool_use",
                 "timestamp": 3,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "job_dispatcher",
+                    "state": {
+                        "status": "completed",
+                        "title": "Run delegated work",
+                        "input": {
+                            "description": "Inspect the queue worker",
+                            "prompt": "A private explicit-delegation prompt",
+                        },
+                        "output": "Queue worker finding.",
+                        "metadata": {
+                            "metadata": {
+                                "delegated": True,
+                                "agent_name": "queue-agent",
+                                "sessionID": "ses_queue_child",
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 4,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "invoke_worker",
+                    "state": {
+                        "status": "completed",
+                        "title": "Review the failure path",
+                        "input": {"description": "Review the failure path"},
+                        "output": "Ambiguous worker output stays visible.",
+                        "metadata": {
+                            "metadata": {
+                                "agent_type": "reviewer",
+                                "sessionId": "ses_ambiguous_child",
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 5,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "subagent",
+                    "state": {
+                        "status": "completed",
+                        "title": "subagent",
+                        "input": {
+                            "description": "Check missing agent identity",
+                            "prompt": "A private prompt without agent identity",
+                        },
+                        "output": '<subagent sessionID="ses_no_agent" state="completed">\n'
+                        "Result without agent identity.\n</subagent>",
+                        "metadata": {"metadata": {"sessionID": "ses_no_agent"}},
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 6,
+                "sessionID": "ses_delegation",
+                "part": {
+                    "type": "tool",
+                    "tool": "subagent",
+                    "state": {
+                        "status": "completed",
+                        "title": "Inspect malformed subagent result",
+                        "input": {
+                            "description": "Inspect malformed subagent result",
+                            "agent": "explore",
+                            "prompt": "A private unsupported-schema prompt",
+                            "extra": "not in the verified input schema",
+                        },
+                        "output": "Unsupported subagent result stays visible.",
+                    },
+                },
+            },
+            {
+                "type": "tool_use",
+                "timestamp": 7,
                 "sessionID": "ses_delegation",
                 "part": {
                     "type": "tool",
@@ -1076,26 +1422,55 @@ class HarnessTests(LoopTestCase):
 
         raw_output, visible, runs = self._run_opencode_events(events)
 
-        self.assertIn("Delegated: Inspect parser behavior", visible)
-        self.assertIn("agent: explore", visible)
-        self.assertIn("task id: ses_child_123", visible)
+        self.assertIn("✓ Inspect parser behavior (task: explore)", visible)
         self.assertIn("finding-1", visible)
         self.assertIn("finding-5", visible)
         self.assertNotIn("finding-6", visible)
         self.assertNotIn("finding-7", visible)
         self.assertIn("... 2 additional line(s) omitted", visible)
-        self.assertIn("Delegated: Review the failure path", visible)
-        self.assertIn("agent: reviewer", visible)
-        self.assertIn("session: ses_review_child", visible)
+        self.assertIn(
+            "✓ Review the failure path (subagent: reviewer)\n"
+            "  └ A second parent-level delegated result.",
+            visible,
+        )
+        self.assertIn(
+            "✓ Inspect the queue worker (job_dispatcher: queue-agent)\n  └ Queue worker finding.",
+            visible,
+        )
+        self.assertIn("✓ Review the failure path (invoke_worker)", visible)
+        self.assertIn("Ambiguous worker output stays visible.", visible)
+        self.assertNotIn("Delegated: Review the failure path", visible)
+        self.assertIn(
+            "✓ Check missing agent identity (subagent)\n  └ Result without agent identity.",
+            visible,
+        )
+        self.assertIn("✓ Inspect malformed subagent result (subagent)", visible)
+        self.assertIn("Unsupported subagent result stays visible.", visible)
         self.assertIn("A second parent-level delegated result.", visible)
         self.assertIn("✓ Run a task (workflow_runner)", visible)
         self.assertNotIn("tool: workflow_runner", visible)
         self.assertNotIn("Delegated: Run a task", visible)
-        self.assertNotIn("A private task prompt", visible)
+        for private_value in (
+            "A private task prompt",
+            "A private subagent prompt",
+            "A private explicit-delegation prompt",
+            "A private prompt without agent identity",
+            "ses_child_123",
+            "ses_review_child",
+            "ses_queue_child",
+            "ses_no_agent",
+            "<task_result>",
+            "<subagent ",
+            "agent: explore",
+            "task id:",
+            "session:",
+        ):
+            self.assertNotIn(private_value, visible)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
         self.assertIn(b"finding-7", log.read_bytes())
         self.assertIn(b"A private task prompt", log.read_bytes())
+        self.assertIn(b"ses_review_child", log.read_bytes())
 
     def test_opencode_exploration_and_delegation_failures_keep_full_error_details(self) -> None:
         events = [
@@ -1111,6 +1486,7 @@ class HarnessTests(LoopTestCase):
                         "title": "Read failed",
                         "input": {"filePath": "src/unavailable.py"},
                         "error": "READ_ERROR_DETAIL",
+                        "output": "\n".join(f"READ_OUTPUT_LINE_{line}" for line in range(1, 7)),
                     },
                 },
             },
@@ -1126,6 +1502,7 @@ class HarnessTests(LoopTestCase):
                         "title": "Search failed",
                         "input": {"pattern": "private-pattern", "path": "src"},
                         "error": "SEARCH_ERROR_DETAIL",
+                        "output": "\n".join(f"SEARCH_OUTPUT_LINE_{line}" for line in range(1, 7)),
                     },
                 },
             },
@@ -1139,10 +1516,18 @@ class HarnessTests(LoopTestCase):
                     "state": {
                         "status": "error",
                         "title": "Delegated task failed",
-                        "input": {"subagent_type": "explore"},
+                        "input": {
+                            "description": "Investigate delegated failure",
+                            "subagent_type": "explore",
+                            "task_id": "ses_failed_child",
+                            "prompt": "A private failed delegation prompt",
+                        },
                         "error": "DELEGATION_ERROR_LINE_1\nDELEGATION_ERROR_LINE_2\n"
                         "DELEGATION_ERROR_LINE_3\nDELEGATION_ERROR_LINE_4\n"
                         "DELEGATION_ERROR_LINE_5\nDELEGATION_ERROR_LINE_6",
+                        "output": "\n".join(
+                            f"DELEGATION_OUTPUT_LINE_{line}" for line in range(1, 7)
+                        ),
                     },
                 },
             },
@@ -1150,13 +1535,18 @@ class HarnessTests(LoopTestCase):
 
         raw_output, visible, runs = self._run_opencode_events(events)
 
-        self.assertIn("✗ Read failed", visible)
+        self.assertIn("✗ Read failed (read)", visible)
         self.assertIn("READ_ERROR_DETAIL", visible)
-        self.assertIn("✗ Search failed", visible)
+        self.assertIn("✗ Search failed (grep)", visible)
         self.assertIn("SEARCH_ERROR_DETAIL", visible)
-        self.assertIn("✗ Delegated task failed", visible)
+        self.assertIn("✗ Investigate delegated failure (task: explore)", visible)
         for line in range(1, 7):
             self.assertIn(f"DELEGATION_ERROR_LINE_{line}", visible)
+            self.assertIn(f"READ_OUTPUT_LINE_{line}", visible)
+            self.assertIn(f"SEARCH_OUTPUT_LINE_{line}", visible)
+            self.assertIn(f"DELEGATION_OUTPUT_LINE_{line}", visible)
+        self.assertNotIn("ses_failed_child", visible)
+        self.assertNotIn("A private failed delegation prompt", visible)
         self.assertNotIn("additional line(s) omitted", visible)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
