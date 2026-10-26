@@ -485,7 +485,7 @@ class HarnessTests(LoopTestCase):
                                 },
                                 {
                                     "question": "What must the migration preserve?",
-                                    "header": "Constraints",
+                                    "header": "Constraints\nand risks",
                                     "options": [],
                                 },
                                 {
@@ -547,7 +547,7 @@ class HarnessTests(LoopTestCase):
             "✓ Answer 3 questions (question)\n"
             "  ├ Databases: Which databases do you prefer?\n"
             "    Selected PostgreSQL, SQLite\n"
-            "  ├ Constraints: What must the migration preserve?\n"
+            "  ├ Constraints and risks: What must the migration preserve?\n"
             "    Keep the current table names; preserve naïve labels.\n"
             "  └ Region: Choose a deployment region\n"
             "    Selected EU West",
@@ -661,6 +661,30 @@ class HarnessTests(LoopTestCase):
                     },
                 },
             },
+            {
+                "type": "tool_use",
+                "timestamp": 5,
+                "sessionID": "ses_partial_summaries",
+                "part": {
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {
+                        "status": "completed",
+                        "title": "question",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Choose a backend",
+                                    "header": "A question header longer than thirty characters",
+                                    "options": [],
+                                }
+                            ]
+                        },
+                        "output": "LONG_HEADER_QUESTION_RESULT",
+                        "metadata": {"metadata": {"answers": [["PostgreSQL"]]}},
+                    },
+                },
+            },
         ]
 
         raw_output, visible, runs = self._run_opencode_events(events)
@@ -675,6 +699,7 @@ class HarnessTests(LoopTestCase):
         self.assertIn("UNSUPPORTED_QUESTION_RESULT", visible)
         self.assertIn("✓ Inspect extension question result (question_extension)", visible)
         self.assertIn("EXTENSION_QUESTION_RESULT", visible)
+        self.assertIn("LONG_HEADER_QUESTION_RESULT", visible)
         log = runs[0] / "attempt-1-ticket-2/agent.log"
         self.assertEqual(log.read_bytes(), raw_output.encode("utf-8"))
 

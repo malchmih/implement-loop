@@ -575,11 +575,15 @@ class _OpenCodeRenderer:
                 or set(question) - allowed
             ):
                 return None
+            header = question.get("header")
+            display_header = (
+                _OpenCodeRenderer._bounded_single_line(header) if isinstance(header, str) else None
+            )
             if (
                 not isinstance(question.get("question"), str)
                 or not question["question"].strip()
-                or not isinstance(question.get("header"), str)
-                or not question["header"].strip()
+                or display_header is None
+                or len(display_header) > 30
                 or not isinstance(question.get("options"), list)
                 or ("multiple" in question and not isinstance(question["multiple"], bool))
             ):
@@ -592,7 +596,7 @@ class _OpenCodeRenderer:
                     or not isinstance(option.get("description"), str)
                 ):
                     return None
-            supported.append(question)
+            supported.append({**question, "header": display_header})
         return supported
 
     @staticmethod
