@@ -17,7 +17,6 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "implement-loop"
-INSTALLER = SCRIPT.parent / "install.sh"
 REPOSITORY_URL = "https://api.github.com/repos/test/repo"
 LIVE_OUTPUT_FRAGMENT = b"IMPLEMENT_LOOP_LIVE_OUTPUT_7F3A9C"
 LIVE_OUTPUT_TIMEOUT = 15.0
@@ -505,28 +504,16 @@ class TemporaryHomeTestCase(unittest.TestCase):
             SCRIPT.parent,
             source,
             ignore=shutil.ignore_patterns(
-                ".git", "__pycache__", ".venv", ".mypy_cache", ".ruff_cache"
+                ".git",
+                "__pycache__",
+                ".venv",
+                ".mypy_cache",
+                ".ruff_cache",
+                "build",
+                "dist",
             ),
         )
         return source
-
-    def run_installer(
-        self,
-        source: Path,
-        destination: Path | str | None = None,
-        *,
-        env: dict[str, str] | None = None,
-    ) -> subprocess.CompletedProcess[bytes]:
-        command = [str(source / INSTALLER.name)]
-        if destination is not None:
-            command.append(os.fspath(destination))
-        return subprocess.run(
-            command,
-            cwd=self.home,
-            env=env if env is not None else self.env,
-            capture_output=True,
-            timeout=30,
-        )
 
 
 class LoopTestCase(TemporaryHomeTestCase):
@@ -977,12 +964,6 @@ class LoopTestCase(TemporaryHomeTestCase):
             if master is not None:
                 os.close(master)
             ready_listener.close()
-
-    def install_test_command(self) -> tuple[Path, Path]:
-        source = self.copy_source_tree()
-        result = self.run_installer(source)
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        return source, self.home / ".local/bin/implement-loop"
 
     def load_state(self) -> dict[str, object]:
         return json.loads(self.state_path.read_text())

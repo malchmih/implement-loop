@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 from support import SCRIPT, LoopTestCase
 
-PACKAGED_EXECUTABLE = SCRIPT.parent / "dist" / "implement-loop"
+PACKAGED_EXECUTABLE = Path(
+    os.environ.get(
+        "IMPLEMENT_LOOP_PACKAGED_EXECUTABLE",
+        str(SCRIPT.parent / "dist" / "implement-loop"),
+    )
+)
 
 
 class PackagedExecutableTests(LoopTestCase):
@@ -15,7 +22,9 @@ class PackagedExecutableTests(LoopTestCase):
         if sys.platform != "darwin" or platform.machine() != "arm64":
             self.skipTest("the packaged executable is supported on macOS arm64 only")
         if not PACKAGED_EXECUTABLE.is_file():
-            self.fail("run `make build` before the packaged executable smoke tests")
+            self.fail("run `make install` before the packaged executable smoke tests")
+        if PACKAGED_EXECUTABLE.is_symlink():
+            self.fail("the installed executable must be a regular file, not a symlink")
 
         super().setUp()
         external_directory = self.home / "outside source checkout"

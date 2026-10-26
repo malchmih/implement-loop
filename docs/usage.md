@@ -2,8 +2,10 @@
 
 ## Prerequisites
 
-- Python 3.11 or later, Git, and GitHub CLI (`gh`).
-- macOS and Linux are supported; native Windows is not a target.
+- For source execution (including Linux), Python 3.11 or later, Git, and GitHub
+  CLI (`gh`). The bundled executable includes Python and is supported on macOS
+  arm64; building it from a checkout requires `make` and `uv`.
+- Native Windows is not a target.
 - An authenticated GitHub CLI session with permission to read native
   sub-issues/dependencies, assign issues, comment, and close issues.
 - OpenCode V2 is the default and requires its CLI, authentication, and an
@@ -32,31 +34,38 @@ comments, closure, or a later harness launch can still fail.
 
 ## Install
 
-Run the installer from the source checkout:
+On macOS arm64, build and install the standalone executable from the checkout:
 
 ```bash
 cd /path/to/implement-loop
-./install.sh
-# Or choose a different executable directory:
-./install.sh "$HOME/bin"
+make install
+# Or choose a prefix; the command goes in PREFIX/bin:
+make install PREFIX="$HOME/tools"
 ```
 
-With no argument, the installer creates `~/.local/bin` if needed and links
-`implement-loop` there. A destination argument selects another directory, which
-is also created if needed. Repeating installation of the same link is safe;
-unrelated files, directories, or links at that command path are refused with a
-diagnostic. The installer reports whether the destination is on `PATH` and which
-runtime commands are available. It does not edit shell profiles, install
-dependencies, authenticate GitHub, configure a harness, or install the external
-skill. Add the printed destination to `PATH` yourself if necessary, for example:
+By default the executable is installed as `~/.local/bin/implement-loop`. The
+command creates the bin directory, safely replaces an existing regular file,
+and refuses an existing symlink or directory without following or changing it.
+If an earlier `install.sh` left a source-checkout symlink there, inspect it with
+`ls -l` and `readlink`; after verifying its target, remove it manually (for the
+default prefix, `rm ~/.local/bin/implement-loop`). There is no automatic
+migration. Add the bin directory to `PATH` yourself if
+needed, for example `export PATH="$HOME/.local/bin:$PATH"`; installation does
+not edit shell profiles.
+
+`make install` builds from the files currently on disk, including uncommitted
+application edits. The installed executable is independent of the checkout;
+editing the checkout alone does not update it, so rebuild and reinstall to
+install changes. `make` and `uv` (which provisions the locked Python build
+environment) are build-time requirements, not runtime requirements for the
+bundled executable.
+
+Linux has no bundled binary installer. Run the source command with Python 3.11
+or later from the target repository instead:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+python3 /path/to/implement-loop/implement-loop SPEC_NUMBER
 ```
-
-The executable remains backed by this source checkout. Updating the checkout
-updates the linked command; moving or deleting the checkout breaks it. There is
-no copy installation.
 
 ## Run a spec
 
