@@ -301,7 +301,7 @@ class _OpenCodeRenderer:
     def _render_text(self, text: str) -> None:
         if not text:
             return
-        rendered = text
+        rendered = f"{self._style('── Agent ──', '1;36')}\n{text}"
         if not text.endswith("\n"):
             rendered += "\n"
         if not text.endswith("\n\n"):

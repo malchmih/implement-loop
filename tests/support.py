@@ -226,6 +226,7 @@ if tool_name in ("copilot", "opencode"):
     live_fragment = os.environ.get("IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT")
     if live_fragment is not None:
         if tool_name == "opencode":
+            write_opencode_text_event("Live **agent** text", "ses_live_fixture")
             write_opencode_event({
                 "type": "tool_use",
                 "timestamp": 1,
@@ -852,7 +853,12 @@ class LoopTestCase(TemporaryHomeTestCase):
             for fragment_line in live_output_fragment.splitlines():
                 self.assertIn(fragment_line, output)
             if harness == "opencode":
+                heading = "── Agent ──".encode()
                 if terminal and not no_color:
+                    self.assertIn(
+                        b"\x1b[1;36m" + heading + b"\x1b[0m\r\nLive **agent** text\r\n\r\n",
+                        output,
+                    )
                     self.assertIn(
                         b"\x1b[32m\xe2\x9c\x93\x1b[0m "
                         b"\x1b[1mLive completed tool\x1b[0m "
@@ -861,8 +867,11 @@ class LoopTestCase(TemporaryHomeTestCase):
                     )
                     self.assertIn(b'  \x1b[2m\xe2\x94\x82\x1b[0m {"fixture":"live"}', output)
                 else:
+                    newline = b"\r\n" if terminal else b"\n"
+                    self.assertIn(heading + newline + b"Live **agent** text" + newline * 2, output)
                     self.assertIn(b"\xe2\x9c\x93 Live completed tool (live_tool)", output)
                     self.assertNotIn(b"\x1b[", output)
+                self.assertEqual(output.count(heading), 1)
                 if include_failure:
                     if terminal and not no_color:
                         self.assertIn(
@@ -888,7 +897,15 @@ class LoopTestCase(TemporaryHomeTestCase):
                         },
                     },
                 }
-                expected_events = [expected_event]
+                expected_events = [
+                    {
+                        "type": "text",
+                        "timestamp": 1,
+                        "sessionID": "ses_live_fixture",
+                        "part": {"type": "text", "text": "Live **agent** text"},
+                    },
+                    expected_event,
+                ]
                 if include_failure:
                     expected_events.append(
                         {

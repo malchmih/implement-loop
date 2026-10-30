@@ -91,6 +91,12 @@ incomplete. OpenCode records raw harness output and Copilot preserves its native
 text. Run and attempt directories are private (`0700`), and files are private
 (`0600`).
 
+In the live transcript, each nonempty OpenCode text event is preceded by
+`── Agent ──`; its message remains unchanged, including literal Markdown. The
+heading is bold cyan on color-enabled terminals and plain when output is
+redirected or `NO_COLOR` is set. This presentation does not alter `agent.log`
+or Copilot output.
+
 ## Retention
 
 At startup, the runner removes only identifiable Implement Loop run directories

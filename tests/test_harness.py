@@ -84,7 +84,11 @@ class HarnessTests(LoopTestCase):
         expected_tool_block = (
             '✓ Inspect fixture (example_tool)\n  │ {"target":"the fixture"}\n  └ result line'
         )
-        self.assertIn((assistant_text + "\n\n" + expected_tool_block).encode(), result.stdout)
+        self.assertIn(
+            ("── Agent ──\n" + assistant_text + "\n\n" + expected_tool_block).encode(),
+            result.stdout,
+        )
+        self.assertEqual(result.stdout.count("── Agent ──".encode()), 1)
         self.assertNotIn(b"Assistant\n", result.stdout)
         self.assertNotIn(b"tool: example_tool", result.stdout)
         self.assertNotIn(b"input:", result.stdout)
@@ -93,6 +97,29 @@ class HarnessTests(LoopTestCase):
         self.assertEqual(result.stdout.count(b"OpenCode: github-copilot"), 1)
         attempt = runs[0] / "attempt-1-ticket-2"
         self.assertEqual((attempt / "agent.log").read_bytes(), raw_output.encode("utf-8"))
+
+    def test_opencode_adjacent_text_events_preserve_bodies_and_separation(self) -> None:
+        bodies = ["**first**\n`literal`", "", "second\n", "third\n\n", "final 雪"]
+        events = [{"type": "text", "part": {"text": body}} for body in bodies]
+        raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events)
+        self.state["opencode_raw_output"] = raw_output
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        expected = (
+            "── Agent ──\n**first**\n`literal`\n\n"
+            "── Agent ──\nsecond\n\n"
+            "── Agent ──\nthird\n\n"
+            "── Agent ──\nfinal 雪\n\n"
+        )
+        self.assertIn(expected.encode(), result.stdout)
+        self.assertEqual(result.stdout.count("── Agent ──".encode()), 4)
+        self.assertNotIn(b"\x1b[", result.stdout)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode()
+        )
 
     def test_opencode_unrecognized_and_malformed_output_stays_visible(self) -> None:
         raw_lines = [
@@ -2498,6 +2525,8 @@ class HarnessTests(LoopTestCase):
                 timeout=LIVE_OUTPUT_TIMEOUT,
             )
             self.assertIsNone(process.poll(), "harness exited before receiving the second chunk")
+            self.assertIn("── Agent ──\nFirst complete block\n\n".encode(), visible)
+            self.assertEqual(visible.count("── Agent ──".encode()), 1)
             self.assertNotIn("雪".encode(), visible)
             attempts = list(
                 (self.home / ".local/state/implement-loop").glob("run-*/attempt-1-ticket-2")
@@ -2514,6 +2543,8 @@ class HarnessTests(LoopTestCase):
             visible.extend(remaining)
             self.assertEqual(process.returncode, 0, bytes(visible).decode("utf-8", "replace"))
             self.assertIn("雪".encode(), visible)
+            self.assertIn(("── Agent ──\n" + long_text + "\n\n").encode(), visible)
+            self.assertEqual(visible.count("── Agent ──".encode()), 2)
             self.assertNotIn(b"hidden reasoning", visible)
             self.assertNotIn(b"OpenCode step_start event", visible)
             self.assertNotIn(b"OpenCode step_finish event", visible)
@@ -2749,7 +2780,10 @@ class HarnessTests(LoopTestCase):
             self.assertEqual(state[f"{other_harness}_calls"], [])
             agent_log = (attempt_directory / "agent.log").read_bytes()
             if harness == "opencode":
-                self.assertEqual(json.loads(agent_log)["type"], "tool_use")
+                self.assertEqual(
+                    [json.loads(line)["type"] for line in agent_log.splitlines()],
+                    ["text", "tool_use"],
+                )
                 self.assertIn(LIVE_OUTPUT_FRAGMENT, agent_log)
             else:
                 self.assertEqual(agent_log, LIVE_OUTPUT_FRAGMENT)
