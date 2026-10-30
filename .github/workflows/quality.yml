@@ -105,3 +105,7 @@ jobs:
           path: build/implement-loop-macos-arm64.tar.gz
           if-no-files-found: error
           compression-level: 0
+
+  packaged-ubuntu:
+    name: Ubuntu x86-64 preview
+    uses: ./.github/workflows/package-ubuntu.yml

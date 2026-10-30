@@ -53,12 +53,12 @@ refuses to replace a symlink or directory.
 Reinstall after changing the checkout to build and install its current files;
 editing the checkout alone does not update the executable.
 
-Ubuntu 24.04 x86-64 is the intended baseline for published builds; validation of
-the same published binary on Ubuntu 24.04 and 26.04 is planned, not yet established
-by this local-build support. Builds made on newer systems may require newer system
+Ubuntu preview builds use 24.04 x86-64 as their baseline, with the same archive
+configured for validation on Ubuntu 24.04 and 26.04. Hosted validation still needs
+maintainer verification. Builds made on newer systems may require newer system
 libraries. No compatibility is promised for Ubuntu 22.04, other distributions,
-Linux arm64, or other Ubuntu releases. The Ubuntu download and CI artifact are
-forthcoming; the rolling download above is currently macOS only.
+Linux arm64, untested interim Ubuntu releases, or future releases. The rolling
+download above is currently macOS only.
 
 The single-file executable extracts its bundled runtime to a temporary directory
 at startup. On Linux, that directory must permit execution; if the default is
@@ -82,11 +82,14 @@ python3 /path/to/implement-loop/implement-loop 123
 
 ## Try a CI preview
 
-After the packaged job succeeds, the `Quality checks` workflow provides an
-artifact named `implement-loop-macos-arm64`. For a pull request, open the
-`Quality checks` run from its **Checks** tab; for a manual run, open that run
-under **Actions**. Download the artifact from the run summary. The downloaded zip
-contains a tar archive:
+The `Quality checks` workflow provides preview artifacts named
+`implement-loop-macos-arm64` and `implement-loop-ubuntu-x86_64`. The Ubuntu
+archive is built on Ubuntu 24.04 and the same executable is configured for
+packaged validation on Ubuntu 24.04 and 26.04. Check that the corresponding
+packaged validation jobs succeeded before using an artifact. For a pull request,
+open the `Quality checks` run from its **Checks** tab; for a manual run, open that
+run under **Actions**. Download the artifact from the run summary. The downloaded
+zip contains a tar archive:
 
 ```bash
 unzip implement-loop-macos-arm64.zip
@@ -94,11 +97,14 @@ tar -xzf implement-loop-macos-arm64.tar.gz
 ./implement-loop --help
 ```
 
-The tar archive preserves executable permissions. To run a ticket, invoke
-`/path/to/implement-loop SPEC_NUMBER` from the target repository. These are
-preview builds, not Developer ID-signed or notarized releases; macOS Gatekeeper
-may warn or block them. Only run an artifact from a workflow and revision you
-trust, and do not disable Gatekeeper globally.
+For Ubuntu, use `implement-loop-ubuntu-x86_64.zip` and its matching `.tar.gz`
+in the same commands. The tar archive preserves executable permissions. To run a
+ticket, invoke `/path/to/implement-loop SPEC_NUMBER` from the target repository.
+The executable bundles Python, but still requires Git, authenticated `gh`, a
+supported harness CLI, and the external `implement` skill. These are preview
+builds; macOS builds are not Developer ID-signed or notarized, so Gatekeeper may
+warn or block them. Only run an artifact from a workflow and revision you trust,
+and do not disable Gatekeeper globally.
 
 Before running, review [permissions, commits, and closure](docs/usage.md#permissions-commits-and-closure)
 for trust, permission, side-effect, and completion limits.
