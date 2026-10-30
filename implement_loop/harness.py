@@ -386,13 +386,15 @@ class _OpenCodeRenderer:
                 self._render_question_summary(title, tool_name, questions, answers)
                 return
 
-        if delegated:
+        running_session = self._running_subagent_session(tool_name, metadata)
+        if delegated or running_session is not None:
             self._render_delegated_result(
                 title,
                 tool_name,
                 input_value,
                 metadata,
                 output,
+                running_session,
             )
             return
 
@@ -1019,6 +1021,25 @@ class _OpenCodeRenderer:
         agent = self._delegated_agent(input_value, metadata)
         return f"{tool_name}: {agent}" if agent is not None else tool_name
 
+    @staticmethod
+    def _running_subagent_session(tool_name: str, metadata: Any) -> str | None:
+        if tool_name.casefold() != "subagent" or not isinstance(metadata, dict):
+            return None
+        nested = metadata.get("metadata")
+        if not isinstance(nested, dict):
+            return None
+        session = nested.get("sessionId")
+        if (
+            nested.get("status") != "running"
+            or nested.get("truncated") is not False
+            or not isinstance(session, str)
+            or not session
+            or not session.isprintable()
+            or any(character.isspace() for character in session)
+        ):
+            return None
+        return session
+
     def _render_delegated_result(
         self,
         title: str,
@@ -1026,12 +1047,17 @@ class _OpenCodeRenderer:
         input_value: Any,
         metadata: Any,
         output: Any,
+        running_session: str | None,
     ) -> None:
         description = self._input_value(
             input_value, ("description", "task_description", "taskDescription")
         )
         heading = description or title
-        details = self._success_preview(self._delegated_output(tool_name, output, input_value))
+        details = (
+            [("└", f"Running in background · session: {running_session}")]
+            if running_session is not None
+            else self._success_preview(self._delegated_output(tool_name, output, input_value))
+        )
         self._render_action_block(
             heading,
             tool_name,

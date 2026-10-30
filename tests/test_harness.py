@@ -7,6 +7,7 @@ import signal
 import socket
 import stat
 import subprocess
+from copy import deepcopy
 from pathlib import Path
 
 from support import (
@@ -1856,6 +1857,111 @@ class HarnessTests(LoopTestCase):
         self.assertIn("✓ Inspect custom grep (grep_extension)", visible)
         self.assertIn("CUSTOM_GREP_RESULT", visible)
         self.assertNotIn("count: not provided", visible)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+
+    def test_opencode_running_subagent_shows_session_without_output_preview(self) -> None:
+        fixture = Path(__file__).parent / "fixtures/running-subagent.json"
+        event = json.loads(fixture.read_text())
+
+        raw_output, visible, runs = self._run_opencode_events([event])
+
+        self.assertIn(
+            "✓ Inspect the fixture (subagent: explore)\n"
+            "  └ Running in background · session: ses_fixture_child",
+            visible,
+        )
+        self.assertNotIn("Background task launched", visible)
+        self.assertNotIn("Do not duplicate the work", visible)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+        self.assertIn("Do not duplicate the work", raw_output)
+
+    def test_opencode_running_summary_uses_returned_state_not_input_or_output(self) -> None:
+        fixture = json.loads((Path(__file__).parent / "fixtures/running-subagent.json").read_text())
+        events = []
+        for index, status in enumerate(("completed", "success", "succeeded")):
+            event = deepcopy(fixture)
+            state = event["part"]["state"]
+            state["status"] = status
+            state["input"]["description"] = f"Background case {index}"
+            if index == 0:
+                del state["input"]["background"]
+            elif index == 1:
+                state["input"]["background"] = False
+            else:
+                state["input"]["extra"] = "unfamiliar input field"
+            state["output"] = f"UNRELATED_OUTPUT_{index}"
+            state["metadata"]["metadata"]["sessionId"] = f"ses_fixture_{index}"
+            events.append(event)
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        for index in range(3):
+            self.assertIn(
+                f"✓ Background case {index} (subagent: explore)\n"
+                f"  └ Running in background · session: ses_fixture_{index}",
+                visible,
+            )
+            self.assertNotIn(f"UNRELATED_OUTPUT_{index}", visible)
+        self.assertEqual(
+            (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
+        )
+
+    def test_opencode_running_summary_preserves_unrecognized_results_and_failures(self) -> None:
+        fixture = json.loads((Path(__file__).parent / "fixtures/running-subagent.json").read_text())
+        cases = (
+            ("other_tool", "tool", "task"),
+            ("non_success", "call_status", "running"),
+            ("error_status", "call_status", "error"),
+            ("explicit_error", "error", "EXPLICIT_FAILURE"),
+            ("completed", "status", "completed"),
+            ("missing_status", "status", None),
+            ("missing_session", "sessionId", None),
+            ("empty_session", "sessionId", ""),
+            ("blank_session", "sessionId", "  "),
+            ("multiline_session", "sessionId", "ses_bad\nline"),
+            ("invalid_session", "sessionId", 42),
+            ("missing_truncation", "truncated", None),
+            ("truncated", "truncated", True),
+            ("invalid_truncation", "truncated", "false"),
+            ("numeric_truncation", "truncated", 0),
+            ("missing_nested", "nested", None),
+        )
+        events = []
+        for label, field, value in cases:
+            event = deepcopy(fixture)
+            part = event["part"]
+            state = part["state"]
+            state["input"]["description"] = f"Case {label}"
+            state["output"] = f"VISIBLE_OUTPUT_{label}"
+            nested = state["metadata"]["metadata"]
+            if field == "tool":
+                part["tool"] = value
+            elif field == "call_status":
+                state["status"] = value
+            elif field == "error":
+                state["error"] = value
+            elif field == "nested":
+                # Top-level fields must not substitute for the nested record.
+                state["metadata"] = nested
+            elif value is None:
+                del nested[field]
+            else:
+                nested[field] = value
+            events.append(event)
+
+        raw_output, visible, runs = self._run_opencode_events(events)
+
+        for label, _, _ in cases:
+            self.assertIn(f"VISIBLE_OUTPUT_{label}", visible, label)
+        self.assertNotIn("Running in background · session:", visible)
+        self.assertIn("✗ Case explicit_error (subagent: explore)", visible)
+        self.assertIn("EXPLICIT_FAILURE", visible)
+        self.assertIn("✗ Case error_status (subagent: explore)", visible)
+        self.assertIn("OpenCode tool event", visible)
         self.assertEqual(
             (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes(), raw_output.encode("utf-8")
         )

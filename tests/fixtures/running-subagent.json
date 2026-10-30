@@ -1,0 +1,27 @@
+{
+  "type": "tool_use",
+  "timestamp": 1,
+  "sessionID": "ses_fixture_parent",
+  "part": {
+    "type": "tool",
+    "tool": "subagent",
+    "state": {
+      "status": "completed",
+      "title": "subagent",
+      "input": {
+        "agent": "explore",
+        "description": "Inspect the fixture",
+        "prompt": "Inspect the example task.",
+        "background": true
+      },
+      "output": "Background task launched. Do not duplicate the work.",
+      "metadata": {
+        "metadata": {
+          "status": "running",
+          "sessionId": "ses_fixture_child",
+          "truncated": false
+        }
+      }
+    }
+  }
+}

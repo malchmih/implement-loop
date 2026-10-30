@@ -97,6 +97,13 @@ heading is bold cyan on color-enabled terminals and plain when output is
 redirected or `NO_COLOR` is set. This presentation does not alter `agent.log`
 or Copilot output.
 
+For successfully returned OpenCode subagent calls whose nested metadata identifies
+an untruncated running session, the live transcript shows the task, agent, and
+`Running in background · session: <session ID>` instead of the tool output
+preview. The call has returned, but the delegated work is still running. Other
+results and errors retain their existing rendering. The complete original output
+remains available to the parent agent and in `agent.log` when logging succeeds.
+
 ## Retention
 
 At startup, the runner removes only identifiable Implement Loop run directories
