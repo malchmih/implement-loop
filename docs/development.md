@@ -55,6 +55,7 @@ calls or GitHub writes.
 
 Pull requests and manual runs perform static checks and behavioral tests, and retain
 macOS arm64 and Ubuntu x86-64 preview archives. The Ubuntu reusable packaging
-workflow builds once on 24.04, then downloads and tests that archive in Ubuntu
-24.04 and 26.04 containers. Pushes to `main` currently build and smoke-test only the macOS archive
-before updating the rolling prerelease; they do not repeat the PR quality suite.
+workflow builds once on 24.04, then downloads and tests that archive on Ubuntu
+24.04 and 26.04 runners. Pushes to `main` currently build and smoke-test only the
+macOS archive before updating the rolling prerelease; they do not repeat the PR
+quality suite.

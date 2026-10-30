@@ -44,21 +44,15 @@ jobs:
           compression-level: 0
 
   validate:
-    name: Validate Ubuntu archive (Ubuntu ${{ matrix.ubuntu }})
+    name: Validate Ubuntu archive (${{ matrix.runner }})
     needs: build
-    runs-on: ubuntu-24.04
-    container: ubuntu:${{ matrix.ubuntu }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        ubuntu: ["24.04", "26.04"]
+        runner: [ubuntu-24.04, ubuntu-26.04]
     steps:
-      - name: Install test prerequisites
-        run: |
-          apt-get update
-          apt-get install --no-install-recommends --yes ca-certificates git
-
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
