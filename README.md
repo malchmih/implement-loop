@@ -1,8 +1,9 @@
 # Implement Loop
 
 Implement prepared direct child GitHub issues sequentially from the target
-checkout. The standalone executable is supported on Apple silicon macOS. Linux
-remains supported through source execution with Python 3.11+. A run also needs
+checkout. Standalone local builds are supported on Apple silicon macOS and Ubuntu
+x86-64. Source execution on other Linux systems remains available with Python 3.11+.
+A run also needs
 Git, an authenticated `gh` session, a supported harness CLI, and the external
 `implement` skill. See [workflow prerequisites](docs/usage.md#before-a-run) for
 setup and permissions.
@@ -31,7 +32,8 @@ not disable Gatekeeper globally.
 
 ### Build and install from source
 
-On macOS arm64, build and install the standalone executable from the source checkout:
+On macOS arm64 or Ubuntu x86-64, build and install the standalone executable from
+the source checkout:
 
 ```bash
 make install
@@ -40,7 +42,8 @@ make install PREFIX="$HOME/tools"
 ```
 
 The default destination is `~/.local/bin/implement-loop`. `make` and
-[uv](https://docs.astral.sh/uv/) are needed to build and install; uv provisions
+[uv](https://docs.astral.sh/uv/) are needed to build and install; Ubuntu also
+needs `binutils` (in particular `objdump`) for PyInstaller. uv provisions
 the project's Python 3.11 and locked build dependencies. The installed
 executable includes Python and does not need the source checkout or build tools
 at runtime. Add `~/.local/bin` to `PATH` yourself if needed; the command does
@@ -50,7 +53,18 @@ refuses to replace a symlink or directory.
 Reinstall after changing the checkout to build and install its current files;
 editing the checkout alone does not update the executable.
 
-After installation on macOS, run the command from the target repository:
+Ubuntu 24.04 x86-64 is the intended baseline for published builds; validation of
+the same published binary on Ubuntu 24.04 and 26.04 is planned, not yet established
+by this local-build support. Builds made on newer systems may require newer system
+libraries. No compatibility is promised for Ubuntu 22.04, other distributions,
+Linux arm64, or other Ubuntu releases. The Ubuntu download and CI artifact are
+forthcoming; the rolling download above is currently macOS only.
+
+The single-file executable extracts its bundled runtime to a temporary directory
+at startup. On Linux, that directory must permit execution; if the default is
+mounted `noexec`, set `TMPDIR` to a writable directory on an executable filesystem.
+
+After installation, run the command from the target repository:
 
 ```bash
 cd /path/to/target-repository
@@ -58,7 +72,7 @@ implement-loop 123
 implement-loop 123 --harness copilot
 ```
 
-On Linux (or when running from source on macOS), use Python 3.11 or later and
+When running from source on Linux or macOS, use Python 3.11 or later and
 invoke the checkout's command from the target repository:
 
 ```bash
