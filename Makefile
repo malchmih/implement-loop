@@ -18,13 +18,14 @@ test:
 
 build:
 	@case "$$(uname -s)/$$(uname -m)" in \
-		Darwin/arm64) ;; \
-		*) printf '%s\n' 'Error: make build is only supported on macOS arm64.' >&2; exit 2 ;; \
-	esac
+		Darwin/arm64) arch_option='--target-architecture arm64' ;; \
+		Linux/x86_64) arch_option='' ;; \
+		*) printf '%s\n' 'Error: make build is only supported on macOS arm64 and Linux x86_64.' >&2; exit 2 ;; \
+	esac; \
 	uv run --locked --group build pyinstaller \
 		--noconfirm --clean --onefile --name implement-loop \
 		--distpath dist --workpath build/pyinstaller --specpath build \
-		--target-architecture arm64 --paths . \
+		$$arch_option --paths . \
 		implement_loop/__main__.py
 
 install: build

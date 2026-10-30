@@ -19,8 +19,8 @@ PACKAGED_EXECUTABLE = Path(
 
 class PackagedExecutableTests(LoopTestCase):
     def setUp(self) -> None:
-        if sys.platform != "darwin" or platform.machine() != "arm64":
-            self.skipTest("the packaged executable is supported on macOS arm64 only")
+        if (sys.platform, platform.machine()) not in {("darwin", "arm64"), ("linux", "x86_64")}:
+            self.skipTest("the packaged executable requires macOS arm64 or Linux x86_64")
         if not PACKAGED_EXECUTABLE.is_file():
             self.fail("run `make install` before the packaged executable smoke tests")
         if PACKAGED_EXECUTABLE.is_symlink():

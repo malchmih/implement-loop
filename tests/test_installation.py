@@ -12,6 +12,9 @@ from support import SCRIPT, LoopTestCase, TemporaryHomeTestCase
 
 
 class MakeInstallCommandTests(TemporaryHomeTestCase):
+    platform_system = "Darwin"
+    platform_machine = "arm64"
+
     def setUp(self) -> None:
         super().setUp()
         self.make = shutil.which("make")
@@ -32,8 +35,8 @@ class MakeInstallCommandTests(TemporaryHomeTestCase):
             "uname",
             "#!/bin/sh\n"
             'case "$1" in\n'
-            "  -s) printf 'Darwin\\n' ;;\n"
-            "  -m) printf 'arm64\\n' ;;\n"
+            f"  -s) printf '{self.platform_system}\\n' ;;\n"
+            f"  -m) printf '{self.platform_machine}\\n' ;;\n"
             "  *) exit 1 ;;\n"
             "esac\n",
         )
@@ -209,6 +212,11 @@ class MakeInstallCommandTests(TemporaryHomeTestCase):
         self.assertEqual(os.readlink(installed), str(target_directory))
         self.assertEqual(list(target_directory.iterdir()), [])
         self.assertEqual(list(installed.parent.glob(".implement-loop.*")), [])
+
+
+class LinuxMakeInstallCommandTests(MakeInstallCommandTests):
+    platform_system = "Linux"
+    platform_machine = "x86_64"
 
 
 class SourceCommandIntegrationTests(LoopTestCase):

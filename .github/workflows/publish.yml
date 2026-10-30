@@ -1,4 +1,4 @@
-name: Publish rolling macOS prerelease
+name: Publish rolling standalone prerelease
 
 on:
   push:
@@ -31,9 +31,15 @@ jobs:
           compression-level: 0
           retention-days: 1
 
+  packaged-ubuntu:
+    name: Ubuntu x86-64 executable
+    uses: ./.github/workflows/package-ubuntu.yml
+
   current:
     name: Check publication eligibility
-    needs: packaged
+    needs:
+      - packaged
+      - packaged-ubuntu
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -60,6 +66,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && needs.current.outputs.publish == 'true'
     needs:
       - packaged
+      - packaged-ubuntu
       - current
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -85,7 +92,7 @@ jobs:
             echo "::notice::Skipping stale executable from ${GITHUB_SHA}; main is at ${head_sha}."
           fi
 
-      - name: Download validated archive
+      - name: Download and validate packaged archives
         if: needs.current.outputs.publish == 'true' && steps.recheck.outputs.publish == 'true'
         shell: bash
         run: |
@@ -95,6 +102,16 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --name implement-loop-macos-arm64 \
             --dir build/release
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name implement-loop-ubuntu-x86_64 \
+            --dir build/release
+          for archive in build/release/implement-loop-{macos-arm64,ubuntu-x86_64}.tar.gz; do
+            if [[ ! -f "$archive" || ! -s "$archive" ]] || ! tar -tzf "$archive" >/dev/null; then
+              echo "Expected packaged archive is missing, empty, or invalid: $archive" >&2
+              exit 1
+            fi
+          done
 
       - name: Create or update rolling prerelease
         if: needs.current.outputs.publish == 'true' && steps.recheck.outputs.publish == 'true'
@@ -102,20 +119,20 @@ jobs:
         run: |
           set -euo pipefail
           release_tag=rolling
-          archive=build/release/implement-loop-macos-arm64.tar.gz
-          if [[ ! -f "$archive" ]]; then
-            echo "Expected packaged archive was not downloaded: $archive" >&2
-            exit 1
-          fi
+          archives=(build/release/implement-loop-macos-arm64.tar.gz build/release/implement-loop-ubuntu-x86_64.tar.gz)
+          title="Rolling macOS and Ubuntu builds"
+          notes="Latest successfully built and packaged-tested Apple silicon macOS and Ubuntu x86-64 executables. The Ubuntu archive is built on 24.04 and tested on 24.04 and 26.04. See the README for download and runtime requirements."
 
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$release_tag" "$archive" \
+            gh release edit "$release_tag" --repo "$GITHUB_REPOSITORY" \
+              --title "$title" --notes "$notes"
+            gh release upload "$release_tag" "${archives[@]}" \
               --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$release_tag" "$archive" \
+            gh release create "$release_tag" "${archives[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --prerelease \
-              --title "Rolling Apple silicon macOS build" \
-              --notes "Latest successfully built and smoke-tested Apple silicon macOS executable. See the README for download and runtime requirements." \
+              --title "$title" \
+              --notes "$notes" \
               --target "$GITHUB_SHA"
           fi
