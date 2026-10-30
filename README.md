@@ -10,25 +10,28 @@ setup and permissions.
 
 ## Install and run
 
-### Download the rolling macOS build
+### Download a rolling standalone build
 
-Download the [latest Apple silicon macOS prerelease](https://github.com/malchmih/implement-loop/releases/download/rolling/implement-loop-macos-arm64.tar.gz):
+Choose the archive for [Apple silicon macOS](https://github.com/malchmih/implement-loop/releases/download/rolling/implement-loop-macos-arm64.tar.gz)
+or [Ubuntu x86-64](https://github.com/malchmih/implement-loop/releases/download/rolling/implement-loop-ubuntu-x86_64.tar.gz).
+For example, on Ubuntu:
 
 ```bash
-curl -fL https://github.com/malchmih/implement-loop/releases/download/rolling/implement-loop-macos-arm64.tar.gz \
-  -o implement-loop-macos-arm64.tar.gz
-mkdir implement-loop-macos-arm64
-tar -xzf implement-loop-macos-arm64.tar.gz -C implement-loop-macos-arm64
-./implement-loop-macos-arm64/implement-loop --help
+curl -fL https://github.com/malchmih/implement-loop/releases/download/rolling/implement-loop-ubuntu-x86_64.tar.gz \
+  -o implement-loop-ubuntu-x86_64.tar.gz
+mkdir implement-loop-ubuntu-x86_64
+tar -xzf implement-loop-ubuntu-x86_64.tar.gz -C implement-loop-ubuntu-x86_64
+./implement-loop-ubuntu-x86_64/implement-loop --help
 ```
 
-The archive preserves the executable permission. From a target repository, run
-`/path/to/implement-loop-macos-arm64/implement-loop ISSUE_NUMBER`. This Apple
-silicon macOS executable includes its Python runtime, so Python and build tools
-are not needed at runtime. It still requires Git, an authenticated `gh` session,
-a supported harness CLI, and the external `implement` skill. The binary is
-not Developer ID-signed or notarized; macOS Gatekeeper may warn or block it. Do
-not disable Gatekeeper globally.
+On macOS, use `implement-loop-macos-arm64.tar.gz` and the matching directory
+instead. The archive preserves executable permission. Run
+`/path/to/extracted/implement-loop ISSUE_NUMBER` from a target repository, or
+copy the executable to a directory on your `PATH`. Both executables include
+Python, so Python and build tools are not needed at runtime. They still require
+Git, an authenticated `gh` session, a supported harness CLI, and the external
+`implement` skill. The macOS binary is not Developer ID-signed or notarized;
+Gatekeeper may warn or block it. Do not disable Gatekeeper globally.
 
 ### Build and install from source
 
@@ -53,12 +56,11 @@ refuses to replace a symlink or directory.
 Reinstall after changing the checkout to build and install its current files;
 editing the checkout alone does not update the executable.
 
-Ubuntu preview builds use 24.04 x86-64 as their baseline, with the same archive
+Ubuntu rolling and preview builds use 24.04 x86-64 as their baseline, with the same archive
 configured for validation on Ubuntu 24.04 and 26.04. Hosted validation still needs
 maintainer verification. Builds made on newer systems may require newer system
 libraries. No compatibility is promised for Ubuntu 22.04, other distributions,
-Linux arm64, untested interim Ubuntu releases, or future releases. The rolling
-download above is currently macOS only.
+Linux arm64, untested interim Ubuntu releases, or future releases.
 
 The single-file executable extracts its bundled runtime to a temporary directory
 at startup. On Linux, that directory must permit execution; if the default is

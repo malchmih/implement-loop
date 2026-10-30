@@ -38,7 +38,7 @@ Python but does not bundle Git, authenticated `gh`, a harness CLI, or the extern
 `implement` skill. The macOS executable is not Developer ID-signed or notarized, so
 Gatekeeper may warn or block it. On Linux, the one-file executable needs a writable,
 executable temporary directory; set `TMPDIR` if the default is mounted `noexec`.
-Ubuntu previews are built on 24.04 x86-64, with the same archive configured for
+Ubuntu rolling and preview archives are built on 24.04 x86-64, with the same archive configured for
 packaged tests on 24.04 and 26.04; hosted validation still needs maintainer
 verification. Local builds depend on the build system's libraries; no compatibility
 is promised for other distributions, untested interim Ubuntu releases, or future
@@ -56,6 +56,9 @@ calls or GitHub writes.
 Pull requests and manual runs perform static checks and behavioral tests, and retain
 macOS arm64 and Ubuntu x86-64 preview archives. The Ubuntu reusable packaging
 workflow builds once on 24.04, then downloads and tests that archive on Ubuntu
-24.04 and 26.04 runners. Pushes to `main` currently build and smoke-test only the
-macOS archive before updating the rolling prerelease; they do not repeat the PR
-quality suite.
+24.04 and 26.04 runners. Pushes to `main` reuse this workflow and the macOS
+packaged build and tests. Publication waits for both platforms, checks that both
+archives were downloaded and are readable, and checks for a current `main` before
+and after entering the serialized publication job. It does not repeat the PR
+quality suite or guarantee transactional multi-asset uploads. Actual hosted
+workflow and publication verification is reserved for the maintainer.
