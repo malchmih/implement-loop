@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import stat
 import sys
@@ -36,9 +37,30 @@ def _require_command(name: str) -> None:
         )
 
 
-def _new_result_destination(target_root: Path, attempt_id: str) -> tuple[Path, Path]:
+def _write_private_file(path: Path, contents: bytes, mode: int) -> None:
+    descriptor: int | None = None
     try:
-        directory = Path(tempfile.mkdtemp(prefix=f"implement-loop-result-{attempt_id}-")).resolve()
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        with os.fdopen(descriptor, "wb") as output:
+            descriptor = None
+            output.write(contents)
+    except OSError as error:
+        raise LoopError(
+            f"Cannot create private per-attempt reporting file {path}: {error}"
+        ) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _new_report_command(
+    target_root: Path,
+    ticket_number: int,
+    attempt_id: str,
+    result_path: Path,
+) -> tuple[Path, Path]:
+    try:
+        directory = Path(tempfile.mkdtemp(prefix="implement-loop-report-")).resolve()
     except OSError as error:
         raise LoopError(f"Cannot create a private temporary result directory: {error}") from error
     if directory.is_relative_to(target_root.resolve()):
@@ -58,7 +80,12 @@ def _new_result_destination(target_root: Path, attempt_id: str) -> tuple[Path, P
         except OSError:
             pass
         raise LoopError(f"Cannot make the temporary result directory private: {error}") from error
-    result_path = directory / "completion-result.json"
+    if result_path.is_relative_to(target_root.resolve()):
+        try:
+            shutil.rmtree(directory)
+        except OSError:
+            pass
+        raise LoopError("The per-attempt report destination must be outside the target checkout.")
     if os.path.lexists(result_path):
         try:
             shutil.rmtree(directory)
@@ -67,7 +94,33 @@ def _new_result_destination(target_root: Path, attempt_id: str) -> tuple[Path, P
         raise LoopError(
             "The unique completion-result destination already exists; refusing to reuse it."
         )
-    return directory, result_path
+    context_path = directory / "report-context.json"
+    report_command = directory / "implement-loop-report"
+    context = {
+        "issue": ticket_number,
+        "attempt_id": attempt_id,
+        "result_path": str(result_path),
+    }
+    source_module = Path(__file__).with_name("reporting.py").resolve()
+    command = (
+        "#!/bin/sh\n"
+        f"IMPLEMENT_LOOP_REPORT_CONTEXT={shlex.quote(str(context_path))} \\\n"
+        f'exec {shlex.quote(sys.executable)} {shlex.quote(str(source_module))} "$@"\n'
+    )
+    try:
+        _write_private_file(
+            context_path,
+            (json.dumps(context, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(),
+            0o600,
+        )
+        _write_private_file(report_command, command.encode(), 0o700)
+    except LoopError:
+        try:
+            shutil.rmtree(directory)
+        except OSError:
+            pass
+        raise
+    return directory, report_command
 
 
 def _build_prompt(
@@ -76,8 +129,7 @@ def _build_prompt(
     branch: str,
     spec_number: int,
     ticket_number: int,
-    attempt_id: str,
-    result_path: Path,
+    report_command: Path,
     context: dict[str, Any],
     skill_reference: str,
 ) -> str:
@@ -100,18 +152,21 @@ def _build_prompt(
         "fails, do not report success.\n\n"
         "This attempt requires a new local descendant commit; existing commits alone do "
         "not satisfy it. Commit the completed work before reporting success.\n\n"
-        "After implementation, review, and required validation have succeeded—and the "
-        "completed work is committed—write one JSON object to this initially absent "
-        "file:\n"
-        f"{result_path}\n"
-        f"Attempt ID: {attempt_id}\n"
-        "The JSON must identify this ticket and attempt and use exactly these "
-        'success values: {"issue": '
-        f'{ticket_number}, "attempt_id": "{attempt_id}", '
-        '"status": "completed", "acceptance_criteria": '
-        '"passed", "validation": "passed"}. Do not use transcript '
-        "markers as completion evidence. This file is an agent attestation, "
-        "not independent proof of correctness.\n\n"
+        "A private, Attempt-bound completion command is available outside the "
+        "checkout at:\nCompletion report command: "
+        f"{shlex.quote(str(report_command))}\n\n"
+        "Only after implementation, required review and validation, all delegated "
+        "work has finished and been joined, and the completed work is committed, "
+        "report your explicit passing claims with:\n"
+        f"{shlex.quote(str(report_command))} completed --acceptance-criteria passed "
+        "--validation passed\n\n"
+        f"Use {shlex.quote(str(report_command))} --help for usage. The command supplies "
+        "ticket and Attempt "
+        "identity and writes the report; do not author JSON or copy identifiers. "
+        "Wait for the command to finish, and treat a nonzero result as a failed "
+        "handoff. Reporting does not close issues, change implementation files, "
+        "create commits, or terminate this harness. This Agent attestation is not "
+        "independent proof of correctness.\n\n"
         "Requirements data follows as JSON:\n"
         f"{requirements}\n"
     )
@@ -197,6 +252,19 @@ def _select_ticket(
     )
 
 
+def _unique_result_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON field {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"invalid JSON constant {value!r}")
+
+
 def _record_result(
     result_path: Path,
     attempt_dir: Path,
@@ -212,7 +280,7 @@ def _record_result(
             ticket_number,
             attempt_id,
             "missing",
-            "OpenCode did not write the required per-attempt result file.",
+            "OpenCode did not submit a required per-attempt completion report.",
         )
 
     try:
@@ -249,18 +317,20 @@ def _record_result(
             "The per-attempt result file could not be read.",
             {"error": str(error)},
         )
-    records.write_bytes(attempt_dir / "completion-result.json", raw_result, exclusive=True)
-
     try:
-        parsed = json.loads(raw_result.decode("utf-8"))
-    except UnicodeDecodeError, json.JSONDecodeError:
+        parsed = json.loads(
+            raw_result.decode("utf-8"),
+            object_pairs_hook=_unique_result_fields,
+            parse_constant=_reject_json_constant,
+        )
+    except UnicodeDecodeError, json.JSONDecodeError, ValueError:
         return _reject_result(
             records,
             evidence_path,
             ticket_number,
             attempt_id,
             "malformed_json",
-            "The per-attempt result file is not valid UTF-8 JSON.",
+            "The per-attempt result file is not valid UTF-8 JSON or contains ambiguous fields.",
         )
     if not isinstance(parsed, dict):
         return _reject_result(
@@ -279,6 +349,25 @@ def _record_result(
         )
     elif not isinstance(parsed.get("attempt_id"), str) or parsed["attempt_id"] != attempt_id:
         validation_error = "The per-attempt result is stale or identifies the wrong attempt."
+    elif parsed.get("status") == "conflict":
+        if (
+            set(parsed) == {"status", "issue", "attempt_id", "reports"}
+            and isinstance(parsed.get("reports"), list)
+            and len(parsed["reports"]) >= 2
+        ):
+            validation_error = (
+                "The persisted completion report contains conflicting completion reports."
+            )
+        else:
+            validation_error = "The persisted completion report is malformed or ambiguous."
+    elif set(parsed) != {
+        "issue",
+        "attempt_id",
+        "status",
+        "acceptance_criteria",
+        "validation",
+    }:
+        validation_error = "The per-attempt result is malformed or has ambiguous fields."
     elif parsed.get("status") != "completed":
         validation_error = "The per-attempt result does not report completed status."
     elif parsed.get("acceptance_criteria") != "passed":
@@ -484,9 +573,12 @@ def run(options: Options, diagnostics: DiagnosticContext) -> None:
             attempt_id = str(uuid.uuid4())
             attempt_dir = records.attempt_directory(attempt_number, ticket_number)
             diagnostics.ticket_records = attempt_dir
-            result_directory, result_path = _new_result_destination(
+            result_path = attempt_dir / "completion-result.json"
+            result_directory, report_command = _new_report_command(
                 checkout.root,
+                ticket_number,
                 attempt_id,
+                result_path,
             )
             try:
                 spec_comments = github.get_comments(repository, options.spec_number)
@@ -504,8 +596,7 @@ def run(options: Options, diagnostics: DiagnosticContext) -> None:
                     branch=checkout.branch,
                     spec_number=options.spec_number,
                     ticket_number=ticket_number,
-                    attempt_id=attempt_id,
-                    result_path=result_path,
+                    report_command=report_command,
                     context=context,
                     skill_reference=harness.skill_reference,
                 )

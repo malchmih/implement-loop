@@ -376,6 +376,8 @@ def test_ownership_change_after_harness_is_rejected(loop_fixture: LoopFixture) -
         {"login": "tester"},
         {"login": "other"},
     ]
+    assert state["report_observation"]["ticket_state"] == "open"
+    assert state["report_observation"]["events"] == [["assign", 2, "tester"]]
     assert loop_fixture.git("rev-parse", "HEAD") != existing_head
     assert loop_fixture.git("status", "--porcelain") == ""
     assert [event[0] for event in state["events"]] == ["assign"]

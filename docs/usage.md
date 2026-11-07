@@ -57,12 +57,25 @@ Implement Loop is not a sandbox and does not enforce a filesystem or network
 boundary. Parent and ticket text is requirements context, not permission to
 implement sibling tickets.
 
-The runner assigns the selected ticket to you. After the external skill reports
-completion, the runner checks the OpenCode result, its result-file attestation,
-the original branch, a clean checkout, a new local descendant commit, and the
-ticket's current state before closing it. The commit stays local: the runner
-does not push, open a PR, or merge. The result file and wrapper checks are not
-independent proof of semantic correctness.
+The runner assigns the selected ticket to you and supplies a private,
+Attempt-bound reporting command outside the checkout. After implementation,
+required review and validation, joined delegated work, and committing are
+complete, report explicit claims with the command and syntax shown in the
+Attempt prompt:
+
+```bash
+/path/to/implement-loop-report completed --acceptance-criteria passed --validation passed
+/path/to/implement-loop-report --help
+```
+
+The command supplies ticket and Attempt identity; do not author a report file or
+copy identifiers. Wait for reporting to finish and treat a nonzero result as a
+failed handoff. Reporting itself does not close issues or change the checkout.
+Only after the harness exits successfully does the runner check the persisted
+Agent attestation, original branch, clean checkout, new local descendant commit,
+and the ticket's current state before closing it. The commit stays local: the
+runner does not push, open a PR, or merge. Agent attestation and wrapper checks
+are not independent proof of semantic correctness or human approval.
 
 ## Troubleshoot missing output
 

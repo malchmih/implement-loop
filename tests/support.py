@@ -23,9 +23,13 @@ LIVE_READY_TIMEOUT = 20.0
 FAKE_TOOL = r"""#!/usr/bin/env python3
 import json
 import os
+import resource
 from pathlib import Path
 import re
+import shlex
+import signal
 import socket
+import stat
 import subprocess
 import sys
 
@@ -68,22 +72,29 @@ if tool_name == "opencode":
     ticket_number = int(
         re.search(r"(?:/implement|@implement) Implement only ticket #(\d+)", prompt).group(1)
     )
+    report_command = shlex.split(next(
+        line.removeprefix("Completion report command: ").strip()
+        for line in prompt.splitlines()
+        if line.startswith("Completion report command: ")
+    ))[0]
+    state_home = Path(os.environ.get("XDG_STATE_HOME", home / ".local/state"))
+    attempt_dir = next(
+        (state_home / "implement-loop").glob(f"run-*/attempt-*-ticket-{ticket_number}")
+    )
+    attempt_metadata = json.loads((attempt_dir / "attempt.json").read_text())
+    attempt_id = attempt_metadata["attempt_id"]
+    result_path = Path(attempt_metadata["result_path"])
     exit_status = state.get("agent_exit_by_ticket", {}).get(
         str(ticket_number), state.get("agent_exit", 0)
-    )
-    attempt_id = next(
-        line.removeprefix("Attempt ID: ").strip()
-        for line in prompt.splitlines() if line.startswith("Attempt ID: ")
-    )
-    result_path = next(
-        line.strip() for line in prompt.splitlines()
-        if line.strip().endswith("/completion-result.json")
     )
     call = {
         "args": args,
         "prompt": prompt,
         "attempt_id": attempt_id,
         "ticket": ticket_number,
+        "report_command": report_command,
+        "report_directory_mode": stat.S_IMODE(Path(report_command).parent.stat().st_mode),
+        "report_command_mode": stat.S_IMODE(Path(report_command).stat().st_mode),
         "result_initially_absent": not Path(result_path).exists(),
         "no_color": os.environ.get("NO_COLOR"),
         "force_color": os.environ.get("FORCE_COLOR"),
@@ -104,6 +115,110 @@ if tool_name == "opencode":
             "git", "commit", "--quiet", "-m",
             f"Implement ticket {ticket_number}"
         ], check=True)
+
+    mode = os.environ.get("IMPLEMENT_LOOP_TEST_RESULT_MODE", "valid")
+    help_result = subprocess.run(
+        [report_command, "--help"], check=False, capture_output=True, text=True
+    )
+    report_results = []
+
+    def run_report(acceptance="passed", validation="passed", *, fail_write=False):
+        command = [
+            report_command,
+            "completed",
+            "--acceptance-criteria",
+            acceptance,
+            "--validation",
+            validation,
+        ]
+        if not fail_write:
+            return subprocess.run(command, check=False, capture_output=True, text=True)
+
+        def limit_report_file():
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+
+        return subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            preexec_fn=limit_report_file,
+        )
+
+    if mode == "report-write-failure":
+        report_results.append(run_report(fail_write=True))
+    elif mode == "conflicting":
+        report_results.append(run_report())
+        report_results.append(run_report(acceptance="failed"))
+    elif mode == "failed-acceptance":
+        report_results.append(run_report(acceptance="failed"))
+    elif mode == "failed-validation":
+        report_results.append(run_report(validation="failed"))
+    elif mode == "duplicate":
+        report_results.append(run_report())
+        report_results.append(run_report())
+    elif mode != "missing":
+        report_results.append(run_report())
+
+    state["opencode_calls"][-1]["report_help"] = help_result.stdout
+    state["opencode_calls"][-1]["report_exit_codes"] = [
+        result.returncode for result in report_results
+    ]
+    state["opencode_calls"][-1]["report_errors"] = [
+        result.stderr for result in report_results if result.stderr
+    ]
+    state["opencode_calls"][-1]["report_mode"] = (
+        stat.S_IMODE(result_path.stat().st_mode) if result_path.is_file() else None
+    )
+    state["report_observation"] = {
+        "ticket_state": ticket_for(ticket_number)["state"],
+        "events": list(state["events"]),
+        "head": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "status": subprocess.check_output(["git", "status", "--porcelain"], text=True).strip(),
+    }
+    save_state()
+
+    if mode in {
+        "malformed",
+        "duplicate-field",
+        "extra-field",
+        "wrong-root",
+        "wrong-ticket",
+        "wrong-ticket-number",
+        "wrong-attempt",
+        "wrong-status",
+    }:
+        result = {
+            "issue": ticket_number,
+            "attempt_id": attempt_id,
+            "status": "completed",
+            "acceptance_criteria": "passed",
+            "validation": "passed",
+        }
+        if mode == "malformed":
+            Path(result_path).write_text("{not-json")
+        elif mode == "duplicate-field":
+            Path(result_path).write_text(
+                '{"issue":2,"issue":2,"attempt_id":"%s",'
+                '"status":"completed","acceptance_criteria":"passed",'
+                '"validation":"passed"}' % attempt_id
+            )
+        elif mode == "extra-field":
+            result["unexpected"] = True
+            Path(result_path).write_text(json.dumps(result))
+        elif mode == "wrong-root":
+            Path(result_path).write_text(json.dumps([result]))
+        else:
+            if mode == "wrong-ticket":
+                result["issue"] = "not-a-number"
+            elif mode == "wrong-ticket-number":
+                result["issue"] = ticket_number + 1
+            elif mode == "wrong-attempt":
+                result["attempt_id"] = "stale-attempt"
+            elif mode == "wrong-status":
+                result["status"] = "failed"
+            Path(result_path).write_text(json.dumps(result))
 
     action = state.get("agent_action_by_ticket", {}).get(
         str(ticket_number), state.get("agent_action")
@@ -146,52 +261,18 @@ if tool_name == "opencode":
         state["spec"]["state"] = "closed"
         save_state()
     elif action == "break_records":
-        attempt_dir = next(
-            (home / ".local/state/implement-loop").glob(
-                f"run-*/attempt-*-ticket-{ticket_number}"
-            )
-        )
         attempt_dir.chmod(0o500)
 
     if state.get("fail_preclosure_read_after_harness"):
         state["fail_next_issue_read_for"] = ticket_number
         save_state()
 
-    mode = os.environ.get("IMPLEMENT_LOOP_TEST_RESULT_MODE", "valid")
-    if mode != "missing":
-        result = {
-            "issue": ticket_number,
-            "attempt_id": attempt_id,
-            "status": "completed",
-            "acceptance_criteria": "passed",
-            "validation": "passed",
-        }
-        if mode == "malformed":
-            Path(result_path).write_text("{not-json")
-        elif mode == "wrong-root":
-            Path(result_path).write_text(json.dumps([result]))
-        else:
-            if mode == "wrong-ticket":
-                result["issue"] = "not-a-number"
-            elif mode == "wrong-ticket-number":
-                result["issue"] = ticket_number + 1
-            elif mode == "wrong-attempt":
-                result["attempt_id"] = "stale-attempt"
-            elif mode == "wrong-status":
-                result["status"] = "failed"
-            elif mode == "failed-acceptance":
-                result["acceptance_criteria"] = "failed"
-            elif mode == "failed-validation":
-                result["validation"] = "failed"
-            Path(result_path).write_text(json.dumps(result))
-
+    report_output = "\n".join(
+        [help_result.stdout, *(result.stdout + result.stderr for result in report_results)]
+    )
     output = os.environ.get(
         "IMPLEMENT_LOOP_TEST_OUTPUT",
-        state.get(
-            "agent_output",
-            'IMPLEMENT_LOOP_COMPLETE {"issue":2,"status":"completed",'
-            '"acceptance_criteria":"passed","validation":"passed"}',
-        ),
+        state.get("agent_output", report_output),
     )
     if "opencode_raw_output" in state:
         raw_output = state["opencode_raw_output"].encode("utf-8")
@@ -509,10 +590,6 @@ class _LoopFixtureSupport:
             "comment_page_size": 1,
             "events": [],
             "opencode_calls": [],
-            "agent_output": (
-                'IMPLEMENT_LOOP_COMPLETE {"issue":2,"status":"completed",'
-                '"acceptance_criteria":"passed","validation":"passed"}'
-            ),
         }
 
     def save_state(self) -> None:

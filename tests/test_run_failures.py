@@ -130,17 +130,23 @@ def test_missing_report_does_not_close_ticket(loop_fixture: LoopFixture) -> None
     attempt = runs[0] / "attempt-1-ticket-2"
     evidence = json.loads((attempt / "completion-evidence.json").read_text())
     assert evidence["status"] == "missing"
-    assert b"did not write the required per-attempt result file" in result.stderr
-    assert b"IMPLEMENT_LOOP_COMPLETE" in (attempt / "agent.log").read_bytes()
+    assert b"did not submit a required per-attempt completion report" in result.stderr
+    assert b"usage:" in state["opencode_calls"][0]["report_help"].encode().lower()
+    assert not (attempt / "completion-result.json").exists()
 
 
 def test_valid_report_closes_ticket_after_clean_descendant_commit(
     loop_fixture: LoopFixture,
 ) -> None:
+    report_tools = loop_fixture.home / "private report tools"
+    report_tools.mkdir()
     result, runs = loop_fixture.run_loop(
         "--max-iterations",
         "1",
-        extra_env={"OPENCODE_TEST_CONFIG": "inherited-setting"},
+        extra_env={
+            "OPENCODE_TEST_CONFIG": "inherited-setting",
+            "TMPDIR": str(report_tools),
+        },
     )
 
     state = loop_fixture.load_state()
@@ -156,9 +162,33 @@ def test_valid_report_closes_ticket_after_clean_descendant_commit(
     assert completion["issue"] == 2
     assert completion["attempt_id"] == metadata["attempt_id"]
     call = state["opencode_calls"][0]
+    assert completion["attempt_id"] not in call["report_command"]
     assert call["result_initially_absent"]
-    assert not Path(metadata["result_path"]).exists()
+    assert Path(metadata["result_path"]).is_file()
+    assert Path(metadata["result_path"]) == attempt / "completion-result.json"
     assert not Path(metadata["result_path"]).is_relative_to(loop_fixture.repo)
+    assert Path(call["report_command"]).is_absolute()
+    assert call["report_command"] not in str(loop_fixture.repo)
+    assert Path(call["report_command"]).parent.parent == report_tools
+    assert " " in call["report_command"]
+    assert call["report_directory_mode"] == 0o700
+    assert call["report_command_mode"] == 0o700
+    assert call["report_mode"] == 0o600
+    assert not Path(call["report_command"]).exists()
+    assert "--acceptance-criteria passed --validation passed" in call["prompt"]
+    assert "--help" in call["prompt"]
+    assert "Attempt ID:" not in call["prompt"]
+    assert "write one JSON object" not in call["prompt"]
+    assert call["report_exit_codes"] == [0]
+    assert "completed" in call["report_help"]
+    normalized_help = " ".join(call["report_help"].split())
+    assert "--acceptance-criteria passed --validation passed" in normalized_help
+    assert state["report_observation"] == {
+        "ticket_state": "open",
+        "events": [["assign", 2, "tester"]],
+        "head": loop_fixture.git("rev-parse", "HEAD"),
+        "status": "",
+    }
     assert call["opencode_config"] == "inherited-setting"
     assert "branch main" in state["events"][1][2]
     assert "The wrapper did not push or open a PR" in state["events"][1][2]
@@ -170,10 +200,75 @@ def test_valid_report_closes_ticket_after_clean_descendant_commit(
     assert not (runs[0] / "active.pid").exists()
 
 
+def test_identical_completion_reports_are_harmless(loop_fixture: LoopFixture) -> None:
+    result, runs = loop_fixture.run_loop(
+        "--max-iterations",
+        "1",
+        extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": "duplicate"},
+    )
+
+    state = loop_fixture.load_state()
+    report = json.loads((runs[0] / "attempt-1-ticket-2/completion-result.json").read_text())
+    assert result.returncode == 0, result.stderr.decode()
+    assert state["tickets"]["2"]["state"] == "closed"
+    assert [event[0] for event in state["events"]] == ["assign", "close"]
+    assert state["opencode_calls"][0]["report_exit_codes"] == [0, 0]
+    assert report["status"] == "completed"
+
+
+def test_conflicting_completion_reports_preserve_ticket_and_commit(
+    loop_fixture: LoopFixture,
+) -> None:
+    result, runs = loop_fixture.run_loop(
+        "--max-iterations",
+        "1",
+        extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": "conflicting"},
+    )
+
+    state = loop_fixture.load_state()
+    attempt = runs[0] / "attempt-1-ticket-2"
+    report = json.loads((attempt / "completion-result.json").read_text())
+    assert result.returncode != 0
+    assert b"conflicting completion reports" in result.stderr.lower()
+    assert report["status"] == "conflict"
+    assert state["tickets"]["2"]["state"] == "open"
+    assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
+    assert [event[0] for event in state["events"]] == ["assign"]
+    assert "implementation-2.txt" in loop_fixture.git("show", "--pretty=", "--name-only")
+    assert loop_fixture.git("status", "--porcelain") == ""
+
+
+def test_report_write_failure_is_clear_and_does_not_close_ticket(
+    loop_fixture: LoopFixture,
+) -> None:
+    result, runs = loop_fixture.run_loop(
+        "--max-iterations",
+        "1",
+        extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": "report-write-failure"},
+    )
+
+    state = loop_fixture.load_state()
+    attempt = runs[0] / "attempt-1-ticket-2"
+    assert result.returncode != 0
+    assert state["tickets"]["2"]["state"] == "open"
+    assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
+    assert [event[0] for event in state["events"]] == ["assign"]
+    assert b"did not submit a required per-attempt completion report" in result.stderr
+    assert any(
+        "cannot persist completion report" in error.lower()
+        for error in state["opencode_calls"][0]["report_errors"]
+    )
+    assert not (attempt / "completion-result.json").exists()
+    assert "implementation-2.txt" in loop_fixture.git("show", "--pretty=", "--name-only")
+    assert loop_fixture.git("status", "--porcelain") == ""
+
+
 @pytest.mark.parametrize(
     "mode",
     (
         "malformed",
+        "duplicate-field",
+        "extra-field",
         "wrong-root",
         "wrong-ticket",
         "wrong-ticket-number",
