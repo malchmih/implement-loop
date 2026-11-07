@@ -8,218 +8,64 @@ import subprocess
 import sys
 from pathlib import Path
 
-from support import SCRIPT, LoopTestCase, TemporaryHomeTestCase
-
-
-class MakeInstallCommandTests(TemporaryHomeTestCase):
-    platform_system = "Darwin"
-    platform_machine = "arm64"
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.make = shutil.which("make")
-        self.assertIsNotNone(self.make, "test environment needs make")
-        assert self.make is not None
-
-        self.source = self.copy_source_tree()
-        self.build_tools = self.home / "build tools"
-        self.build_tools.mkdir()
-        self.build_log = self.home / "build invocation.log"
-        self.env.pop("PREFIX", None)
-        self.env["IMPLEMENT_LOOP_TEST_BUILD_LOG"] = str(self.build_log)
-        self.env["IMPLEMENT_LOOP_TEST_BUILD_PAYLOAD"] = "fake executable\n"
-        self.env["IMPLEMENT_LOOP_TEST_PYTHON"] = sys.executable
-        self.env["PATH"] = str(self.build_tools) + os.pathsep + self.env["PATH"]
-
-        self._write_command(
-            "uname",
-            "#!/bin/sh\n"
-            'case "$1" in\n'
-            f"  -s) printf '{self.platform_system}\\n' ;;\n"
-            f"  -m) printf '{self.platform_machine}\\n' ;;\n"
-            "  *) exit 1 ;;\n"
-            "esac\n",
-        )
-        self._write_command(
-            "uv",
-            "#!/bin/sh\n"
-            "set -eu\n"
-            'printf \'%s\\n\' "$*" >> "$IMPLEMENT_LOOP_TEST_BUILD_LOG"\n'
-            'if [ "$1" = run ] && [ "$3" = python ]; then\n'
-            '  if [ "${IMPLEMENT_LOOP_TEST_REPLACEMENT_FAIL:-}" = 1 ]; then\n'
-            "    printf 'simulated replacement failure\\n' >&2\n"
-            "    exit 73\n"
-            "  fi\n"
-            '  if [ -n "${IMPLEMENT_LOOP_TEST_RACE_DESTINATION:-}" ]; then\n'
-            '    ln -s "$IMPLEMENT_LOOP_TEST_RACE_TARGET" "$IMPLEMENT_LOOP_TEST_RACE_DESTINATION"\n'
-            "  fi\n"
-            "  shift 2\n"
-            "  shift\n"
-            '  exec "$IMPLEMENT_LOOP_TEST_PYTHON" "$@"\n'
-            "fi\n"
-            'if [ "${IMPLEMENT_LOOP_TEST_BUILD_FAIL:-}" = 1 ]; then\n'
-            "  printf 'simulated build failure\\n' >&2\n"
-            "  exit 73\n"
-            "fi\n"
-            "mkdir -p dist\n"
-            "printf '%s' \"$IMPLEMENT_LOOP_TEST_BUILD_PAYLOAD\" > dist/implement-loop\n"
-            "chmod 755 dist/implement-loop\n",
-        )
-
-    def _write_command(self, name: str, contents: str) -> Path:
-        command = self.build_tools / name
-        command.write_text(contents)
-        command.chmod(0o700)
-        return command
-
-    def _run_make_install(
-        self,
-        *,
-        prefix: Path | None = None,
-        env: dict[str, str] | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        command = [self.make, "install"]
-        if prefix is not None:
-            command.append(f"PREFIX={prefix}")
-        return subprocess.run(
-            command,
-            cwd=self.source,
-            env=env if env is not None else self.env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
-    def _write_existing_executable(self, prefix: Path) -> Path:
-        installed = prefix / "bin/implement-loop"
-        installed.parent.mkdir(parents=True)
-        installed.write_text("previous working executable\n")
-        installed.chmod(0o755)
-        return installed
-
-    def _assert_existing_executable_unchanged(self, installed: Path) -> None:
-        self.assertEqual(installed.read_text(), "previous working executable\n")
-        self.assertTrue(os.access(installed, os.X_OK))
-
-    def test_make_install_builds_and_installs_default_user_executable(self) -> None:
-        result = self._run_make_install()
-
-        installed = self.home / ".local/bin/implement-loop"
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue(installed.is_file())
-        self.assertFalse(installed.is_symlink())
-        self.assertTrue(os.access(installed, os.X_OK))
-        self.assertEqual(installed.read_text(), "fake executable\n")
-        self.assertIn("run --locked --group build pyinstaller", self.build_log.read_text())
-
-    def test_make_install_uses_custom_prefix_and_replaces_regular_executable(self) -> None:
-        prefix = self.home / "chosen install prefix"
-        first = self._run_make_install(prefix=prefix)
-
-        installed = prefix / "bin/implement-loop"
-        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-        self.assertEqual(installed.read_text(), "fake executable\n")
-        self.assertFalse(installed.is_symlink())
-
-        upgrade_env = dict(self.env)
-        upgrade_env["IMPLEMENT_LOOP_TEST_BUILD_PAYLOAD"] = "upgraded executable\n"
-        second = self._run_make_install(prefix=prefix, env=upgrade_env)
-
-        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
-        self.assertEqual(installed.read_text(), "upgraded executable\n")
-        self.assertTrue(os.access(installed, os.X_OK))
-
-    def test_make_install_refuses_symlink_and_directory_destinations(self) -> None:
-        prefix = self.home / "collision prefix"
-        bin_directory = prefix / "bin"
-        bin_directory.mkdir(parents=True)
-        destination = bin_directory / "implement-loop"
-        target = self.home / "preserved target"
-        target.write_text("keep this target\n")
-
-        destination.symlink_to(target)
-        symlink_result = self._run_make_install(prefix=prefix)
-
-        self.assertNotEqual(symlink_result.returncode, 0, symlink_result.stdout)
-        self.assertIn("refusing to replace", symlink_result.stderr)
-        self.assertTrue(destination.is_symlink())
-        self.assertEqual(os.readlink(destination), str(target))
-        self.assertEqual(target.read_text(), "keep this target\n")
-
-        destination.unlink()
-        destination.mkdir()
-        marker = destination / "keep.txt"
-        marker.write_text("keep this directory\n")
-        directory_result = self._run_make_install(prefix=prefix)
-
-        self.assertNotEqual(directory_result.returncode, 0, directory_result.stdout)
-        self.assertIn("refusing to replace", directory_result.stderr)
-        self.assertTrue(destination.is_dir())
-        self.assertEqual(marker.read_text(), "keep this directory\n")
-
-        marker.unlink()
-        destination.rmdir()
-        missing_target = self.home / "missing executable target"
-        destination.symlink_to(missing_target)
-        dangling_result = self._run_make_install(prefix=prefix)
-
-        self.assertNotEqual(dangling_result.returncode, 0, dangling_result.stdout)
-        self.assertIn("refusing to replace", dangling_result.stderr)
-        self.assertTrue(destination.is_symlink())
-        self.assertEqual(os.readlink(destination), str(missing_target))
-        self.assertFalse(missing_target.exists())
-
-    def test_make_install_build_failure_preserves_existing_executable(self) -> None:
-        prefix = self.home / "existing install prefix"
-        installed = self._write_existing_executable(prefix)
-        failed_build_env = dict(self.env)
-        failed_build_env["IMPLEMENT_LOOP_TEST_BUILD_FAIL"] = "1"
-
-        result = self._run_make_install(prefix=prefix, env=failed_build_env)
-
-        self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("simulated build failure", result.stderr)
-        self._assert_existing_executable_unchanged(installed)
-
-    def test_make_install_replacement_failure_preserves_existing_executable(self) -> None:
-        prefix = self.home / "existing install prefix"
-        installed = self._write_existing_executable(prefix)
-        failed_replacement_env = dict(self.env)
-        failed_replacement_env["IMPLEMENT_LOOP_TEST_REPLACEMENT_FAIL"] = "1"
-
-        result = self._run_make_install(prefix=prefix, env=failed_replacement_env)
-
-        self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("cannot replace the installed executable", result.stderr)
-        self._assert_existing_executable_unchanged(installed)
-        self.assertEqual(list(installed.parent.glob(".implement-loop.*")), [])
-
-    def test_make_install_does_not_follow_a_symlink_created_before_replacement(self) -> None:
-        prefix = self.home / "racing install prefix"
-        installed = prefix / "bin/implement-loop"
-        installed.parent.mkdir(parents=True)
-        target_directory = self.home / "symlink target"
-        target_directory.mkdir()
-        race_env = dict(self.env)
-        race_env["IMPLEMENT_LOOP_TEST_RACE_DESTINATION"] = str(installed)
-        race_env["IMPLEMENT_LOOP_TEST_RACE_TARGET"] = str(target_directory)
-
-        result = self._run_make_install(prefix=prefix, env=race_env)
-
-        self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("refusing to replace symlink", result.stderr)
-        self.assertTrue(installed.is_symlink())
-        self.assertEqual(os.readlink(installed), str(target_directory))
-        self.assertEqual(list(target_directory.iterdir()), [])
-        self.assertEqual(list(installed.parent.glob(".implement-loop.*")), [])
-
-
-class LinuxMakeInstallCommandTests(MakeInstallCommandTests):
-    platform_system = "Linux"
-    platform_machine = "x86_64"
+from support import SCRIPT, LoopTestCase
 
 
 class SourceCommandIntegrationTests(LoopTestCase):
+    def test_installed_source_command_runs_from_a_target_path_with_spaces(self) -> None:
+        source = self.copy_source_tree()
+        target = self.home / "target repository with spaces"
+        self.repo.rename(target)
+        self.repo = target
+
+        tool_bin = self.home / "installed tools with spaces"
+        tool_dir = self.home / "installed tool environments"
+        cache_dir = self.home / "uv cache"
+        install_env = dict(
+            self.env,
+            UV_TOOL_BIN_DIR=str(tool_bin),
+            UV_TOOL_DIR=str(tool_dir),
+            UV_CACHE_DIR=str(cache_dir),
+        )
+        uv = shutil.which("uv")
+        self.assertIsNotNone(uv, "test environment needs uv")
+        assert uv is not None
+        install = subprocess.run(
+            [
+                uv,
+                "tool",
+                "install",
+                "--python",
+                sys.executable,
+                "--from",
+                str(source),
+                "implement-loop",
+            ],
+            cwd=source,
+            env=install_env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
+
+        run_env = dict(install_env)
+        run_env["PATH"] = str(tool_bin) + os.pathsep + run_env["PATH"]
+        result = subprocess.run(
+            ["implement-loop", "1", "--max-iterations", "1"],
+            cwd=target,
+            env=run_env,
+            capture_output=True,
+            timeout=30,
+        )
+
+        state = self.load_state()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(state["tickets"]["2"]["state"], "closed")
+        self.assertTrue((target / "implementation-2.txt").is_file())
+        self.assertFalse((source / "implementation-2.txt").exists())
+        self.assertEqual(self.git("status", "--porcelain", cwd=target), "")
+
     def test_source_command_runs_from_a_target_checkout_subdirectory(self) -> None:
         source = SCRIPT.parent
         nested = self.repo / "nested"

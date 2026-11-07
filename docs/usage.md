@@ -2,7 +2,9 @@
 
 ## Before a run
 
-Install the command for your platform using the [README instructions](../README.md#install-and-run).
+Install the source command for Linux or macOS using the [README instructions](../README.md#install-and-run).
+The installation needs Python 3.11 or later and uv; uv may use a system or
+uv-managed Python. Add uv's tool bin directory to `PATH` if needed.
 The target checkout must have an existing commit and attached branch, with no
 staged, unstaged, untracked, or submodule changes. Check it with
 `git status --short --branch`.

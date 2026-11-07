@@ -1,111 +1,41 @@
 # Implement Loop
 
 Implement prepared direct child GitHub issues sequentially from the target
-checkout. Standalone local builds are supported on Apple silicon macOS and Ubuntu
-x86-64. Source execution on other Linux systems remains available with Python 3.11+.
-A run also needs
-Git, an authenticated `gh` session, the OpenCode CLI, and the external
-`implement` skill. See [workflow prerequisites](docs/usage.md#before-a-run) for
-setup and permissions.
+checkout. Source-installed use is supported on Linux and macOS with Python 3.11+
+and [uv](https://docs.astral.sh/uv/). A run also needs Git, an authenticated `gh`
+session, the OpenCode CLI, and the external `implement` skill. See
+[workflow prerequisites](docs/usage.md#before-a-run) for setup and permissions.
 
 ## Install and run
 
-### Download a rolling standalone build
-
-Choose the archive for [Apple silicon macOS](https://github.com/malchmih/implement-loop/releases/download/rolling/implement-loop-macos-arm64.tar.gz)
-or [Ubuntu x86-64](https://github.com/malchmih/implement-loop/releases/download/rolling/implement-loop-ubuntu-x86_64.tar.gz).
-For example, on Ubuntu:
+Install the source command with uv:
 
 ```bash
-curl -fL https://github.com/malchmih/implement-loop/releases/download/rolling/implement-loop-ubuntu-x86_64.tar.gz \
-  -o implement-loop-ubuntu-x86_64.tar.gz
-mkdir implement-loop-ubuntu-x86_64
-tar -xzf implement-loop-ubuntu-x86_64.tar.gz -C implement-loop-ubuntu-x86_64
-./implement-loop-ubuntu-x86_64/implement-loop --help
+uv tool install --from git+https://github.com/malchmih/implement-loop implement-loop
 ```
 
-On macOS, use `implement-loop-macos-arm64.tar.gz` and the matching directory
-instead. The archive preserves executable permission. Run
-`/path/to/extracted/implement-loop ISSUE_NUMBER` from a target repository, or
-copy the executable to a directory on your `PATH`. Both executables include
-Python, so Python and build tools are not needed at runtime. They still require
-Git, an authenticated `gh` session, the OpenCode CLI, and the external
-`implement` skill. The macOS binary is not Developer ID-signed or notarized;
-Gatekeeper may warn or block it. Do not disable Gatekeeper globally.
+uv installs the command in an isolated environment using an available system or
+uv-managed Python 3.11 or later. This installs source code, not a bundled runtime
+executable; Python and the installed package remain required at runtime. Ensure
+uv's tool bin directory (usually `~/.local/bin`) is on your `PATH`. Upgrade with
+`uv tool upgrade implement-loop`.
 
-### Build and install from source
-
-On macOS arm64 or Ubuntu x86-64, build and install the standalone executable from
-the source checkout:
+To install a local checkout for development, use an editable source install:
 
 ```bash
-make install
-# or choose a prefix; the executable is installed in PREFIX/bin:
-make install PREFIX="$HOME/tools"
+git clone https://github.com/malchmih/implement-loop ~/src/implement-loop
+uv tool install --editable ~/src/implement-loop
 ```
 
-The default destination is `~/.local/bin/implement-loop`. `make` and
-[uv](https://docs.astral.sh/uv/) are needed to build and install; Ubuntu also
-needs `binutils` (in particular `objdump`) for PyInstaller. uv provisions
-the project's Python 3.11 and locked build dependencies. The installed
-executable includes Python and does not need the source checkout or build tools
-at runtime. Add `~/.local/bin` to `PATH` yourself if needed; the command does
-not edit shell profiles. Installation safely replaces an existing regular
-executable; a failed build or replacement leaves it in place. `make install`
-refuses to replace a symlink or directory.
-Reinstall after changing the checkout to build and install its current files;
-editing the checkout alone does not update the executable.
+The editable installation uses that checkout's source, so changes there take
+effect without reinstalling. Quote the source path if it contains spaces.
 
-Ubuntu rolling and preview builds use 24.04 x86-64 as their baseline, with the same archive
-configured for validation on Ubuntu 24.04 and 26.04. Hosted validation still needs
-maintainer verification. Builds made on newer systems may require newer system
-libraries. No compatibility is promised for Ubuntu 22.04, other distributions,
-Linux arm64, untested interim Ubuntu releases, or future releases.
-
-The single-file executable extracts its bundled runtime to a temporary directory
-at startup. On Linux, that directory must permit execution; if the default is
-mounted `noexec`, set `TMPDIR` to a writable directory on an executable filesystem.
-
-After installation, run the command from the target repository:
+From a target repository, run:
 
 ```bash
 cd /path/to/target-repository
 implement-loop 123
 ```
-
-When running from source on Linux or macOS, use Python 3.11 or later and
-invoke the checkout's command from the target repository:
-
-```bash
-cd /path/to/target-repository
-python3 /path/to/implement-loop/implement-loop 123
-```
-
-## Try a CI preview
-
-The `Quality checks` workflow provides preview artifacts named
-`implement-loop-macos-arm64` and `implement-loop-ubuntu-x86_64`. The Ubuntu
-archive is built on Ubuntu 24.04 and the same executable is configured for
-packaged validation on Ubuntu 24.04 and 26.04. Check that the corresponding
-packaged validation jobs succeeded before using an artifact. For a pull request,
-open the `Quality checks` run from its **Checks** tab; for a manual run, open that
-run under **Actions**. Download the artifact from the run summary. The downloaded
-zip contains a tar archive:
-
-```bash
-unzip implement-loop-macos-arm64.zip
-tar -xzf implement-loop-macos-arm64.tar.gz
-./implement-loop --help
-```
-
-For Ubuntu, use `implement-loop-ubuntu-x86_64.zip` and its matching `.tar.gz`
-in the same commands. The tar archive preserves executable permissions. To run a
-ticket, invoke `/path/to/implement-loop SPEC_NUMBER` from the target repository.
-The executable bundles Python, but still requires Git, authenticated `gh`, the
-OpenCode CLI, and the external `implement` skill. These are preview
-builds; macOS builds are not Developer ID-signed or notarized, so Gatekeeper may
-warn or block them. Only run an artifact from a workflow and revision you trust,
-and do not disable Gatekeeper globally.
 
 Before running, review [permissions, commits, and closure](docs/usage.md#permissions-commits-and-closure)
 for trust, permission, side-effect, and completion limits.
