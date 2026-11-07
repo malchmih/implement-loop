@@ -119,6 +119,22 @@ def test_invalid_user_configuration_stops_before_claiming(
     assert not cli_case.repository_lock_path().exists()
 
 
+def test_uninspectable_user_configuration_is_not_treated_as_missing(
+    cli_case: LoopTestCase,
+) -> None:
+    config_home = cli_case.home / "config home is a file"
+    config_home.write_text("not a directory\n")
+
+    result, runs = cli_case.run_loop(extra_env={"XDG_CONFIG_HOME": str(config_home)})
+
+    assert result.returncode == 2
+    assert b"Cannot inspect discovered configuration file" in result.stderr
+    assert cli_case.load_state()["events"] == []
+    assert cli_case.load_state()["opencode_calls"] == []
+    assert runs == []
+    assert not (cli_case.home / ".local/state/implement-loop").exists()
+
+
 @pytest.mark.parametrize(
     "arguments",
     [

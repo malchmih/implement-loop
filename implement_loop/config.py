@@ -67,8 +67,15 @@ def _default_config_path() -> Path:
 
 
 def _read_config_file(path: Path) -> dict[str, Any] | None:
-    if not os.path.lexists(path):
+    try:
+        path.lstat()
+    except FileNotFoundError:
         return None
+    except OSError as error:
+        raise _ConfigurationError(
+            f"Cannot inspect discovered configuration file {path}: {error}"
+        ) from error
+
     try:
         with path.open("rb") as config_file:
             document = tomllib.load(config_file)
