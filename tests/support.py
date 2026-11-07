@@ -170,6 +170,8 @@ if tool_name == "opencode":
         report_results.append(run_blocked_report())
     elif mode == "blocked-invalid-reason":
         report_results.append(run_blocked_report(" \t "))
+    elif mode == "blocked-placeholder-reason":
+        report_results.append(run_blocked_report("x"))
     elif mode == "blocked-duplicate":
         report_results.append(run_blocked_report())
         report_results.append(run_blocked_report())

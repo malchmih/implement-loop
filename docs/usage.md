@@ -69,7 +69,8 @@ the Attempt prompt:
 ```
 
 If you cannot complete the ticket, submit a blocked outcome with a meaningful
-reason instead of claiming completion:
+reason of at least five non-whitespace characters instead of claiming
+completion:
 
 ```bash
 /path/to/implement-loop-report blocked --reason "External dependency is unavailable"
@@ -77,10 +78,11 @@ reason instead of claiming completion:
 
 The blocked reason is retained in private Ticket records and the run stops with
 the ticket open and assigned. Missing or invalid reports are diagnosed
-separately. Identical repeated reports are harmless; conflicting sequential
-reports (including switching between blocked and completed) stop the Attempt
-without automatic closure. Do not submit a second outcome to correct or replace
-the first one.
+separately. The command rejects blank or shorter placeholder text; the agent is
+responsible for making the reason a useful explanation. Identical repeated
+reports are harmless; conflicting sequential reports (including switching
+between blocked and completed) stop the Attempt without automatic closure. Do
+not submit a second outcome to correct or replace the first one.
 
 The command supplies ticket and Attempt identity; do not author a report file or
 copy identifiers. Wait for reporting to finish and treat a nonzero result as a

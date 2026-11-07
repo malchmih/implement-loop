@@ -271,11 +271,12 @@ def test_blocked_report_preserves_reason_and_stops_without_closing_ticket(
     assert loop_fixture.git("status", "--porcelain") == ""
 
 
-def test_blocked_report_rejects_an_empty_reason(loop_fixture: LoopFixture) -> None:
+@pytest.mark.parametrize("mode", ("blocked-invalid-reason", "blocked-placeholder-reason"))
+def test_blocked_report_rejects_an_invalid_reason(loop_fixture: LoopFixture, mode: str) -> None:
     result, runs = loop_fixture.run_loop(
         "--max-iterations",
         "1",
-        extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": "blocked-invalid-reason"},
+        extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": mode},
     )
 
     state = loop_fixture.load_state()
@@ -285,7 +286,8 @@ def test_blocked_report_rejects_an_empty_reason(loop_fixture: LoopFixture) -> No
     assert evidence["status"] == "missing"
     assert b"did not submit a required per-attempt completion report" in result.stderr
     assert any(
-        "reason must not be empty" in error for error in state["opencode_calls"][0]["report_errors"]
+        "at least five non-whitespace characters" in error
+        for error in state["opencode_calls"][0]["report_errors"]
     )
     assert state["opencode_calls"][0]["report_exit_codes"] == [1]
     assert state["tickets"]["2"]["state"] == "open"

@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 _CONTEXT_ENVIRONMENT_VARIABLE = "IMPLEMENT_LOOP_REPORT_CONTEXT"
+_MIN_BLOCKED_REASON_CHARACTERS = 5
+
+
+def is_acceptable_blocked_reason(value: Any) -> bool:
+    return isinstance(value, str) and len(value.strip()) >= _MIN_BLOCKED_REASON_CHARACTERS
 
 
 def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -172,7 +177,7 @@ def _parser() -> argparse.ArgumentParser:
     completed.add_argument("--validation", required=True, choices=("passed", "failed"))
     blocked = subcommands.add_parser(
         "blocked",
-        help="report intentional non-completion with a meaningful reason",
+        help="report intentional non-completion with a reason of at least five characters",
         description="Record why this Attempt cannot be completed.",
     )
     blocked.add_argument("--reason", required=True)
@@ -187,8 +192,11 @@ def main(argv: list[str] | None = None) -> int:
     if not context_value:
         print("Error: no active Attempt reporting context was supplied.", file=sys.stderr)
         return 1
-    if args.outcome == "blocked" and not args.reason.strip():
-        print("Error: a blocked reason must not be empty or whitespace-only.", file=sys.stderr)
+    if args.outcome == "blocked" and not is_acceptable_blocked_reason(args.reason):
+        print(
+            "Error: a blocked reason must contain at least five non-whitespace characters.",
+            file=sys.stderr,
+        )
         return 1
 
     try:

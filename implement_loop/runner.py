@@ -25,7 +25,7 @@ from .git import (
 from .github import GitHub, JsonObject, Repository
 from .harness import ProcessOutcome, run_opencode, select_opencode
 from .records import RETENTION_DAYS, RunRecords
-from .reporting import unique_json_object
+from .reporting import is_acceptable_blocked_reason, unique_json_object
 
 _MAX_PROMPT_BYTES = 100_000
 
@@ -419,8 +419,8 @@ def _validate_report(report: Any, ticket_number: int, attempt_id: str) -> str | 
         if set(report) != {"issue", "attempt_id", "status", "reason"}:
             return "The blocked report is malformed or has ambiguous fields."
         reason = report.get("reason")
-        if not isinstance(reason, str) or not reason.strip():
-            return "The blocked report must include a nonempty reason."
+        if not is_acceptable_blocked_reason(reason):
+            return "The blocked report must include at least five non-whitespace reason characters."
         return None
 
     return "The per-attempt result does not report a supported completed or blocked outcome."
