@@ -25,6 +25,7 @@ from .git import (
 from .github import GitHub, JsonObject, Repository
 from .harness import ProcessOutcome, run_opencode, select_opencode
 from .records import RETENTION_DAYS, RunRecords
+from .reporting import unique_json_object
 
 _MAX_PROMPT_BYTES = 100_000
 
@@ -252,15 +253,6 @@ def _select_ticket(
     )
 
 
-def _unique_result_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON field {key!r}")
-        result[key] = value
-    return result
-
-
 def _reject_json_constant(value: str) -> None:
     raise ValueError(f"invalid JSON constant {value!r}")
 
@@ -320,7 +312,7 @@ def _record_result(
     try:
         parsed = json.loads(
             raw_result.decode("utf-8"),
-            object_pairs_hook=_unique_result_fields,
+            object_pairs_hook=unique_json_object,
             parse_constant=_reject_json_constant,
         )
     except UnicodeDecodeError, json.JSONDecodeError, ValueError:

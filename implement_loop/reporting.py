@@ -9,12 +9,12 @@ import secrets
 import stat
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 _CONTEXT_ENVIRONMENT_VARIABLE = "IMPLEMENT_LOOP_REPORT_CONTEXT"
 
 
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -24,7 +24,7 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
+    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_json_object)
 
 
 def _read_context(path: Path) -> tuple[int, str, Path]:
@@ -115,14 +115,16 @@ def _write_report(path: Path, report: dict[str, Any]) -> None:
             pass
 
 
-def _submit(path: Path, report: dict[str, Any]) -> tuple[bool, bool, bool]:
+def _submit(
+    path: Path, report: dict[str, Any]
+) -> Literal["saved", "repeated", "claim_failed", "repeated_claim_failed", "conflict"]:
     existing = _existing_report(path)
     passed = report["acceptance_criteria"] == report["validation"] == "passed"
     if existing == report:
-        return True, passed, False
+        return "repeated" if passed else "repeated_claim_failed"
     if existing is None:
         _write_report(path, report)
-        return False, passed, False
+        return "saved" if passed else "claim_failed"
     if existing.get("status") == "conflict":
         raise ValueError("a conflicting completion report is already persisted")
 
@@ -133,7 +135,7 @@ def _submit(path: Path, report: dict[str, Any]) -> tuple[bool, bool, bool]:
         "reports": [existing, report],
     }
     _write_report(path, conflict)
-    return False, False, True
+    return "conflict"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -171,19 +173,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         issue, attempt_id, result_path = _read_context(Path(context_value))
         report = _report(issue, attempt_id, args.acceptance_criteria, args.validation)
-        repeated, passed, conflict = _submit(result_path, report)
+        submission = _submit(result_path, report)
     except (OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
 
-    if not passed:
-        if repeated:
+    if submission in {"claim_failed", "repeated_claim_failed", "conflict"}:
+        if submission == "repeated_claim_failed":
             print(
                 "Error: the repeated completion report does not claim that both acceptance "
                 "criteria and required validation passed.",
                 file=sys.stderr,
             )
-        elif conflict:
+        elif submission == "conflict":
             print(
                 "Error: conflicting completion reports were persisted; the Attempt cannot "
                 "complete automatically.",
@@ -197,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 1
 
-    qualifier = "Repeated " if repeated else ""
+    qualifier = "Repeated " if submission == "repeated" else ""
     print(f"{qualifier}completion report saved for ticket #{issue}.")
     return 0
 
