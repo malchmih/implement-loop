@@ -18,3 +18,6 @@ A human's deliberate closure of a ticket for already-committed work after inspec
 
 **Agent attestation**:
 An implementing agent's explicit claim that the ticket's work, acceptance criteria, required validation, and review are complete. It is neither independent correctness verification nor human approval.
+
+**Blocked report**:
+An Attempt-bound report of intentional non-completion with a meaningful reason. It stops the Attempt without claiming completion and is distinct from a missing or invalid handoff.

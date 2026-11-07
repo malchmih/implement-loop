@@ -342,25 +342,17 @@ def _record_result(
         )
 
     validation_error: str | None
-    issue = parsed.get("issue")
-    if type(issue) is not int or issue != ticket_number:
-        validation_error = (
-            "The per-attempt result identifies the wrong ticket or has a wrong-type issue number."
-        )
-    elif not isinstance(parsed.get("attempt_id"), str) or parsed["attempt_id"] != attempt_id:
-        validation_error = "The per-attempt result is stale or identifies the wrong attempt."
+    if parsed.get("status") == "conflict":
+        validation_error = _validate_conflict(parsed, ticket_number, attempt_id)
     else:
-        if parsed.get("status") == "conflict":
-            validation_error = _validate_conflict(parsed, ticket_number, attempt_id)
-        else:
-            validation_error = _validate_report(parsed, ticket_number, attempt_id)
-            if validation_error is None and parsed["status"] == "completed":
-                if parsed["acceptance_criteria"] != "passed":
-                    validation_error = (
-                        "The per-attempt result does not report passed acceptance criteria."
-                    )
-                elif parsed["validation"] != "passed":
-                    validation_error = "The per-attempt result does not report passed validation."
+        validation_error = _validate_report(parsed, ticket_number, attempt_id)
+        if validation_error is None and parsed["status"] == "completed":
+            if parsed["acceptance_criteria"] != "passed":
+                validation_error = (
+                    "The per-attempt result does not report passed acceptance criteria."
+                )
+            elif parsed["validation"] != "passed":
+                validation_error = "The per-attempt result does not report passed validation."
 
     if validation_error is not None:
         status = "conflict" if parsed.get("status") == "conflict" else "rejected"
@@ -404,10 +396,9 @@ def _record_result(
 def _validate_report(report: Any, ticket_number: int, attempt_id: str) -> str | None:
     if not isinstance(report, dict):
         return "A persisted report is malformed or ambiguous."
-    if type(report.get("issue")) is not int or report["issue"] != ticket_number:
-        return "A persisted report identifies the wrong ticket or has a wrong-type issue number."
-    if not isinstance(report.get("attempt_id"), str) or report["attempt_id"] != attempt_id:
-        return "A persisted report is stale or identifies the wrong attempt."
+    identity_error = _validate_report_identity(report, ticket_number, attempt_id)
+    if identity_error is not None:
+        return identity_error
 
     if report.get("status") == "completed":
         if set(report) != {
@@ -435,7 +426,20 @@ def _validate_report(report: Any, ticket_number: int, attempt_id: str) -> str | 
     return "The per-attempt result does not report a supported completed or blocked outcome."
 
 
+def _validate_report_identity(
+    report: dict[str, Any], ticket_number: int, attempt_id: str
+) -> str | None:
+    if type(report.get("issue")) is not int or report["issue"] != ticket_number:
+        return "A persisted report identifies the wrong ticket or has a wrong-type issue number."
+    if not isinstance(report.get("attempt_id"), str) or report["attempt_id"] != attempt_id:
+        return "A persisted report is stale or identifies the wrong attempt."
+    return None
+
+
 def _validate_conflict(parsed: dict[str, Any], ticket_number: int, attempt_id: str) -> str:
+    identity_error = _validate_report_identity(parsed, ticket_number, attempt_id)
+    if identity_error is not None:
+        return identity_error
     if set(parsed) != {"status", "issue", "attempt_id", "reports"}:
         return "The persisted completion report is malformed or ambiguous."
     reports = parsed.get("reports")
