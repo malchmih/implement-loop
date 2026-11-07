@@ -136,6 +136,30 @@ def test_uninspectable_user_configuration_is_not_treated_as_missing(
 
 
 @pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        ("XDG_CONFIG_HOME", "relative/config"),
+        ("XDG_CONFIG_HOME", "~/.config"),
+        ("XDG_STATE_HOME", "relative/state"),
+        ("XDG_STATE_HOME", "~/.local/state"),
+    ],
+)
+def test_xdg_home_values_must_be_absolute(
+    cli_case: LoopTestCase,
+    variable: str,
+    value: str,
+) -> None:
+    result, runs = cli_case.run_loop(extra_env={variable: value})
+
+    assert result.returncode == 2
+    assert f"{variable} must be an absolute path".encode() in result.stderr
+    assert cli_case.load_state()["events"] == []
+    assert cli_case.load_state()["opencode_calls"] == []
+    assert runs == []
+    assert not (cli_case.home / ".local/state/implement-loop").exists()
+
+
+@pytest.mark.parametrize(
     "arguments",
     [
         ("--config-file", "settings.toml"),

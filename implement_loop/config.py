@@ -40,10 +40,7 @@ def _positive_integer(value: str) -> int:
 
 
 def _absolute_xdg_directory(environment_name: str, value: str) -> Path:
-    try:
-        directory = Path(value).expanduser()
-    except (RuntimeError, ValueError) as error:
-        raise _ConfigurationError(f"{environment_name} is not a valid path: {error}") from error
+    directory = Path(value)
     if not directory.is_absolute():
         raise _ConfigurationError(f"{environment_name} must be an absolute path.")
     return _resolve_path(directory, environment_name)
