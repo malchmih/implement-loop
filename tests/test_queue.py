@@ -26,7 +26,7 @@ class QueueTests(LoopTestCase):
 
         state = self.load_state()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [6])
+        self.assertEqual([call["ticket"] for call in state["opencode_calls"]], [6])
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual(state["tickets"]["3"]["state"], "open")
         self.assertEqual(state["tickets"]["4"]["state"], "open")
@@ -44,12 +44,12 @@ class QueueTests(LoopTestCase):
 
         state = self.load_state()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [3, 2])
+        self.assertEqual([call["ticket"] for call in state["opencode_calls"]], [3, 2])
         self.assertEqual(
-            len({call["attempt_id"] for call in state["copilot_calls"]}),
+            len({call["attempt_id"] for call in state["opencode_calls"]}),
             2,
         )
-        for call in state["copilot_calls"]:
+        for call in state["opencode_calls"]:
             self.assertNotIn("--continue", call["args"])
             self.assertNotIn("--resume", call["args"])
         self.assertEqual(state["tickets"]["2"]["state"], "closed")
@@ -57,7 +57,7 @@ class QueueTests(LoopTestCase):
         self.assertTrue((runs[0] / "attempt-1-ticket-3/completion-result.json").is_file())
         self.assertTrue((runs[0] / "attempt-2-ticket-2/completion-result.json").is_file())
 
-    def test_no_eligible_children_exits_successfully_without_harness(self) -> None:
+    def test_no_eligible_children_exits_successfully_without_opencode_invocation(self) -> None:
         self.state["tickets"]["2"]["assignees"] = [{"login": "tester"}]
         self.add_ticket(3, blocked=2)
         self.save_state()
@@ -66,7 +66,7 @@ class QueueTests(LoopTestCase):
 
         state = self.load_state()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(state["opencode_calls"], [])
         self.assertEqual(state["events"], [])
         self.assertIn(b"No eligible children", result.stdout)
 
@@ -78,22 +78,25 @@ class QueueTests(LoopTestCase):
 
         state = self.load_state()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
+        self.assertEqual([call["ticket"] for call in state["opencode_calls"]], [2])
         self.assertEqual(state["tickets"]["2"]["state"], "closed")
         self.assertEqual(state["tickets"]["3"]["state"], "open")
         self.assertEqual(state["tickets"]["3"]["assignees"], [])
         self.assertIn(b"Attempt limit reached", result.stdout)
 
-    def test_default_limit_is_five_harness_invocations(self) -> None:
+    def test_default_limit_is_five_opencode_invocations(self) -> None:
         for number in range(3, 8):
             self.add_ticket(number)
         self.save_state()
 
-        result, _ = self.run_loop(harness=None)
+        result, _ = self.run_loop()
 
         state = self.load_state()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(len(state["opencode_calls"]), 5)
-        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(
+            [call["ticket"] for call in state["opencode_calls"]],
+            [2, 3, 4, 5, 6],
+        )
         self.assertEqual(state["tickets"]["7"]["state"], "open")
         self.assertIn(b"Attempt limit reached after 5 invocation(s)", result.stdout)

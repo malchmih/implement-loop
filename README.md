@@ -4,7 +4,7 @@ Implement prepared direct child GitHub issues sequentially from the target
 checkout. Standalone local builds are supported on Apple silicon macOS and Ubuntu
 x86-64. Source execution on other Linux systems remains available with Python 3.11+.
 A run also needs
-Git, an authenticated `gh` session, a supported harness CLI, and the external
+Git, an authenticated `gh` session, the OpenCode CLI, and the external
 `implement` skill. See [workflow prerequisites](docs/usage.md#before-a-run) for
 setup and permissions.
 
@@ -29,7 +29,7 @@ instead. The archive preserves executable permission. Run
 `/path/to/extracted/implement-loop ISSUE_NUMBER` from a target repository, or
 copy the executable to a directory on your `PATH`. Both executables include
 Python, so Python and build tools are not needed at runtime. They still require
-Git, an authenticated `gh` session, a supported harness CLI, and the external
+Git, an authenticated `gh` session, the OpenCode CLI, and the external
 `implement` skill. The macOS binary is not Developer ID-signed or notarized;
 Gatekeeper may warn or block it. Do not disable Gatekeeper globally.
 
@@ -71,7 +71,6 @@ After installation, run the command from the target repository:
 ```bash
 cd /path/to/target-repository
 implement-loop 123
-implement-loop 123 --harness copilot
 ```
 
 When running from source on Linux or macOS, use Python 3.11 or later and
@@ -102,8 +101,8 @@ tar -xzf implement-loop-macos-arm64.tar.gz
 For Ubuntu, use `implement-loop-ubuntu-x86_64.zip` and its matching `.tar.gz`
 in the same commands. The tar archive preserves executable permissions. To run a
 ticket, invoke `/path/to/implement-loop SPEC_NUMBER` from the target repository.
-The executable bundles Python, but still requires Git, authenticated `gh`, a
-supported harness CLI, and the external `implement` skill. These are preview
+The executable bundles Python, but still requires Git, authenticated `gh`, the
+OpenCode CLI, and the external `implement` skill. These are preview
 builds; macOS builds are not Developer ID-signed or notarized, so Gatekeeper may
 warn or block them. Only run an artifact from a workflow and revision you trust,
 and do not disable Gatekeeper globally.

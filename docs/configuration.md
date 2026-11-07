@@ -1,9 +1,8 @@
 # Configuration and private records
 
 Configuration is optional. With no file or flags, `implement-loop SPEC_NUMBER`
-uses OpenCode, a five-attempt limit, GPT-6 Luna with the `max` variant for
-OpenCode, GPT-6 Luna with `max` reasoning for Copilot, private records under the
-user state directory, and seven-day startup retention.
+uses OpenCode, a five-attempt limit, GPT-6 Luna with the `max` variant, private
+records under the user state directory, and seven-day startup retention.
 
 ## Discovering and overriding settings
 
@@ -23,16 +22,11 @@ Omitted command-line options do not replace values from the file. For example:
 
 ```toml
 [execution]
-harness = "opencode"
 max_attempts = 5
 
 [execution.harnesses.opencode]
 model = "github-copilot/gpt-6-luna"
 variant = "max"
-
-[execution.harnesses.copilot]
-model = "gpt-6-luna"
-reasoning_effort = "max"
 
 [records]
 directory = "~/.local/state/implement-loop"
@@ -41,23 +35,19 @@ retention_days = 7
 # keep_forever = true
 ```
 
-Supported keys are `execution.harness`, positive integer
-`execution.max_attempts`, `execution.harnesses.opencode.model` and `.variant`,
-`execution.harnesses.copilot.model` and `.reasoning_effort`, and the `records`
-keys shown above. Copilot reasoning effort accepts `none`, `minimal`, `low`,
-`medium`, `high`, `xhigh`, or `max`. Attempts must be from 1 through 999,999,999;
-retention days may be from 0 through 999,999,999. Zero expires every unmarked
-prior run at the next startup. Unknown keys, invalid types or values, and
-malformed TOML are rejected before a ticket is claimed or a harness is invoked.
+Supported keys are positive integer `execution.max_attempts`,
+`execution.harnesses.opencode.model` and `.variant`, and the `records` keys shown
+above. Attempts must be from 1 through 999,999,999; retention days may be from 0
+through 999,999,999. Zero expires every unmarked prior run at the next startup.
+Unknown keys, invalid types or values, and malformed TOML are rejected before a
+ticket is claimed or OpenCode is invoked.
 
 The equivalent per-run options are:
 
 ```text
 --config-file PATH
---harness opencode|copilot
 --max-iterations N
 --opencode-model MODEL --opencode-variant VARIANT
---copilot-model MODEL --copilot-reasoning-effort EFFORT
 --records-dir PATH
 --retention-days N | --keep-records-forever
 ```
@@ -65,9 +55,9 @@ The equivalent per-run options are:
 The retention flags are mutually exclusive. An explicit `--retention-days N`
 overrides a file's `keep_forever = true`.
 
-Model and reasoning settings describe the root harness invocation. Configured
-agents or subagents may choose different models; the setting does not force one
-model globally.
+Model and variant settings describe the root OpenCode invocation. Delegated
+agents may choose different models; this setting does not force one model
+globally.
 
 ## Record location and privacy
 
@@ -84,18 +74,18 @@ the target checkout: the runner rejects locations that contain or are contained
 by the checkout, the home directory itself, and filesystem root.
 
 Run and ticket records can contain repository paths, issue and comment snapshots,
-prompts, full harness output, process results, and completion evidence. Treat
+prompts, full OpenCode output, process results, and completion evidence. Treat
 them as sensitive. When log persistence succeeds, the full output is in the
 ticket's `agent.log`; a log-write failure is reported and can leave it
-incomplete. OpenCode records raw harness output and Copilot preserves its native
-text. Run and attempt directories are private (`0700`), and files are private
-(`0600`).
+incomplete. Raw OpenCode JSON-lines output is retained separately from the
+conservative live summary. Run and attempt directories are private (`0700`), and
+files are private (`0600`).
 
 In the live transcript, each nonempty OpenCode text event is preceded by
 `── Agent ──`; its message remains unchanged, including literal Markdown. The
 heading is bold cyan on color-enabled terminals and plain when output is
-redirected or `NO_COLOR` is set. This presentation does not alter `agent.log`
-or Copilot output.
+redirected or `NO_COLOR` is set. This presentation does not alter the raw
+`agent.log` output.
 
 For successfully returned OpenCode subagent calls whose nested metadata identifies
 an untruncated running session, the live transcript shows the task, agent, and
@@ -115,6 +105,6 @@ on a later startup. Seven days is the default; `keep_forever = true` or
 Cleanup is conservative: marked runs are kept even when a marker appears stale;
 symlinked run directories and unrecognized entries are preserved. Cleanup errors
 warn without blocking a new run. Retention controls only Implement Loop records.
-Harness-native sessions, logs, telemetry, and other storage are separate; manage
-them through the selected harness's settings. OpenCode private-server mode does
+OpenCode-native sessions, logs, telemetry, and other storage are separate; manage
+them through OpenCode's settings. OpenCode private-server mode does
 not disable native session persistence.

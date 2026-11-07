@@ -24,12 +24,11 @@ class HarnessTests(LoopTestCase):
         self.add_ticket(3)
         self.save_state()
 
-        result, runs = self.run_loop("--max-iterations", "2", harness=None)
+        result, runs = self.run_loop("--max-iterations", "2")
 
         state = self.load_state()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual([call["ticket"] for call in state["opencode_calls"]], [2, 3])
-        self.assertEqual(state["copilot_calls"], [])
         self.assertEqual(
             len({call["attempt_id"] for call in state["opencode_calls"]}),
             2,
@@ -79,7 +78,7 @@ class HarnessTests(LoopTestCase):
         self.state["opencode_raw_output"] = raw_output
         self.save_state()
 
-        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+        result, runs = self.run_loop("--max-iterations", "1")
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         expected_tool_block = (
@@ -106,7 +105,7 @@ class HarnessTests(LoopTestCase):
         self.state["opencode_raw_output"] = raw_output
         self.save_state()
 
-        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+        result, runs = self.run_loop("--max-iterations", "1")
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         expected = (
@@ -294,7 +293,7 @@ class HarnessTests(LoopTestCase):
         self.state["opencode_raw_output"] = raw_output
         self.save_state()
 
-        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+        result, runs = self.run_loop("--max-iterations", "1")
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertIn(b"OpenCode event: future_event", result.stdout)
@@ -347,7 +346,7 @@ class HarnessTests(LoopTestCase):
         self.state["opencode_raw_output"] = raw_output
         self.save_state()
 
-        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+        result, runs = self.run_loop("--max-iterations", "1")
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         visible = result.stdout.decode("utf-8")
@@ -978,7 +977,6 @@ class HarnessTests(LoopTestCase):
 
     def test_opencode_terminal_multiline_tool_output_preserves_supplied_ansi_styles(self) -> None:
         output = self._assert_live_harness_output(
-            "opencode",
             terminal=True,
             live_output_fragment=b"\x1b[1;2;31mred first line\nred second line\x1b[0m",
         ).replace(b"\r\n", b"\n")
@@ -2290,7 +2288,7 @@ class HarnessTests(LoopTestCase):
         raw_output = "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n"
         self.state["opencode_raw_output"] = raw_output
         self.save_state()
-        result, runs = self.run_loop("--max-iterations", "1", harness=None, extra_env=extra_env)
+        result, runs = self.run_loop("--max-iterations", "1", extra_env=extra_env)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         return raw_output, result.stdout.decode("utf-8"), runs
 
@@ -2472,7 +2470,7 @@ class HarnessTests(LoopTestCase):
         self.state["opencode_raw_output"] = raw_output
         self.save_state()
 
-        result, runs = self.run_loop("--max-iterations", "1", harness=None)
+        result, runs = self.run_loop("--max-iterations", "1")
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         visible = result.stdout.decode("utf-8")
@@ -2793,32 +2791,23 @@ class HarnessTests(LoopTestCase):
             ready_listener.close()
 
     def test_opencode_redirected_output_is_live_before_harness_exit(self) -> None:
-        self._assert_live_harness_output("opencode", terminal=False)
+        self._assert_live_harness_output(terminal=False)
 
     def test_opencode_terminal_output_is_live_before_harness_exit(self) -> None:
-        self._assert_live_harness_output("opencode", terminal=True)
+        self._assert_live_harness_output(terminal=True)
 
     def test_opencode_terminal_failed_tool_uses_red_cross(self) -> None:
-        self._assert_live_harness_output("opencode", terminal=True, include_failure=True)
+        self._assert_live_harness_output(terminal=True, include_failure=True)
 
     def test_opencode_terminal_output_honors_no_color_presence(self) -> None:
-        self._assert_live_harness_output("opencode", terminal=True, no_color=True)
+        self._assert_live_harness_output(terminal=True, no_color=True)
 
-    def test_copilot_redirected_output_is_live_before_harness_exit(self) -> None:
-        self._assert_live_harness_output("copilot", terminal=False)
-
-    def test_copilot_terminal_output_is_live_before_harness_exit(self) -> None:
-        self._assert_live_harness_output("copilot", terminal=True)
-
-    def _assert_signal_stops_run_without_alert(
-        self, stop_signal: int, *, platform: str = "darwin", harness: str = "copilot"
-    ) -> None:
+    def _assert_signal_stops_run(self, stop_signal: int) -> None:
         ready_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         ready_listener.bind(("127.0.0.1", 0))
         ready_listener.listen()
         ready_listener.settimeout(LIVE_READY_TIMEOUT)
         env = dict(self.env)
-        env.update(self.platform_test_environment(platform))
         env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT"] = LIVE_OUTPUT_FRAGMENT.decode("ascii")
         env["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"] = str(ready_listener.getsockname()[1])
         process: subprocess.Popen[bytes] | None = None
@@ -2831,8 +2820,6 @@ class HarnessTests(LoopTestCase):
                     "1",
                     "--max-iterations",
                     "1",
-                    "--harness",
-                    harness,
                 ],
                 cwd=self.repo,
                 env=env,
@@ -2881,19 +2868,13 @@ class HarnessTests(LoopTestCase):
             self.assertFalse((run_directory / "active.pid").exists())
             self.assertFalse(self.repository_lock_path().exists())
             state = self.load_state()
-            self.assertEqual(len(state[f"{harness}_calls"]), 1)
-            other_harness = "opencode" if harness == "copilot" else "copilot"
-            self.assertEqual(state[f"{other_harness}_calls"], [])
+            self.assertEqual(len(state["opencode_calls"]), 1)
             agent_log = (attempt_directory / "agent.log").read_bytes()
-            if harness == "opencode":
-                self.assertEqual(
-                    [json.loads(line)["type"] for line in agent_log.splitlines()],
-                    ["text", "tool_use"],
-                )
-                self.assertIn(LIVE_OUTPUT_FRAGMENT, agent_log)
-            else:
-                self.assertEqual(agent_log, LIVE_OUTPUT_FRAGMENT)
-            self.assertEqual(self.alert_calls(), [])
+            self.assertEqual(
+                [json.loads(line)["type"] for line in agent_log.splitlines()],
+                ["text", "tool_use"],
+            )
+            self.assertIn(LIVE_OUTPUT_FRAGMENT, agent_log)
         finally:
             if process is not None:
                 if process.stdin is not None and not process.stdin.closed:
@@ -2918,59 +2899,39 @@ class HarnessTests(LoopTestCase):
                     process.stdout.close()
             ready_listener.close()
 
-    def test_ctrl_c_reports_existing_run_and_ticket_records_without_alert(self) -> None:
-        self._assert_signal_stops_run_without_alert(signal.SIGINT)
+    def test_ctrl_c_reports_existing_run_and_ticket_records(self) -> None:
+        self._assert_signal_stops_run(signal.SIGINT)
 
-    def test_termination_reports_existing_run_and_ticket_records_without_alert(self) -> None:
-        self._assert_signal_stops_run_without_alert(signal.SIGTERM)
-
-    def test_opencode_ctrl_c_preserves_interrupt_recovery_without_alert(self) -> None:
-        self._assert_signal_stops_run_without_alert(signal.SIGINT, harness="opencode")
-
-    def test_opencode_termination_preserves_interrupt_recovery_without_alert(self) -> None:
-        self._assert_signal_stops_run_without_alert(signal.SIGTERM, harness="opencode")
-
-    def test_linux_ctrl_c_reports_existing_records_without_alert(self) -> None:
-        self._assert_signal_stops_run_without_alert(signal.SIGINT, platform="linux")
-
-    def test_linux_termination_reports_existing_records_without_alert(self) -> None:
-        self._assert_signal_stops_run_without_alert(signal.SIGTERM, platform="linux")
+    def test_termination_reports_existing_run_and_ticket_records(self) -> None:
+        self._assert_signal_stops_run(signal.SIGTERM)
 
     def test_transcript_marker_without_result_file_does_not_close_ticket(self) -> None:
-        for harness, selected_calls, unselected_calls in (
-            (None, "opencode_calls", "copilot_calls"),
-            ("copilot", "copilot_calls", "opencode_calls"),
-        ):
-            with self.subTest(harness=harness or "default"):
-                self.state = self.default_state()
-                self.save_state()
-                result, runs = self.run_loop(
-                    "--max-iterations",
-                    "1",
-                    harness=harness,
-                    extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": "missing"},
-                )
-                self.assertNotEqual(result.returncode, 0)
-                state = self.load_state()
-                self.assertEqual(state["tickets"]["2"]["state"], "open")
-                self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
-                self.assertEqual([event[0] for event in state["events"]], ["assign"])
-                self.assertEqual(len(state[selected_calls]), 1)
-                self.assertEqual(state[unselected_calls], [])
-                self.assertEqual(len(runs), 1)
-                attempt = runs[0] / "attempt-1-ticket-2"
-                self.assertEqual(
-                    json.loads((attempt / "completion-evidence.json").read_text())["status"],
-                    "missing",
-                )
-                self.assertIn(b"did not write the required per-attempt result file", result.stderr)
-                self.assertIn(b"IMPLEMENT_LOOP_COMPLETE", (attempt / "agent.log").read_bytes())
+        result, runs = self.run_loop(
+            "--max-iterations",
+            "1",
+            extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": "missing"},
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        state = self.load_state()
+        self.assertEqual(state["tickets"]["2"]["state"], "open")
+        self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
+        self.assertEqual([event[0] for event in state["events"]], ["assign"])
+        self.assertEqual(len(state["opencode_calls"]), 1)
+        self.assertEqual(len(runs), 1)
+        attempt = runs[0] / "attempt-1-ticket-2"
+        self.assertEqual(
+            json.loads((attempt / "completion-evidence.json").read_text())["status"],
+            "missing",
+        )
+        self.assertIn(b"did not write the required per-attempt result file", result.stderr)
+        self.assertIn(b"IMPLEMENT_LOOP_COMPLETE", (attempt / "agent.log").read_bytes())
 
     def test_result_file_closes_ticket_after_clean_descendant_commit(self) -> None:
         result, runs = self.run_loop(
             "--max-iterations",
             "1",
-            extra_env={"COPILOT_TEST_CONFIG": "inherited-setting"},
+            extra_env={"OPENCODE_TEST_CONFIG": "inherited-setting"},
         )
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         state = self.load_state()
@@ -2984,16 +2945,15 @@ class HarnessTests(LoopTestCase):
         completion = json.loads((attempt / "completion.json").read_text())
         self.assertEqual(completion["issue"], 2)
         self.assertEqual(completion["attempt_id"], metadata["attempt_id"])
-        self.assertTrue(state["copilot_calls"][0]["result_initially_absent"])
+        call = state["opencode_calls"][0]
+        self.assertTrue(call["result_initially_absent"])
         self.assertFalse(Path(metadata["result_path"]).exists())
         self.assertFalse(Path(metadata["result_path"]).is_relative_to(self.repo))
-        self.assertEqual(state["copilot_calls"][0]["copilot_config"], "inherited-setting")
-        call_args = state["copilot_calls"][0]["args"]
-        self.assertEqual(call_args[call_args.index("--model") + 1], "gpt-6-luna")
-        self.assertEqual(call_args[call_args.index("--reasoning-effort") + 1], "max")
-        self.assertNotIn("--deny-tool", call_args)
-        prompt = state["copilot_calls"][0]["prompt"]
-        self.assertIn("/implement Implement only ticket #2", prompt)
+        self.assertEqual(call["opencode_config"], "inherited-setting")
+        call_args = call["args"]
+        self.assertEqual(call_args[call_args.index("--model") + 1], "github-copilot/gpt-6-luna#max")
+        prompt = call["prompt"]
+        self.assertIn("@implement Implement only ticket #2", prompt)
         self.assertIn("Spec fixture with shared requirements", prompt)
         self.assertIn("Parent comment fixture.", prompt)
         self.assertIn("Ticket comment fixture.", prompt)
@@ -3060,42 +3020,27 @@ class HarnessTests(LoopTestCase):
                 self.assertNotEqual(evidence["status"], "valid")
                 self.assertTrue((attempt / "completion-result.json").is_file())
 
-    def test_nonzero_harness_exit_rejects_even_valid_result_file(self) -> None:
-        for harness, selected_calls, unselected_calls, display_name in (
-            (None, "opencode_calls", "copilot_calls", "OpenCode"),
-            ("copilot", "copilot_calls", "opencode_calls", "Copilot"),
-        ):
-            with self.subTest(harness=harness or "default"):
-                self.state = self.default_state()
-                self.state["agent_exit"] = 7
-                self.state["make_commit"] = False
-                self.save_state()
-                result, runs = self.run_loop(
-                    "--max-iterations",
-                    "1",
-                    harness=harness,
-                )
-                state = self.load_state()
-                self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(len(state[selected_calls]), 1)
-                self.assertEqual(state[unselected_calls], [])
-                self.assertEqual(state["tickets"]["2"]["state"], "open")
-                self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
-                self.assertIn(f"{display_name} exited with status 7".encode(), result.stderr)
-                attempt = runs[-1] / "attempt-1-ticket-2"
-                self.assertIn(
-                    f"Run records: {runs[-1].resolve()}".encode(),
-                    result.stderr,
-                )
-                self.assertIn(
-                    f"Ticket #2 records: {attempt.resolve()}".encode(),
-                    result.stderr,
-                )
-                self.assertEqual(json.loads((attempt / "process.json").read_text())["exit_code"], 7)
-                self.assertEqual(
-                    json.loads((attempt / "completion-evidence.json").read_text())["status"],
-                    "valid",
-                )
+    def test_nonzero_opencode_exit_rejects_even_valid_result_file(self) -> None:
+        self.state["agent_exit"] = 7
+        self.state["make_commit"] = False
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "1")
+
+        state = self.load_state()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(state["opencode_calls"]), 1)
+        self.assertEqual(state["tickets"]["2"]["state"], "open")
+        self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
+        self.assertIn(b"OpenCode exited with status 7", result.stderr)
+        attempt = runs[-1] / "attempt-1-ticket-2"
+        self.assertIn(f"Run records: {runs[-1].resolve()}".encode(), result.stderr)
+        self.assertIn(f"Ticket #2 records: {attempt.resolve()}".encode(), result.stderr)
+        self.assertEqual(json.loads((attempt / "process.json").read_text())["exit_code"], 7)
+        self.assertEqual(
+            json.loads((attempt / "completion-evidence.json").read_text())["status"],
+            "valid",
+        )
 
     def test_required_record_persistence_failure_prevents_closure(self) -> None:
         self.state["agent_action"] = "break_records"
@@ -3117,105 +3062,43 @@ class HarnessTests(LoopTestCase):
             signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
             resource.setrlimit(resource.RLIMIT_FSIZE, (8192, 8192))
 
-        for harness, display_name in ((None, "OpenCode"), ("copilot", "Copilot")):
-            with self.subTest(harness=harness or "default"):
-                self.state = self.default_state()
-                self.save_state()
-                result, runs = self.run_loop(
-                    "--max-iterations",
-                    "1",
-                    harness=harness,
-                    extra_env={"IMPLEMENT_LOOP_TEST_OUTPUT": "x" * 20_000},
-                    preexec_fn=limit_file_size,
-                )
-
-                state = self.load_state()
-                attempt = runs[-1] / "attempt-1-ticket-2"
-                process = json.loads((attempt / "process.json").read_text())
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(
-                    f"Unable to persist the complete {display_name} output log".encode(),
-                    result.stderr,
-                )
-                self.assertFalse(process["log_persisted"])
-                self.assertLessEqual((attempt / "agent.log").stat().st_size, 8192)
-                self.assertEqual(state["tickets"]["2"]["state"], "open")
-                self.assertEqual([event[0] for event in state["events"]], ["assign"])
-
-    def test_missing_copilot_cli_fails_before_claim(self) -> None:
-        limited_bin = self.controlled_path_directory("python3", "git", "gh", "opencode")
-
         result, runs = self.run_loop(
-            harness="copilot",
-            extra_env={"PATH": str(limited_bin)},
-        )
-
-        self.assert_missing_executable_guidance(result, "copilot", harness="Copilot")
-        self.assert_missing_executable_stopped_before_run(runs)
-
-    def test_missing_default_opencode_cli_does_not_fall_back_to_copilot(self) -> None:
-        limited_bin = self.controlled_path_directory("python3", "git", "gh", "copilot")
-
-        result, runs = self.run_loop(harness=None, extra_env={"PATH": str(limited_bin)})
-
-        self.assert_missing_executable_guidance(result, "opencode", harness="OpenCode")
-        self.assert_missing_executable_stopped_before_run(runs)
-
-    def test_default_opencode_runs_without_a_copilot_executable(self) -> None:
-        limited_bin = self.controlled_path_directory("python3", "git", "gh", "opencode")
-
-        result, _ = self.run_loop(
             "--max-iterations",
             "1",
-            harness=None,
-            extra_env={"PATH": str(limited_bin)},
+            extra_env={"IMPLEMENT_LOOP_TEST_OUTPUT": "x" * 20_000},
+            preexec_fn=limit_file_size,
         )
 
         state = self.load_state()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(state["tickets"]["2"]["state"], "closed")
+        attempt = runs[-1] / "attempt-1-ticket-2"
+        process = json.loads((attempt / "process.json").read_text())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"Unable to persist the complete OpenCode output log", result.stderr)
+        self.assertFalse(process["log_persisted"])
+        self.assertLessEqual((attempt / "agent.log").stat().st_size, 8192)
+        self.assertEqual(state["tickets"]["2"]["state"], "open")
+        self.assertEqual([event[0] for event in state["events"]], ["assign"])
+
+    def test_missing_opencode_cli_fails_before_claim(self) -> None:
+        limited_bin = self.controlled_path_directory("python3", "git", "gh")
+
+        result, runs = self.run_loop(extra_env={"PATH": str(limited_bin)})
+
+        self.assert_missing_executable_guidance(result, "opencode")
+        self.assert_missing_executable_stopped_before_run(runs)
+
+    def test_rejected_opencode_model_stops_without_retry_or_fallback(self) -> None:
+        self.state["model_rejected_for"] = "opencode"
+        self.save_state()
+
+        result, runs = self.run_loop("--max-iterations", "1")
+
+        state = self.load_state()
+        self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(state["opencode_calls"]), 1)
-        self.assertEqual(state["copilot_calls"], [])
-
-    def test_explicit_copilot_runs_without_an_opencode_executable(self) -> None:
-        limited_bin = self.controlled_path_directory("python3", "git", "gh", "copilot")
-
-        result, _ = self.run_loop(
-            "--max-iterations",
-            "1",
-            harness="copilot",
-            extra_env={"PATH": str(limited_bin)},
-        )
-
-        state = self.load_state()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(state["tickets"]["2"]["state"], "closed")
-        self.assertEqual(len(state["copilot_calls"]), 1)
-        self.assertEqual(state["opencode_calls"], [])
-
-    def test_rejected_model_stops_selected_harness_without_fallback(self) -> None:
-        for selected_harness, call_key, other_key in (
-            (None, "opencode_calls", "copilot_calls"),
-            ("copilot", "copilot_calls", "opencode_calls"),
-        ):
-            with self.subTest(harness=selected_harness or "default"):
-                self.state = self.default_state()
-                self.state["model_rejected_for"] = call_key.removesuffix("_calls")
-                self.save_state()
-
-                result, runs = self.run_loop(
-                    "--max-iterations",
-                    "1",
-                    harness=selected_harness,
-                )
-
-                state = self.load_state()
-                self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(len(state[call_key]), 1)
-                self.assertEqual(state[other_key], [])
-                self.assertEqual(state["tickets"]["2"]["state"], "open")
-                self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
-                self.assertEqual([event[0] for event in state["events"]], ["assign"])
-                attempt = runs[0] / "attempt-1-ticket-2"
-                self.assertEqual(json.loads((attempt / "process.json").read_text())["exit_code"], 1)
-                self.assertIn(b"Model unavailable", (attempt / "agent.log").read_bytes())
+        self.assertEqual(state["tickets"]["2"]["state"], "open")
+        self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
+        self.assertEqual([event[0] for event in state["events"]], ["assign"])
+        attempt = runs[0] / "attempt-1-ticket-2"
+        self.assertEqual(json.loads((attempt / "process.json").read_text())["exit_code"], 1)
+        self.assertIn(b"Model unavailable", (attempt / "agent.log").read_bytes())

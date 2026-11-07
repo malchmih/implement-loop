@@ -1,4 +1,4 @@
-"""Orchestrate a safe, sequential harness-backed ticket lifecycle."""
+"""Orchestrate a safe, sequential OpenCode-backed ticket lifecycle."""
 
 from __future__ import annotations
 
@@ -9,8 +9,6 @@ import stat
 import sys
 import tempfile
 import uuid
-from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -24,32 +22,16 @@ from .git import (
     require_new_descendant,
 )
 from .github import GitHub, JsonObject, Repository
-from .harness import HarnessSpec, ProcessOutcome, run_harness, select_harness
+from .harness import ProcessOutcome, run_opencode, select_opencode
 from .records import RunRecords
 
 _MAX_PROMPT_BYTES = 100_000
 
 
-class NormalStopReason(Enum):
-    """Why a Loop run stopped without an execution failure."""
-
-    NO_ELIGIBLE_CHILDREN = "No eligible children"
-    ATTEMPT_LIMIT_REACHED = "Attempt limit reached"
-
-
-@dataclass(frozen=True)
-class RunResult:
-    """Explicit normal-stop details returned after runner cleanup."""
-
-    repository_name: str
-    stop_reason: NormalStopReason
-
-
-def _require_command(name: str, *, harness: HarnessSpec | None = None) -> None:
+def _require_command(name: str) -> None:
     if shutil.which(name) is None:
-        harness_context = f" for the selected {harness.display_name} harness" if harness else ""
         raise LoopError(
-            f"Required executable {name!r}{harness_context} was not found on PATH. "
+            f"Required executable {name!r} was not found on PATH. "
             f"Manually install {name!r} or add it to PATH, then retry."
         )
 
@@ -230,7 +212,7 @@ def _record_result(
             ticket_number,
             attempt_id,
             "missing",
-            "The selected harness did not write the required per-attempt result file.",
+            "OpenCode did not write the required per-attempt result file.",
         )
 
     try:
@@ -345,15 +327,15 @@ def _reject_result(
     return None, message
 
 
-def _process_failure(outcome: ProcessOutcome, harness: HarnessSpec) -> list[str]:
+def _process_failure(outcome: ProcessOutcome) -> list[str]:
     failures: list[str] = []
     if outcome.spawn_error is not None:
         failures.append(outcome.spawn_error)
     elif outcome.exit_code != 0:
-        failures.append(f"{harness.display_name} exited with status {outcome.exit_code}.")
+        failures.append(f"OpenCode exited with status {outcome.exit_code}.")
     if not outcome.log_persisted:
         failures.append(
-            f"Unable to persist the complete {harness.display_name} output log"
+            "Unable to persist the complete OpenCode output log"
             + (f": {outcome.log_error}." if outcome.log_error else ".")
         )
     return failures
@@ -365,12 +347,11 @@ def _closure_comment(
     before_commit: str,
     spec_number: int,
     ticket_number: int,
-    harness: HarnessSpec,
 ) -> str:
     return (
         f"Implemented locally by implement-loop on branch {branch} at commit {commit}. "
         "The agent attested that acceptance criteria and required validation passed. "
-        f"The wrapper verified successful {harness.display_name} exit, "
+        "The wrapper verified successful OpenCode exit, "
         "persisted process/result records, "
         "valid per-attempt result evidence, an unchanged branch, a clean checkout, "
         "a new descendant commit was produced and verified from pre-attempt commit "
@@ -400,15 +381,14 @@ def _write_attempt_context(
     }
 
 
-def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
-    """Run up to the configured number of sequential harness-backed attempts."""
+def run(options: Options, diagnostics: DiagnosticContext) -> None:
+    """Run up to the configured number of sequential OpenCode-backed attempts."""
 
     os.umask(0o077)
     _require_command("git")
     _require_command("gh")
-    harness_settings = options.opencode if options.harness == "opencode" else options.copilot
-    harness = select_harness(options.harness, harness_settings)
-    _require_command(harness.executable, harness=harness)
+    harness = select_opencode(options.opencode)
+    _require_command(harness.executable)
     checkout = discover_checkout(Path.cwd())
     lock = RepositoryLock(checkout.common_dir)
     lock.acquire()
@@ -442,7 +422,6 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
 
         github = GitHub(checkout.root)
         repository = github.resolve_repository()
-        diagnostics.repository_name = repository.name_with_owner
         login = github.authenticated_login(repository)
         spec = github.get_spec(repository, options.spec_number)
         repository_url = spec.get("repository_url")
@@ -490,19 +469,13 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
                     f"{counts['open']} open candidates; {counts['blocked']} blocked; "
                     f"{counts['assigned']} otherwise assigned. Completed {completed} ticket(s)."
                 )
-                return RunResult(
-                    repository_name=repository.name_with_owner,
-                    stop_reason=NormalStopReason.NO_ELIGIBLE_CHILDREN,
-                )
+                return
             if attempts >= options.max_iterations:
                 print(
                     f"Attempt limit reached after {attempts} invocation(s); "
                     f"completed {completed} ticket(s)."
                 )
-                return RunResult(
-                    repository_name=repository.name_with_owner,
-                    stop_reason=NormalStopReason.ATTEMPT_LIMIT_REACHED,
-                )
+                return
 
             ticket_number = ticket["number"]
             diagnostics.ticket_number = ticket_number
@@ -545,7 +518,7 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
                 if os.path.lexists(result_path):
                     raise LoopError(
                         "The unique completion-result destination already exists; "
-                        "refusing to invoke the selected harness."
+                        "refusing to invoke OpenCode."
                     )
                 records.write_text(attempt_dir / "prompt.txt", prompt, exclusive=True)
                 records.write_json(
@@ -594,7 +567,7 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
                 def mark_harness_invocation_starting() -> None:
                     diagnostics.harness_invoked = True
 
-                outcome = run_harness(
+                outcome = run_opencode(
                     harness,
                     prompt,
                     checkout.root,
@@ -611,7 +584,7 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
                     ticket_number,
                     attempt_id,
                 )
-                failures = _process_failure(outcome, harness)
+                failures = _process_failure(outcome)
                 if result_error is not None:
                     failures.append(result_error)
                 if failures:
@@ -651,7 +624,6 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
                     before_head,
                     options.spec_number,
                     ticket_number,
-                    harness,
                 )
                 records.write_text(attempt_dir / "commit", f"{after_head}\n", exclusive=True)
                 records.write_text(

@@ -78,17 +78,15 @@ class PackagedExecutableTests(LoopTestCase):
         self.assertIn(b"Cannot read explicitly selected configuration file", missing_config.stderr)
         state = self.load_state()
         self.assertEqual(state["events"], [])
-        self.assertEqual(state["copilot_calls"], [])
         self.assertEqual(state["opencode_calls"], [])
 
     def test_one_file_binary_completes_a_controlled_workflow(self) -> None:
-        result, _ = self.run_loop(harness="copilot", executable=self.executable)
+        result, _ = self.run_loop(executable=self.executable)
 
         state = self.load_state()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(state["tickets"]["2"]["state"], "closed")
         self.assertEqual([event[0] for event in state["events"]], ["assign", "close"])
-        self.assertEqual(len(state["copilot_calls"]), 1)
-        self.assertEqual(state["opencode_calls"], [])
+        self.assertEqual(len(state["opencode_calls"]), 1)
         self.assertTrue((self.repo / "implementation-2.txt").is_file())
         self.assertEqual(self.git("status", "--porcelain"), "")

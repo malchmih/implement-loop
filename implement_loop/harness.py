@@ -1,4 +1,4 @@
-"""Harness CLI adapters and live output persistence."""
+"""OpenCode invocation and live output persistence."""
 
 from __future__ import annotations
 
@@ -14,29 +14,24 @@ from typing import Any, BinaryIO, Literal
 
 from .errors import LoopError
 
-HarnessName = Literal["opencode", "copilot"]
-
 
 @dataclass(frozen=True)
 class HarnessSettings:
-    """User-selected model and reasoning values for one harness."""
+    """User-selected model values for the OpenCode invocation."""
 
     model: str
     model_variant: str | None = None
-    reasoning_effort: str | None = None
 
 
 @dataclass(frozen=True)
 class HarnessSpec:
-    """Pinned invocation details for one supported harness."""
+    """Invocation details for the supported OpenCode command."""
 
-    name: HarnessName
+    name: Literal["opencode"]
     executable: str
     display_name: str
-    output_format: Literal["text", "json"]
     model: str
     model_variant: str | None
-    reasoning_effort: str | None
     skill_reference: str
 
     @property
@@ -47,110 +42,46 @@ class HarnessSpec:
 
     @property
     def model_summary(self) -> str:
-        if self.model_variant is not None:
-            return self.model_selector
-        if self.reasoning_effort is not None:
-            return f"{self.model} / {self.reasoning_effort} reasoning"
-        return self.model
+        return self.model_selector
 
     def metadata(self) -> dict[str, str | None]:
         return {
             "harness": self.name,
             "model": self.model,
             "model_variant": self.model_variant,
-            "reasoning_effort": self.reasoning_effort,
         }
 
     def command(self, prompt: str) -> list[str]:
-        if self.name == "opencode":
-            return [
-                self.executable,
-                "run",
-                "--standalone",
-                "--auto",
-                "--model",
-                self.model_selector,
-                "--format",
-                self.output_format,
-                prompt,
-            ]
-
-        assert self.reasoning_effort is not None
         return [
             self.executable,
-            "--trust-folder",
-            "-p",
-            prompt,
+            "run",
+            "--standalone",
+            "--auto",
             "--model",
-            self.model,
-            "--reasoning-effort",
-            self.reasoning_effort,
-            "--stream",
-            "on",
-            "--output-format",
-            self.output_format,
-            "--allow-all-tools",
+            self.model_selector,
+            "--format",
+            "json",
+            prompt,
         ]
 
 
-_HARNESS_SPECS: dict[str, HarnessSpec] = {
-    "opencode": HarnessSpec(
+def default_opencode_settings() -> HarnessSettings:
+    """Return the default OpenCode model selection."""
+
+    return HarnessSettings(model="github-copilot/gpt-6-luna", model_variant="max")
+
+
+def select_opencode(settings: HarnessSettings | None = None) -> HarnessSpec:
+    """Return the OpenCode invocation with the selected model settings."""
+
+    selected = settings or default_opencode_settings()
+    return HarnessSpec(
         name="opencode",
         executable="opencode",
         display_name="OpenCode",
-        output_format="json",
-        model="github-copilot/gpt-6-luna",
-        model_variant="max",
-        reasoning_effort=None,
-        skill_reference="@implement",
-    ),
-    "copilot": HarnessSpec(
-        name="copilot",
-        executable="copilot",
-        display_name="Copilot",
-        output_format="text",
-        model="gpt-6-luna",
-        model_variant=None,
-        reasoning_effort="max",
-        skill_reference="/implement",
-    ),
-}
-
-
-def _harness_spec(name: str) -> HarnessSpec:
-    try:
-        return _HARNESS_SPECS[name]
-    except KeyError as error:
-        raise LoopError(
-            f"Unknown harness {name!r}; choose either 'opencode' or 'copilot'."
-        ) from error
-
-
-def default_harness_settings(name: str) -> HarnessSettings:
-    """Return the pinned model defaults for a supported harness."""
-
-    spec = _harness_spec(name)
-    return HarnessSettings(
-        model=spec.model,
-        model_variant=spec.model_variant,
-        reasoning_effort=spec.reasoning_effort,
-    )
-
-
-def select_harness(name: str, settings: HarnessSettings | None = None) -> HarnessSpec:
-    """Return the documented invocation with the selected model settings."""
-
-    spec = _harness_spec(name)
-    selected = settings or default_harness_settings(name)
-    return HarnessSpec(
-        name=spec.name,
-        executable=spec.executable,
-        display_name=spec.display_name,
-        output_format=spec.output_format,
         model=selected.model,
         model_variant=selected.model_variant,
-        reasoning_effort=selected.reasoning_effort,
-        skill_reference=spec.skill_reference,
+        skill_reference="@implement",
     )
 
 
@@ -1237,7 +1168,7 @@ class _OpenCodeRenderer:
         )
 
 
-def run_harness(
+def run_opencode(
     harness: HarnessSpec,
     prompt: str,
     cwd: Path,
@@ -1251,8 +1182,6 @@ def run_harness(
         harness.command(prompt),
         cwd,
         log_path,
-        harness.display_name,
-        render_opencode=harness.output_format == "json",
         on_invocation_starting=on_invocation_starting,
     )
 
@@ -1261,9 +1190,7 @@ def _run_process(
     command: Sequence[str],
     cwd: Path,
     log_path: Path,
-    display_name: str,
     *,
-    render_opencode: bool = False,
     on_invocation_starting: Callable[[], None] | None = None,
 ) -> ProcessOutcome:
     environment = os.environ.copy()
@@ -1277,9 +1204,7 @@ def _run_process(
     try:
         descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except OSError as error:
-        raise LoopError(
-            f"Cannot create private {display_name} output log {log_path}: {error}"
-        ) from error
+        raise LoopError(f"Cannot create private OpenCode output log {log_path}: {error}") from error
     process: subprocess.Popen[bytes] | None = None
     exit_code: int | None = None
     log_error: str | None = None
@@ -1298,7 +1223,7 @@ def _run_process(
             stderr=subprocess.STDOUT,
         )
     except OSError as error:
-        spawn_error = f"{display_name} could not be started: {error}"
+        spawn_error = f"OpenCode could not be started: {error}"
         with os.fdopen(descriptor, "wb"):
             pass
         return ProcessOutcome(
@@ -1324,12 +1249,12 @@ def _run_process(
             output.write(value.encode("utf-8", errors="replace"))
             output.flush()
 
-    renderer = _OpenCodeRenderer(write_text, color=color) if render_opencode else None
+    renderer = _OpenCodeRenderer(write_text, color=color)
     try:
         with os.fdopen(descriptor, "wb") as log_file:
             if process.stdout is None:
                 log_persisted = False
-                log_error = f"{display_name} output stream was unavailable."
+                log_error = "OpenCode output stream was unavailable."
             else:
                 while True:
                     chunk = os.read(process.stdout.fileno(), 8192)
@@ -1344,16 +1269,10 @@ def _run_process(
                             log_error = str(error)
                     if stream_error is None:
                         try:
-                            if renderer is not None:
-                                renderer.feed(chunk)
-                            elif output is None:
-                                write_text(chunk.decode("utf-8", errors="replace"))
-                            else:
-                                output.write(chunk)
-                                output.flush()
+                            renderer.feed(chunk)
                         except (BrokenPipeError, OSError) as error:
                             stream_error = str(error)
-                if renderer is not None and stream_error is None:
+                if stream_error is None:
                     try:
                         renderer.finish()
                     except (BrokenPipeError, OSError) as error:

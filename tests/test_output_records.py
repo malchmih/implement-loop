@@ -22,8 +22,8 @@ class OutputRecordsTests(LoopTestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         state = self.load_state()
-        self.assertEqual(state["copilot_calls"][0]["no_color"], "1")
-        self.assertEqual(state["copilot_calls"][0]["force_color"], "0")
+        self.assertEqual(state["opencode_calls"][0]["no_color"], "1")
+        self.assertEqual(state["opencode_calls"][0]["force_color"], "0")
         run_dir = runs[-1]
         attempt = run_dir / "attempt-1-ticket-2"
         self.assertEqual(stat.S_IMODE(run_dir.stat().st_mode), 0o700)
@@ -46,14 +46,13 @@ class OutputRecordsTests(LoopTestCase):
         self.assertFalse((self.home / ".local/state/implement-loop").exists())
 
     def test_records_directory_cannot_contain_the_target_checkout(self) -> None:
-        result, runs = self.run_loop("--records-dir", str(self.home), harness=None)
+        result, runs = self.run_loop("--records-dir", str(self.home))
 
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"must be a dedicated directory outside the target checkout", result.stderr)
         self.assertEqual(state["events"], [])
         self.assertEqual(state["opencode_calls"], [])
-        self.assertEqual(state["copilot_calls"], [])
         self.assertEqual(runs, [])
         self.assertFalse((self.repo / ".git/implement-loop.lock").exists())
 
@@ -68,7 +67,6 @@ class OutputRecordsTests(LoopTestCase):
         result, _ = self.run_loop(
             "--records-dir",
             str(shared_dir),
-            harness=None,
         )
 
         self.assertNotEqual(result.returncode, 0)
@@ -99,7 +97,6 @@ class OutputRecordsTests(LoopTestCase):
         self.save_state()
 
         result, _ = self.run_loop(
-            harness=None,
             extra_env={"XDG_CONFIG_HOME": str(config_home)},
         )
         runs = sorted(path for path in records_dir.glob("run-*") if (path / "run.json").is_file())
@@ -143,7 +140,6 @@ class OutputRecordsTests(LoopTestCase):
             str(cli_records_dir),
             "--retention-days",
             "14",
-            harness=None,
             extra_env={"XDG_CONFIG_HOME": str(config_home)},
         )
         runs = sorted(
@@ -191,7 +187,6 @@ class OutputRecordsTests(LoopTestCase):
 
                 result, _ = self.run_loop(
                     *args,
-                    harness=None,
                     extra_env={"XDG_CONFIG_HOME": str(config_home)},
                 )
                 runs = sorted(
@@ -254,7 +249,7 @@ class OutputRecordsTests(LoopTestCase):
         (target / "agent.log").write_text("symlink target\n")
         link = state_dir / "run-20000101T000000Z-ABC123"
         link.symlink_to(target, target_is_directory=True)
-        legacy = self.home / ".local/state/copilot-ralph/run-20000101T000000Z-ABC123"
+        legacy = self.home / ".local/state/other-tool/run-20000101T000000Z-ABC123"
         legacy.mkdir(parents=True)
         (legacy / "agent.log").write_text("legacy\n")
         self.state["tickets"]["2"]["assignees"] = [{"login": "tester"}]

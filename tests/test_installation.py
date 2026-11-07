@@ -231,7 +231,6 @@ class SourceCommandIntegrationTests(LoopTestCase):
         result, _ = self.run_loop(
             "--max-iterations",
             "1",
-            harness=None,
             cwd=nested,
             executable=SCRIPT,
         )
@@ -275,7 +274,6 @@ class SourceCommandIntegrationTests(LoopTestCase):
         state_home = self.home / "configured XDG state"
 
         result, _ = self.run_loop(
-            harness=None,
             cwd=nested,
             executable=SCRIPT,
             extra_env={
@@ -287,7 +285,6 @@ class SourceCommandIntegrationTests(LoopTestCase):
         state = self.load_state()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual([call["ticket"] for call in state["opencode_calls"]], [3, 2])
-        self.assertEqual(state["copilot_calls"], [])
         self.assertEqual(state["tickets"]["3"]["state"], "closed")
         self.assertEqual(state["tickets"]["2"]["state"], "closed")
         self.assertEqual(state["tickets"]["4"]["state"], "open")
@@ -352,7 +349,7 @@ class SourceCommandIntegrationTests(LoopTestCase):
             self.assertFalse((source / f"implementation-{ticket_number}.txt").exists())
         self.assertEqual(self.git("status", "--porcelain"), "")
 
-    def test_source_copilot_requires_new_commit_for_already_committed_work(self) -> None:
+    def test_source_opencode_requires_new_commit_for_already_committed_work(self) -> None:
         existing_implementation = self.repo / "implementation-2.txt"
         existing_implementation.write_text("implementation committed before approval\n")
         self.git("add", existing_implementation.name)
@@ -365,11 +362,10 @@ class SourceCommandIntegrationTests(LoopTestCase):
         config_file.parent.mkdir(parents=True)
         config_file.write_text(
             "[execution]\n"
-            'harness = "opencode"\n'
             "max_attempts = 2\n\n"
-            "[execution.harnesses.copilot]\n"
-            'model = "provider/custom-copilot"\n'
-            'reasoning_effort = "high"\n\n'
+            "[execution.harnesses.opencode]\n"
+            'model = "provider/custom-opencode"\n'
+            'variant = "high"\n\n'
             "[records]\n"
             f'directory = "{records_dir}"\n'
             "retention_days = 30\n"
@@ -383,7 +379,6 @@ class SourceCommandIntegrationTests(LoopTestCase):
         self.save_state()
 
         result, _ = self.run_loop(
-            harness="copilot",
             executable=SCRIPT,
             extra_env={"XDG_CONFIG_HOME": str(config_home)},
         )
@@ -391,8 +386,7 @@ class SourceCommandIntegrationTests(LoopTestCase):
         state = self.load_state()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"No new commit was made", result.stderr)
-        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
-        self.assertEqual(state["opencode_calls"], [])
+        self.assertEqual([call["ticket"] for call in state["opencode_calls"]], [2])
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
         self.assertEqual(state["tickets"]["3"]["state"], "open")
@@ -408,15 +402,11 @@ class SourceCommandIntegrationTests(LoopTestCase):
             existing_implementation.read_text(), "implementation committed before approval\n"
         )
 
-        for call in state["copilot_calls"]:
+        for call in state["opencode_calls"]:
             arguments = call["args"]
             self.assertEqual(
                 arguments[arguments.index("--model") + 1],
-                "provider/custom-copilot",
-            )
-            self.assertEqual(
-                arguments[arguments.index("--reasoning-effort") + 1],
-                "high",
+                "provider/custom-opencode#high",
             )
             self.assertTrue(call["result_initially_absent"])
 
@@ -424,15 +414,15 @@ class SourceCommandIntegrationTests(LoopTestCase):
         self.assertEqual(len(run_directories), 1)
         run_dir = run_directories[0]
         run_metadata = json.loads((run_dir / "run.json").read_text())
-        self.assertEqual(run_metadata["harness"], "copilot")
-        self.assertEqual(run_metadata["model"], "provider/custom-copilot")
-        self.assertEqual(run_metadata["reasoning_effort"], "high")
+        self.assertEqual(run_metadata["harness"], "opencode")
+        self.assertEqual(run_metadata["model"], "provider/custom-opencode")
         self.assertEqual(run_metadata["max_iterations"], 2)
         self.assertEqual(run_metadata["retention_days"], 30)
 
         attempt = run_dir / "attempt-1-ticket-2"
-        self.assertIn("requires a new local descendant commit", state["copilot_calls"][0]["prompt"])
-        self.assertIn("Human approval received.", state["copilot_calls"][0]["prompt"])
+        prompt = state["opencode_calls"][0]["prompt"]
+        self.assertIn("requires a new local descendant commit", prompt)
+        self.assertIn("Human approval received.", prompt)
         self.assertTrue((attempt / "completion.json").is_file())
         self.assertFalse((attempt / "checks.json").exists())
         self.assertEqual(

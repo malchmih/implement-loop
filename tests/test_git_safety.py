@@ -16,7 +16,7 @@ class GitSafetyTests(LoopTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"checkout is not clean", result.stderr)
         self.assertEqual(state["events"], [])
-        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(state["opencode_calls"], [])
         self.assertTrue((self.repo / "untracked.txt").is_file())
 
     def test_detached_head_is_rejected_before_github_access(self) -> None:
@@ -37,7 +37,7 @@ class GitSafetyTests(LoopTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"existing commit", result.stderr)
         self.assertEqual(self.load_state()["events"], [])
-        self.assertEqual(self.load_state()["copilot_calls"], [])
+        self.assertEqual(self.load_state()["opencode_calls"], [])
         self.assertEqual(self.git("branch", "--show-current"), "unborn")
         self.assertFalse((self.repo / ".git/implement-loop.lock").exists())
 
@@ -82,7 +82,7 @@ class GitSafetyTests(LoopTestCase):
                 self.assertIn(failure.encode(), result.stderr)
                 self.assertNotIn(misleading_state.encode(), result.stderr)
                 self.assertEqual(self.load_state()["events"], [])
-                self.assertEqual(self.load_state()["copilot_calls"], [])
+                self.assertEqual(self.load_state()["opencode_calls"], [])
 
     def test_repository_common_lock_blocks_a_second_worktree(self) -> None:
         worktree = self.home / "other-worktree"
@@ -108,7 +108,7 @@ class GitSafetyTests(LoopTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"stale lock exists", result.stderr)
         self.assertEqual(self.load_state()["events"], [])
-        self.assertEqual(self.load_state()["copilot_calls"], [])
+        self.assertEqual(self.load_state()["opencode_calls"], [])
         self.assertEqual((lock / "pid").read_text(), "another loop\n")
 
     def test_conflicting_github_repository_override_is_rejected(self) -> None:
@@ -117,7 +117,7 @@ class GitSafetyTests(LoopTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"GH_REPO conflicts", result.stderr)
         self.assertEqual(self.load_state()["events"], [])
-        self.assertEqual(self.load_state()["copilot_calls"], [])
+        self.assertEqual(self.load_state()["opencode_calls"], [])
 
     def test_matching_github_repository_override_is_allowed(self) -> None:
         result, _ = self.run_loop(
@@ -176,44 +176,35 @@ class GitSafetyTests(LoopTestCase):
         self.assertIn("implementation-2.txt", self.git("show", "--pretty=", "--name-only"))
         self.assertTrue((runs[0] / "attempt-1-ticket-2/process.json").is_file())
 
-    def test_both_harnesses_share_git_and_ownership_completion_checks(self) -> None:
-        for harness, selected_calls, unselected_calls in (
-            (None, "opencode_calls", "copilot_calls"),
-            ("copilot", "copilot_calls", "opencode_calls"),
-        ):
-            for action in ("dirty", "change_owner"):
-                with self.subTest(harness=harness or "default", action=action):
-                    self.state = self.default_state()
-                    self.state["agent_action"] = action
-                    self.save_state()
+    def test_opencode_requires_clean_checkout_and_exclusive_ownership(self) -> None:
+        for action in ("dirty", "change_owner"):
+            with self.subTest(action=action):
+                self.state = self.default_state()
+                self.state["agent_action"] = action
+                self.save_state()
 
-                    result, runs = self.run_loop(
-                        "--max-iterations",
-                        "1",
-                        harness=harness,
-                    )
+                result, runs = self.run_loop("--max-iterations", "1")
 
-                    state = self.load_state()
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertEqual(len(state[selected_calls]), 1)
-                    self.assertEqual(state[unselected_calls], [])
-                    self.assertEqual(state["tickets"]["2"]["state"], "open")
-                    self.assertEqual([event[0] for event in state["events"]], ["assign"])
-                    self.assertIn(
-                        "implementation-2.txt",
-                        self.git("show", "--pretty=", "--name-only"),
+                state = self.load_state()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(len(state["opencode_calls"]), 1)
+                self.assertEqual(state["tickets"]["2"]["state"], "open")
+                self.assertEqual([event[0] for event in state["events"]], ["assign"])
+                self.assertIn(
+                    "implementation-2.txt",
+                    self.git("show", "--pretty=", "--name-only"),
+                )
+                self.assertTrue((runs[0] / "attempt-1-ticket-2/process.json").is_file())
+                if action == "dirty":
+                    self.assertIn(b"checkout is not clean", result.stderr)
+                    self.assertTrue((self.repo / "unfinished.txt").is_file())
+                    (self.repo / "unfinished.txt").unlink()
+                else:
+                    self.assertIn(b"no longer open, unblocked", result.stderr)
+                    self.assertEqual(
+                        state["tickets"]["2"]["assignees"],
+                        [{"login": "tester"}, {"login": "other"}],
                     )
-                    self.assertTrue((runs[0] / "attempt-1-ticket-2/process.json").is_file())
-                    if action == "dirty":
-                        self.assertIn(b"checkout is not clean", result.stderr)
-                        self.assertTrue((self.repo / "unfinished.txt").is_file())
-                        (self.repo / "unfinished.txt").unlink()
-                    else:
-                        self.assertIn(b"no longer open, unblocked", result.stderr)
-                        self.assertEqual(
-                            state["tickets"]["2"]["assignees"],
-                            [{"login": "tester"}, {"login": "other"}],
-                        )
 
     def test_changed_branch_is_rejected(self) -> None:
         self.state["agent_action"] = "branch"

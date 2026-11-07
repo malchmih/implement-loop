@@ -34,7 +34,7 @@ On Ubuntu, install `binutils` for the `objdump` tool required by PyInstaller.
 changes. `make install` rebuilds and installs to `$(PREFIX)/bin/implement-loop`
 (`~/.local/bin/implement-loop` by default); rerun it after source changes. uv
 provisions Python 3.11 and the locked build dependencies. The executable includes
-Python but does not bundle Git, authenticated `gh`, a harness CLI, or the external
+Python but does not bundle Git, authenticated `gh`, OpenCode, or the external
 `implement` skill. The macOS executable is not Developer ID-signed or notarized, so
 Gatekeeper may warn or block it. On Linux, the one-file executable needs a writable,
 executable temporary directory; set `TMPDIR` if the default is mounted `noexec`.
@@ -48,7 +48,7 @@ guidance.
 
 `make test-packaged` installs into a smoke-test prefix and runs the installed
 executable outside the checkout, including startup without Python on `PATH`, and a
-controlled workflow with fake `gh` and harness commands; it makes no live model
+controlled workflow with fake `gh` and OpenCode commands; it makes no live model
 calls or GitHub writes.
 
 ## CI

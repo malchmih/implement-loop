@@ -55,7 +55,6 @@ try:
                 "repository_matches": actual_root == case.repo.resolve(),
                 "ticket_state": state["tickets"]["2"]["state"],
                 "events": [event[0] for event in state["events"]],
-                "copilot_calls": len(state["copilot_calls"]),
                 "opencode_calls": len(state["opencode_calls"]),
                 "run_count": len(runs),
                 "initial_head": initial_head,
@@ -137,8 +136,7 @@ class FixtureIsolationTests(LoopTestCase):
         self.assertTrue(report["repository_matches"])
         self.assertEqual(report["ticket_state"], "closed")
         self.assertEqual(report["events"], ["assign", "close"])
-        self.assertEqual(report["copilot_calls"], 1)
-        self.assertEqual(report["opencode_calls"], 0)
+        self.assertEqual(report["opencode_calls"], 1)
         self.assertEqual(report["run_count"], 1)
         self.assertNotEqual(report["initial_head"], report["final_head"])
         self.assertTrue(report["descendant"])

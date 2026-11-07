@@ -11,12 +11,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from .harness import HarnessSettings, default_harness_settings
+from .harness import HarnessSettings, default_opencode_settings
 from .records import RunRecordSettings
 
 _POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]{0,8}$")
 _NONNEGATIVE_INTEGER = re.compile(r"^(0|[1-9][0-9]{0,8})$")
-_COPILOT_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 _MAX_INTEGER = 999_999_999
 _DEFAULT_MAX_ITERATIONS = 5
 _DEFAULT_RETENTION_DAYS = 7
@@ -28,9 +27,7 @@ class Options:
 
     spec_number: int
     max_iterations: int
-    harness: str
     opencode: HarnessSettings
-    copilot: HarnessSettings
     records: RunRecordSettings
     config_file: Path | None
 
@@ -49,10 +46,8 @@ class _RecordPreferences:
 class _Preferences:
     """Configuration values before the positional spec number is attached."""
 
-    harness: str
     max_iterations: int
     opencode: HarnessSettings
-    copilot: HarnessSettings
     records: _RecordPreferences
 
 
@@ -76,13 +71,6 @@ def _nonempty_setting(value: str) -> str:
         or any(character.isspace() for character in value)
     ):
         raise argparse.ArgumentTypeError("must be a non-empty value without whitespace or NUL")
-    return value
-
-
-def _reasoning_effort_argument(value: str) -> str:
-    if value not in _COPILOT_REASONING_EFFORTS:
-        choices = ", ".join(_COPILOT_REASONING_EFFORTS)
-        raise argparse.ArgumentTypeError(f"reasoning effort must be one of: {choices}")
     return value
 
 
@@ -189,14 +177,6 @@ def _config_setting_string(value: Any, context: str) -> str:
     return value
 
 
-def _config_reasoning_effort(value: Any, context: str) -> str:
-    effort = _config_setting_string(value, context)
-    if effort not in _COPILOT_REASONING_EFFORTS:
-        choices = ", ".join(_COPILOT_REASONING_EFFORTS)
-        raise _ConfigurationError(f"{context} must be one of: {choices}.")
-    return effort
-
-
 def _config_integer(value: Any, context: str, *, allow_zero: bool) -> int:
     minimum = 0 if allow_zero else 1
     if type(value) is not int or not minimum <= value <= _MAX_INTEGER:
@@ -211,54 +191,26 @@ def _config_path(value: Any, context: str) -> Path:
     return _resolve_path(value, context)
 
 
-def _apply_harness_table(
-    name: str, settings: HarnessSettings, table: dict[str, Any]
-) -> HarnessSettings:
-    if name == "opencode":
-        _reject_unknown_keys(table, {"model", "variant"}, f"execution.harnesses.{name}")
-        model = (
-            _config_setting_string(table["model"], f"execution.harnesses.{name}.model")
-            if "model" in table
-            else settings.model
-        )
-        variant = (
-            _config_setting_string(table["variant"], f"execution.harnesses.{name}.variant")
-            if "variant" in table
-            else settings.model_variant
-        )
-        return replace(settings, model=model, model_variant=variant)
-
-    _reject_unknown_keys(
-        table,
-        {"model", "reasoning_effort"},
-        f"execution.harnesses.{name}",
-    )
+def _apply_opencode_table(settings: HarnessSettings, table: dict[str, Any]) -> HarnessSettings:
+    context = "execution.harnesses.opencode"
+    _reject_unknown_keys(table, {"model", "variant"}, context)
     model = (
-        _config_setting_string(table["model"], f"execution.harnesses.{name}.model")
+        _config_setting_string(table["model"], f"{context}.model")
         if "model" in table
         else settings.model
     )
-    reasoning_effort = (
-        _config_reasoning_effort(
-            table["reasoning_effort"],
-            f"execution.harnesses.{name}.reasoning_effort",
-        )
-        if "reasoning_effort" in table
-        else settings.reasoning_effort
+    variant = (
+        _config_setting_string(table["variant"], f"{context}.variant")
+        if "variant" in table
+        else settings.model_variant
     )
-    return replace(settings, model=model, reasoning_effort=reasoning_effort)
+    return replace(settings, model=model, model_variant=variant)
 
 
 def _apply_config(document: dict[str, Any], preferences: _Preferences) -> _Preferences:
     _reject_unknown_keys(document, {"execution", "records"}, "root")
     execution = _section(document, "execution", "root")
-    _reject_unknown_keys(execution, {"harness", "max_attempts", "harnesses"}, "execution")
-
-    if "harness" in execution:
-        configured_harness = execution["harness"]
-        if configured_harness not in ("opencode", "copilot"):
-            raise _ConfigurationError("execution.harness must be either 'opencode' or 'copilot'.")
-        preferences = replace(preferences, harness=configured_harness)
+    _reject_unknown_keys(execution, {"max_attempts", "harnesses"}, "execution")
     if "max_attempts" in execution:
         preferences = replace(
             preferences,
@@ -268,23 +220,13 @@ def _apply_config(document: dict[str, Any], preferences: _Preferences) -> _Prefe
         )
 
     harnesses = _section(execution, "harnesses", "execution")
-    _reject_unknown_keys(harnesses, {"opencode", "copilot"}, "execution.harnesses")
+    _reject_unknown_keys(harnesses, {"opencode"}, "execution.harnesses")
     if "opencode" in harnesses:
         preferences = replace(
             preferences,
-            opencode=_apply_harness_table(
-                "opencode",
+            opencode=_apply_opencode_table(
                 preferences.opencode,
                 _table(harnesses["opencode"], "execution.harnesses.opencode"),
-            ),
-        )
-    if "copilot" in harnesses:
-        preferences = replace(
-            preferences,
-            copilot=_apply_harness_table(
-                "copilot",
-                preferences.copilot,
-                _table(harnesses["copilot"], "execution.harnesses.copilot"),
             ),
         )
 
@@ -319,10 +261,8 @@ def _apply_config(document: dict[str, Any], preferences: _Preferences) -> _Prefe
 
 def _default_preferences() -> _Preferences:
     return _Preferences(
-        harness="opencode",
         max_iterations=_DEFAULT_MAX_ITERATIONS,
-        opencode=default_harness_settings("opencode"),
-        copilot=default_harness_settings("copilot"),
+        opencode=default_opencode_settings(),
         records=_RecordPreferences(directory=None, retention_days=_DEFAULT_RETENTION_DAYS),
     )
 
@@ -343,7 +283,7 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
         prog="implement-loop",
         description=("Implement eligible, prepared direct child issues of a GitHub spec."),
         epilog=(
-            "Each selected-harness invocation is one attempt. The loop stops successfully "
+            "Each OpenCode invocation is one attempt. The loop stops successfully "
             "when no eligible child remains. User settings are read from "
             "${XDG_CONFIG_HOME:-~/.config}/implement-loop/config.toml."
         ),
@@ -356,17 +296,11 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
         help="use this TOML file instead of the discovered user configuration",
     )
     parser.add_argument(
-        "--harness",
-        choices=("opencode", "copilot"),
-        default=None,
-        help="agent CLI to run (default: opencode)",
-    )
-    parser.add_argument(
         "--max-iterations",
         metavar="N",
         type=_positive_integer,
         default=None,
-        help="maximum selected-harness invocations (default: 5)",
+        help="maximum OpenCode invocations (default: 5)",
     )
     parser.add_argument(
         "--opencode-model",
@@ -379,18 +313,6 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
         metavar="VARIANT",
         type=_nonempty_setting,
         help="OpenCode model variant (default: max)",
-    )
-    parser.add_argument(
-        "--copilot-model",
-        metavar="MODEL",
-        type=_nonempty_setting,
-        help="Copilot model name",
-    )
-    parser.add_argument(
-        "--copilot-reasoning-effort",
-        metavar="EFFORT",
-        type=_reasoning_effort_argument,
-        help="Copilot reasoning effort (default: max)",
     )
     parser.add_argument(
         "--records-dir",
@@ -417,8 +339,6 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
         config_file, document = _selected_config_file(parsed.config_file)
         preferences = _apply_config(document, _default_preferences())
 
-        if parsed.harness is not None:
-            preferences = replace(preferences, harness=parsed.harness)
         if parsed.max_iterations is not None:
             preferences = replace(preferences, max_iterations=parsed.max_iterations)
         if parsed.opencode_model is not None:
@@ -431,20 +351,6 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
                 preferences,
                 opencode=replace(preferences.opencode, model_variant=parsed.opencode_variant),
             )
-        if parsed.copilot_model is not None:
-            preferences = replace(
-                preferences,
-                copilot=replace(preferences.copilot, model=parsed.copilot_model),
-            )
-        if parsed.copilot_reasoning_effort is not None:
-            preferences = replace(
-                preferences,
-                copilot=replace(
-                    preferences.copilot,
-                    reasoning_effort=parsed.copilot_reasoning_effort,
-                ),
-            )
-
         if parsed.records_dir is not None:
             records_directory = _resolve_path(parsed.records_dir, "--records-dir")
         elif preferences.records.directory is not None:
@@ -467,9 +373,7 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
     return Options(
         spec_number=parsed.spec_number,
         max_iterations=preferences.max_iterations,
-        harness=preferences.harness,
         opencode=preferences.opencode,
-        copilot=preferences.copilot,
         records=records,
         config_file=config_file,
     )

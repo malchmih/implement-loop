@@ -18,7 +18,7 @@ class IssueLifecycleTests(LoopTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"missing readable native dependency data", result.stderr)
         self.assertEqual(self.load_state()["events"], [])
-        self.assertEqual(self.load_state()["copilot_calls"], [])
+        self.assertEqual(self.load_state()["opencode_calls"], [])
 
     def test_malformed_issue_metadata_fails_closed_before_claim(self) -> None:
         cases = ("missing_parent_repository", "non_integer_blocker_count", "boolean_child_number")
@@ -39,7 +39,7 @@ class IssueLifecycleTests(LoopTestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(state["tickets"]["2"]["assignees"], [])
                 self.assertEqual(state["events"], [])
-                self.assertEqual(state["copilot_calls"], [])
+                self.assertEqual(state["opencode_calls"], [])
 
     def test_failed_required_queue_read_stops_before_claim(self) -> None:
         self.add_ticket(3)
@@ -52,7 +52,7 @@ class IssueLifecycleTests(LoopTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"simulated required GitHub API read failure", result.stderr)
         self.assertEqual(state["events"], [])
-        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(state["opencode_calls"], [])
         self.assertEqual(state["tickets"]["2"]["assignees"], [])
         self.assertEqual(state["tickets"]["3"]["assignees"], [])
 
@@ -74,9 +74,9 @@ class IssueLifecycleTests(LoopTestCase):
         self.assertTrue(attempt.is_dir())
         self.assertEqual(list(attempt.iterdir()), [])
         self.assertEqual(self.load_state()["events"], [])
-        self.assertEqual(self.load_state()["copilot_calls"], [])
+        self.assertEqual(self.load_state()["opencode_calls"], [])
 
-    def test_harness_log_creation_failure_reports_no_invocation_started(self) -> None:
+    def test_opencode_log_creation_failure_reports_no_invocation_started(self) -> None:
         self.state["precreate_agent_log_before_invocation"] = True
         self.save_state()
 
@@ -84,18 +84,18 @@ class IssueLifecycleTests(LoopTestCase):
 
         attempt = runs[0] / "attempt-1-ticket-2"
         self.assertEqual(result.returncode, 1, result.stderr.decode())
-        self.assertIn(b"Cannot create private Copilot output log", result.stderr)
+        self.assertIn(b"Cannot create private OpenCode output log", result.stderr)
         self.assertIn(f"Run records: {runs[0].resolve()}".encode(), result.stderr)
         self.assertIn(
             f"Ticket #2 records (no harness invocation started): {attempt.resolve()}".encode(),
             result.stderr,
         )
-        self.assertEqual(self.load_state()["copilot_calls"], [])
+        self.assertEqual(self.load_state()["opencode_calls"], [])
         self.assertEqual(self.load_state()["tickets"]["2"]["assignees"], [{"login": "tester"}])
         self.assertEqual((attempt / "agent.log").read_text(), "preexisting log record\n")
 
-    def test_harness_spawn_failure_reports_no_invocation_started(self) -> None:
-        self.state["remove_copilot_before_invocation"] = True
+    def test_opencode_spawn_failure_reports_no_invocation_started(self) -> None:
+        self.state["remove_opencode_before_invocation"] = True
         self.save_state()
         spawn_bin = self.home / "spawn-failure-bin"
         spawn_bin.mkdir()
@@ -103,7 +103,7 @@ class IssueLifecycleTests(LoopTestCase):
             ("python3", Path(sys.executable)),
             ("git", Path(shutil.which("git", path=self.env["PATH"]) or "")),
             ("gh", self.bin / "gh"),
-            ("copilot", self.bin / "copilot"),
+            ("opencode", self.bin / "opencode"),
         ):
             self.assertTrue(target.is_file(), f"missing fixture executable: {target}")
             (spawn_bin / name).symlink_to(target)
@@ -112,13 +112,13 @@ class IssueLifecycleTests(LoopTestCase):
 
         attempt = runs[0] / "attempt-1-ticket-2"
         self.assertEqual(result.returncode, 1, result.stderr.decode())
-        self.assertIn(b"Copilot could not be started", result.stderr)
+        self.assertIn(b"OpenCode could not be started", result.stderr)
         self.assertIn(f"Run records: {runs[0].resolve()}".encode(), result.stderr)
         self.assertIn(
             f"Ticket #2 records (no harness invocation started): {attempt.resolve()}".encode(),
             result.stderr,
         )
-        self.assertEqual(self.load_state()["copilot_calls"], [])
+        self.assertEqual(self.load_state()["opencode_calls"], [])
         self.assertEqual(self.load_state()["tickets"]["2"]["assignees"], [{"login": "tester"}])
         process = json.loads((attempt / "process.json").read_text())
         self.assertIsNone(process["exit_code"])
@@ -140,7 +140,7 @@ class IssueLifecycleTests(LoopTestCase):
         self.assertTrue((runs[0] / "attempt-1-ticket-2").is_dir())
         self.assertEqual(state["tickets"]["2"]["state"], "closed")
         self.assertEqual(state["tickets"]["3"]["assignees"], [])
-        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
+        self.assertEqual([call["ticket"] for call in state["opencode_calls"]], [2])
 
     def test_failed_preclosure_read_preserves_work_and_stops_the_queue(self) -> None:
         self.add_ticket(3)
@@ -154,7 +154,7 @@ class IssueLifecycleTests(LoopTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"simulated required issue read failure", result.stderr)
         self.assertNotIn(b"may already be closed", result.stderr)
-        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
+        self.assertEqual([call["ticket"] for call in state["opencode_calls"]], [2])
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
         self.assertEqual(state["tickets"]["3"]["assignees"], [])
@@ -186,7 +186,7 @@ class IssueLifecycleTests(LoopTestCase):
             result.stderr,
         )
         self.assertNotIn(b"The closure comment or closure", result.stderr)
-        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
+        self.assertEqual([call["ticket"] for call in state["opencode_calls"]], [2])
         self.assertEqual(state["tickets"]["2"]["state"], "closed")
         self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
         self.assertEqual(state["tickets"]["3"]["state"], "open")
@@ -204,7 +204,7 @@ class IssueLifecycleTests(LoopTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"cross-repository children are not supported", result.stderr)
         self.assertEqual(self.load_state()["events"], [])
-        self.assertEqual(self.load_state()["copilot_calls"], [])
+        self.assertEqual(self.load_state()["opencode_calls"], [])
 
     def test_pull_requests_cannot_be_used_as_parent_specs_or_children(self) -> None:
         for name in ("parent", "child"):
@@ -222,7 +222,7 @@ class IssueLifecycleTests(LoopTestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(b"pull request, not an issue", result.stderr)
                 self.assertEqual(state["events"], [])
-                self.assertEqual(state["copilot_calls"], [])
+                self.assertEqual(state["opencode_calls"], [])
 
     def test_claim_is_rechecked_for_exclusive_ownership_and_blockers(self) -> None:
         self.state["claim_conflict"] = True
@@ -237,7 +237,7 @@ class IssueLifecycleTests(LoopTestCase):
             state["tickets"]["2"]["assignees"],
             [{"login": "tester"}, {"login": "other"}],
         )
-        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(state["opencode_calls"], [])
         self.assertEqual([event[0] for event in state["events"]], ["assign"])
 
     def test_failed_claim_writes_stop_without_rolling_back_partial_assignment(self) -> None:
@@ -284,7 +284,7 @@ class IssueLifecycleTests(LoopTestCase):
                     b"Before rerunning, verify that any potentially running harness",
                     result.stderr,
                 )
-                self.assertEqual(state["copilot_calls"], [])
+                self.assertEqual(state["opencode_calls"], [])
                 self.assertEqual(state["tickets"]["2"]["state"], "open")
                 self.assertEqual(state["tickets"]["3"]["state"], "open")
                 self.assertEqual(state["tickets"]["3"]["assignees"], [])
@@ -310,7 +310,7 @@ class IssueLifecycleTests(LoopTestCase):
         self.assertIn(b"no longer open, unblocked", result.stderr)
         self.assertEqual(state["tickets"]["2"]["issue_dependencies_summary"]["blocked_by"], 1)
         self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
-        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(state["opencode_calls"], [])
 
     def test_claim_is_rechecked_for_direct_child_membership(self) -> None:
         self.state["claim_remove_child"] = True
@@ -322,7 +322,7 @@ class IssueLifecycleTests(LoopTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"no longer an open direct child", result.stderr)
         self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
-        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(state["opencode_calls"], [])
 
     def test_claim_recheck_refuses_a_closed_ticket_or_parent(self) -> None:
         for changed_issue in ("ticket", "parent"):
@@ -337,7 +337,7 @@ class IssueLifecycleTests(LoopTestCase):
                 state = self.load_state()
                 attempt = runs[0] / "attempt-1-ticket-2"
                 self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(state["copilot_calls"], [])
+                self.assertEqual(state["opencode_calls"], [])
                 self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
                 self.assertEqual([event[0] for event in state["events"]], ["assign"])
                 self.assertFalse((attempt / "process.json").exists())
@@ -412,7 +412,7 @@ class IssueLifecycleTests(LoopTestCase):
         attempt = runs[0] / "attempt-1-ticket-2"
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"no longer open", result.stderr)
-        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
+        self.assertEqual([call["ticket"] for call in state["opencode_calls"]], [2])
         self.assertEqual(state["tickets"]["2"]["state"], "closed")
         self.assertEqual(state["tickets"]["3"]["state"], "open")
         self.assertEqual(state["tickets"]["3"]["assignees"], [])
@@ -436,7 +436,7 @@ class IssueLifecycleTests(LoopTestCase):
             b"Inspect ticket #2's live GitHub state before rerunning.",
             result.stderr,
         )
-        self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
+        self.assertEqual([call["ticket"] for call in state["opencode_calls"]], [2])
         self.assertEqual(state["tickets"]["2"]["state"], "open")
         self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
         self.assertEqual(state["tickets"]["3"]["state"], "open")
@@ -474,7 +474,7 @@ class IssueLifecycleTests(LoopTestCase):
                     b"Inspect ticket #2's live GitHub state before rerunning.",
                     result.stderr,
                 )
-                self.assertEqual([call["ticket"] for call in state["copilot_calls"]], [2])
+                self.assertEqual([call["ticket"] for call in state["opencode_calls"]], [2])
                 self.assertEqual(state["tickets"]["2"]["assignees"], [{"login": "tester"}])
                 self.assertEqual(state["tickets"]["3"]["state"], "open")
                 self.assertEqual(state["tickets"]["3"]["assignees"], [])
@@ -503,4 +503,4 @@ class IssueLifecycleTests(LoopTestCase):
         self.assertIn(b"safe 100 KB command-line budget", result.stderr)
         self.assertEqual(state["tickets"]["2"]["assignees"], [])
         self.assertEqual(state["events"], [])
-        self.assertEqual(state["copilot_calls"], [])
+        self.assertEqual(state["opencode_calls"], [])
