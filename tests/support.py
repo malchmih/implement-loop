@@ -4,7 +4,6 @@ import json
 import os
 import pty
 import select
-import shlex
 import shutil
 import signal
 import socket
@@ -431,25 +430,10 @@ class _TemporaryHomeFixture:
         self.bin = self.home / "bin"
         self.bin.mkdir()
         self.env["PATH"] = str(self.bin) + os.pathsep + self.env["PATH"]
-        self.invocation_markers: dict[str, Path] = {}
         self.controlled_path_count = 0
 
     def cleanup(self) -> None:
         self.temp.cleanup()
-
-    def add_invocation_marker(self, command: str) -> Path:
-        executable = self.bin / command
-        marker = self.home / f"{command}.invoked"
-        executable.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(marker))}\n")
-        executable.chmod(0o700)
-        self.invocation_markers[command] = marker
-        return marker
-
-    def assert_commands_not_invoked(self, *commands: str) -> None:
-        for command in commands:
-            marker = self.invocation_markers.get(command)
-            assert marker is not None, f"no invocation marker configured for {command}"
-            assert not marker.exists(), f"{command} was invoked; marker: {marker}"
 
     def copy_source_tree(self) -> Path:
         source = self.home / "source checkout"
@@ -533,15 +517,6 @@ class _LoopFixtureSupport:
 
     def save_state(self) -> None:
         self.state_path.write_text(json.dumps(self.state))
-
-    def set_repository_identity(self, name: str) -> None:
-        repository_url = f"https://api.github.com/repos/{name}"
-        self.state["repository_name"] = name
-        self.state["repository_url"] = repository_url
-        self.state["spec"]["repository_url"] = repository_url
-        for ticket in self.state["tickets"].values():
-            ticket["repository_url"] = repository_url
-        self.save_state()
 
     def add_ticket(
         self,

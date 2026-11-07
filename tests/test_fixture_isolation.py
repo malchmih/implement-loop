@@ -133,6 +133,15 @@ def _successful_attempt_report(result: subprocess.CompletedProcess[str]) -> dict
     return report
 
 
+def _assert_external_program_was_not_run(
+    result: subprocess.CompletedProcess[str],
+    marker: Path,
+    description: str,
+) -> None:
+    assert not marker.exists(), f"{description} was invoked"
+    _successful_attempt_report(result)
+
+
 def _write_config(fixture: LoopFixture, path: Path, settings: dict[str, str]) -> Path:
     path.touch()
     for key, value in settings.items():
@@ -172,8 +181,7 @@ def test_external_git_configs_cannot_run_hooks(
 
     result = _run_fixture_attempt(loop_fixture, inherited_environment)
 
-    assert not marker.exists(), f"the hostile {source} hook was invoked"
-    _successful_attempt_report(result)
+    _assert_external_program_was_not_run(result, marker, f"the hostile {source} hook")
 
 
 def test_environment_injected_git_config_cannot_run_hooks(loop_fixture: LoopFixture) -> None:
@@ -186,8 +194,7 @@ def test_environment_injected_git_config_cannot_run_hooks(loop_fixture: LoopFixt
 
     result = _run_fixture_attempt(loop_fixture, inherited_environment)
 
-    assert not marker.exists(), "the environment-injected hook was invoked"
-    _successful_attempt_report(result)
+    _assert_external_program_was_not_run(result, marker, "the environment-injected hook")
 
 
 def test_external_signing_preferences_do_not_require_credentials(loop_fixture: LoopFixture) -> None:
@@ -204,8 +211,7 @@ def test_external_signing_preferences_do_not_require_credentials(loop_fixture: L
 
     result = _run_fixture_attempt(loop_fixture, {"GIT_CONFIG_GLOBAL": str(config_path)})
 
-    assert not marker.exists(), "the external signing program was invoked"
-    _successful_attempt_report(result)
+    _assert_external_program_was_not_run(result, marker, "the external signing program")
 
 
 def test_repository_location_overrides_do_not_redirect_or_mutate_a_decoy(
