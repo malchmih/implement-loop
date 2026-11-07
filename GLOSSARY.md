@@ -15,3 +15,6 @@ Evidence associated with processing a selected ticket, including preparation bef
 
 **Manual finalization**:
 A human's deliberate closure of a ticket for already-committed work after inspecting the work and its validation evidence. It is not a successful attempt or wrapper-verified completion.
+
+**Agent attestation**:
+An implementing agent's explicit claim that the ticket's work, acceptance criteria, required validation, and review are complete. It is neither independent correctness verification nor human approval.
