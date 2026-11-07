@@ -34,11 +34,11 @@ environment with the newly selected interpreter.
 `mise run source-install` performs the editable source install. Then verify it
 with `implement-loop --help` from a target checkout.
 
-The behavioral suite installs the source command and runs a complete fake
-workflow from a separate target checkout whose path contains spaces. Python and
-installed source code are required at runtime; this is not a standalone
-executable. See the [README](../README.md#install-and-run) for installation and
-runtime prerequisites.
+The installation smoke test installs the source command and invokes `--help`
+from a separate target checkout whose path contains spaces. The primary CLI
+suite covers the full fake workflow. Python and installed source code are
+required at runtime; this is not a standalone executable. See the
+[README](../README.md#install-and-run) for installation and runtime prerequisites.
 
 ## CI
 

@@ -49,15 +49,16 @@ def test_installed_source_command_runs_from_a_target_path_with_spaces(
     run_env = dict(install_env)
     run_env["PATH"] = str(tool_bin) + os.pathsep + run_env["PATH"]
     result = subprocess.run(
-        ["implement-loop", "1", "--max-iterations", "1"],
+        ["implement-loop", "--help"],
         cwd=target,
         env=run_env,
         capture_output=True,
         timeout=30,
     )
 
-    assert result.returncode == 0, result.stderr.decode()
-    assert loop_fixture.load_state()["tickets"]["2"]["state"] == "closed"
-    assert (target / "implementation-2.txt").is_file()
-    assert not (source / "implementation-2.txt").exists()
+    assert result.returncode == 0, result.stdout.decode() + result.stderr.decode()
+    assert b"usage:" in result.stdout.lower()
+    assert b"--max-iterations" in result.stdout
+    assert loop_fixture.load_state()["events"] == []
+    assert loop_fixture.load_state()["opencode_calls"] == []
     assert loop_fixture.git("status", "--porcelain", cwd=target) == ""
