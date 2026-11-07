@@ -1,5 +1,8 @@
 ## Agent skills
 
+Before architectural changes, bug fixes, or adding failure/concurrency tests,
+read `docs/design-boundaries.md`.
+
 ### Issue tracker
 
 Issues and specs live as GitHub issues; use the `gh` CLI. See `docs/agents/issue-tracker.md`.
