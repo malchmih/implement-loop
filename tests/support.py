@@ -422,10 +422,9 @@ def _isolated_git_environment(home: Path) -> dict[str, str]:
     return environment
 
 
-class TemporaryHomeTestCase(unittest.TestCase):
+class _TemporaryHomeFixture:
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="implement-loop-test-")
-        self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
         self.env = _isolated_git_environment(self.home)
         for variable in ("GH_REPO", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "NO_COLOR", "FORCE_COLOR"):
@@ -435,6 +434,9 @@ class TemporaryHomeTestCase(unittest.TestCase):
         self.env["PATH"] = str(self.bin) + os.pathsep + self.env["PATH"]
         self.invocation_markers: dict[str, Path] = {}
         self.controlled_path_count = 0
+
+    def cleanup(self) -> None:
+        self.temp.cleanup()
 
     def add_invocation_marker(self, command: str) -> Path:
         executable = self.bin / command
@@ -447,9 +449,8 @@ class TemporaryHomeTestCase(unittest.TestCase):
     def assert_commands_not_invoked(self, *commands: str) -> None:
         for command in commands:
             marker = self.invocation_markers.get(command)
-            self.assertIsNotNone(marker, f"no invocation marker configured for {command}")
-            assert marker is not None
-            self.assertFalse(marker.exists(), f"{command} was invoked; marker: {marker}")
+            assert marker is not None, f"no invocation marker configured for {command}"
+            assert not marker.exists(), f"{command} was invoked; marker: {marker}"
 
     def copy_source_tree(self) -> Path:
         source = self.home / "source checkout"
@@ -469,9 +470,8 @@ class TemporaryHomeTestCase(unittest.TestCase):
         return source
 
 
-class LoopTestCase(TemporaryHomeTestCase):
-    def setUp(self) -> None:
-        super().setUp()
+class _LoopFixtureSupport:
+    def initialize_loop(self) -> None:
         self.repo = self.home / "repo"
         self.repo.mkdir()
         for tool in (
@@ -599,12 +599,11 @@ class LoopTestCase(TemporaryHomeTestCase):
                 target = Path(sys.executable)
             elif command == "git":
                 git = shutil.which("git", path=self.env["PATH"])
-                self.assertIsNotNone(git, "test environment needs git")
-                assert git is not None
+                assert git is not None, "test environment needs git"
                 target = Path(git)
             else:
                 target = self.bin / command
-                self.assertTrue(target.is_file(), f"no fake executable for {command}")
+                assert target.is_file(), f"no fake executable for {command}"
             (directory / command).symlink_to(target)
         return directory
 
@@ -655,7 +654,7 @@ class LoopTestCase(TemporaryHomeTestCase):
         result: subprocess.CompletedProcess[bytes],
         executable: str,
     ) -> None:
-        self.assertNotEqual(result.returncode, 0, result.stdout.decode() + result.stderr.decode())
+        assert result.returncode != 0, result.stdout.decode() + result.stderr.decode()
         output = (result.stdout + result.stderr).lower()
         for guidance in (
             executable.encode(),
@@ -664,15 +663,15 @@ class LoopTestCase(TemporaryHomeTestCase):
             b"add it to path",
             b"retry",
         ):
-            self.assertIn(guidance.lower(), output)
+            assert guidance.lower() in output
 
     def assert_missing_executable_stopped_before_run(self, runs: list[Path]) -> None:
         state = self.load_state()
-        self.assertEqual(state["events"], [])
-        self.assertEqual(state["opencode_calls"], [])
-        self.assertEqual(runs, [])
-        self.assertFalse((self.home / ".local/state/implement-loop").exists())
-        self.assertFalse(self.repository_lock_path().exists())
+        assert state["events"] == []
+        assert state["opencode_calls"] == []
+        assert runs == []
+        assert not (self.home / ".local/state/implement-loop").exists()
+        assert not self.repository_lock_path().exists()
 
     def _read_until_output(
         self,
@@ -686,16 +685,22 @@ class LoopTestCase(TemporaryHomeTestCase):
         while fragment not in output:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                self.fail(f"Timed out waiting for {fragment!r}; received {bytes(output)!r}")
+                raise AssertionError(
+                    f"Timed out waiting for {fragment!r}; received {bytes(output)!r}"
+                )
             readable, _, _ = select.select([descriptor], [], [], remaining)
             if not readable:
-                self.fail(f"Timed out waiting for {fragment!r}; received {bytes(output)!r}")
+                raise AssertionError(
+                    f"Timed out waiting for {fragment!r}; received {bytes(output)!r}"
+                )
             try:
                 chunk = os.read(descriptor, 4096)
             except OSError as error:
-                self.fail(f"Caller output closed before {fragment!r} arrived: {error}")
+                raise AssertionError(
+                    f"Caller output closed before {fragment!r} arrived: {error}"
+                ) from error
             if not chunk:
-                self.fail(f"Caller output closed before {fragment!r} arrived")
+                raise AssertionError(f"Caller output closed before {fragment!r} arrived")
             output.extend(chunk)
 
     def _assert_live_harness_output(
@@ -751,7 +756,7 @@ class LoopTestCase(TemporaryHomeTestCase):
 
             with ready_listener.accept()[0] as ready_connection:
                 ready_connection.settimeout(LIVE_READY_TIMEOUT)
-                self.assertEqual(ready_connection.recv(1), b"R")
+                assert ready_connection.recv(1) == b"R"
 
             if terminal:
                 assert master is not None
@@ -773,44 +778,39 @@ class LoopTestCase(TemporaryHomeTestCase):
                     timeout=LIVE_OUTPUT_TIMEOUT,
                 )
 
-            self.assertIsNone(process.poll(), "harness exited before the test released it")
+            assert process.poll() is None, "harness exited before the test released it"
             attempt_dirs = list(
                 (self.home / ".local/state/implement-loop").glob("run-*/attempt-1-ticket-2")
             )
-            self.assertEqual(len(attempt_dirs), 1)
+            assert len(attempt_dirs) == 1
             attempt_dir = attempt_dirs[0]
-            self.assertTrue((attempt_dir.parent / "active.pid").is_file())
+            assert (attempt_dir.parent / "active.pid").is_file()
             for fragment_line in live_output_fragment.splitlines():
-                self.assertIn(fragment_line, output)
+                assert fragment_line in output
             heading = "── Agent ──".encode()
             if terminal and not no_color:
-                self.assertIn(
-                    b"\x1b[1;36m" + heading + b"\x1b[0m\r\nLive **agent** text\r\n\r\n",
-                    output,
-                )
-                self.assertIn(
+                assert b"\x1b[1;36m" + heading + b"\x1b[0m\r\nLive **agent** text\r\n\r\n" in output
+                assert (
                     b"\x1b[32m\xe2\x9c\x93\x1b[0m "
                     b"\x1b[1mLive completed tool\x1b[0m "
-                    b"\x1b[2m(live_tool)\x1b[0m",
-                    output,
+                    b"\x1b[2m(live_tool)\x1b[0m" in output
                 )
-                self.assertIn(b'  \x1b[2m\xe2\x94\x82\x1b[0m {"fixture":"live"}', output)
+                assert b'  \x1b[2m\xe2\x94\x82\x1b[0m {"fixture":"live"}' in output
             else:
                 newline = b"\r\n" if terminal else b"\n"
-                self.assertIn(heading + newline + b"Live **agent** text" + newline * 2, output)
-                self.assertIn(b"\xe2\x9c\x93 Live completed tool (live_tool)", output)
-                self.assertNotIn(b"\x1b[", output)
-            self.assertEqual(output.count(heading), 1)
+                assert heading + newline + b"Live **agent** text" + newline * 2 in output
+                assert b"\xe2\x9c\x93 Live completed tool (live_tool)" in output
+                assert b"\x1b[" not in output
+            assert output.count(heading) == 1
             if include_failure:
                 if terminal and not no_color:
-                    self.assertIn(
+                    assert (
                         b"\x1b[31m\xe2\x9c\x97\x1b[0m "
                         b"\x1b[1mLive failed tool\x1b[0m "
-                        b"\x1b[2m(live_failure)\x1b[0m",
-                        output,
+                        b"\x1b[2m(live_failure)\x1b[0m" in output
                     )
                 else:
-                    self.assertIn("✗ Live failed tool (live_failure)".encode(), output)
+                    assert "✗ Live failed tool (live_failure)".encode() in output
             expected_events = [
                 {
                     "type": "text",
@@ -855,23 +855,21 @@ class LoopTestCase(TemporaryHomeTestCase):
                 json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
                 for event in expected_events
             ).encode("utf-8")
-            self.assertEqual((attempt_dir / "agent.log").read_bytes(), expected_log)
+            assert (attempt_dir / "agent.log").read_bytes() == expected_log
 
             assert process.stdin is not None
             process.stdin.write(b"x")
             process.stdin.flush()
             process.stdin.close()
-            self.assertEqual(
-                process.wait(timeout=LIVE_READY_TIMEOUT),
-                0,
-                bytes(output).decode("utf-8", errors="replace"),
+            assert process.wait(timeout=LIVE_READY_TIMEOUT) == 0, bytes(output).decode(
+                "utf-8", errors="replace"
             )
 
             call = self.load_state()["opencode_calls"][0]
             expected_no_color = "1" if no_color or not terminal else None
             expected_force_color = "1" if terminal and not no_color else "0"
-            self.assertEqual(call["no_color"], expected_no_color)
-            self.assertEqual(call["force_color"], expected_force_color)
+            assert call["no_color"] == expected_no_color
+            assert call["force_color"] == expected_force_color
             return bytes(output)
         finally:
             if process is not None:
@@ -910,3 +908,21 @@ class LoopTestCase(TemporaryHomeTestCase):
 
     def load_state(self) -> dict[str, object]:
         return json.loads(self.state_path.read_text())
+
+
+class LoopFixture(_TemporaryHomeFixture, _LoopFixtureSupport):
+    def setUp(self) -> None:
+        _TemporaryHomeFixture.setUp(self)
+        self.initialize_loop()
+
+
+class TemporaryHomeTestCase(unittest.TestCase, _TemporaryHomeFixture):
+    def setUp(self) -> None:
+        _TemporaryHomeFixture.setUp(self)
+        self.addCleanup(self.cleanup)
+
+
+class LoopTestCase(TemporaryHomeTestCase, _LoopFixtureSupport):
+    def setUp(self) -> None:
+        super().setUp()
+        self.initialize_loop()
