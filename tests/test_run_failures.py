@@ -181,8 +181,11 @@ def test_valid_report_closes_ticket_after_clean_descendant_commit(
     assert "write one JSON object" not in call["prompt"]
     assert call["report_exit_codes"] == [0]
     assert "completed" in call["report_help"]
+    assert "blocked" in call["report_help"]
     normalized_help = " ".join(call["report_help"].split())
     assert "--acceptance-criteria passed --validation passed" in normalized_help
+    assert "blocked --reason 'Describe the blocker'" in normalized_help
+    assert "blocked --reason 'Describe the blocker'" in call["prompt"]
     assert state["report_observation"] == {
         "ticket_state": "open",
         "events": [["assign", 2, "tester"]],
@@ -236,6 +239,138 @@ def test_conflicting_completion_reports_preserve_ticket_and_commit(
     assert [event[0] for event in state["events"]] == ["assign"]
     assert "implementation-2.txt" in loop_fixture.git("show", "--pretty=", "--name-only")
     assert loop_fixture.git("status", "--porcelain") == ""
+
+
+def test_blocked_report_preserves_reason_and_stops_without_closing_ticket(
+    loop_fixture: LoopFixture,
+) -> None:
+    result, runs = loop_fixture.run_loop(
+        "--max-iterations",
+        "1",
+        extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": "blocked"},
+    )
+
+    state = loop_fixture.load_state()
+    attempt = runs[0] / "attempt-1-ticket-2"
+    expected_reason = "External dependency is unavailable"
+    report = json.loads((attempt / "completion-result.json").read_text())
+    evidence = json.loads((attempt / "completion-evidence.json").read_text())
+    assert result.returncode != 0
+    assert expected_reason.encode() in result.stderr
+    assert report["status"] == "blocked"
+    assert report["reason"] == expected_reason
+    assert evidence["status"] == "blocked"
+    assert evidence["reason"] == expected_reason
+    assert not (attempt / "completion.json").exists()
+    assert state["tickets"]["2"]["state"] == "open"
+    assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
+    assert [event[0] for event in state["events"]] == ["assign"]
+    assert len(state["opencode_calls"]) == 1
+    assert state["opencode_calls"][0]["report_exit_codes"] == [0]
+    assert "implementation-2.txt" in loop_fixture.git("show", "--pretty=", "--name-only")
+    assert loop_fixture.git("status", "--porcelain") == ""
+
+
+def test_blocked_report_rejects_an_empty_reason(loop_fixture: LoopFixture) -> None:
+    result, runs = loop_fixture.run_loop(
+        "--max-iterations",
+        "1",
+        extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": "blocked-invalid-reason"},
+    )
+
+    state = loop_fixture.load_state()
+    attempt = runs[0] / "attempt-1-ticket-2"
+    evidence = json.loads((attempt / "completion-evidence.json").read_text())
+    assert result.returncode != 0
+    assert evidence["status"] == "missing"
+    assert b"did not submit a required per-attempt completion report" in result.stderr
+    assert any(
+        "reason must not be empty" in error for error in state["opencode_calls"][0]["report_errors"]
+    )
+    assert state["opencode_calls"][0]["report_exit_codes"] == [1]
+    assert state["tickets"]["2"]["state"] == "open"
+    assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
+    assert [event[0] for event in state["events"]] == ["assign"]
+
+
+def test_identical_blocked_reports_are_harmless(loop_fixture: LoopFixture) -> None:
+    result, runs = loop_fixture.run_loop(
+        "--max-iterations",
+        "1",
+        extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": "blocked-duplicate"},
+    )
+
+    state = loop_fixture.load_state()
+    report = json.loads((runs[0] / "attempt-1-ticket-2/completion-result.json").read_text())
+    assert result.returncode != 0
+    assert report["status"] == "blocked"
+    assert state["opencode_calls"][0]["report_exit_codes"] == [0, 0]
+    assert state["tickets"]["2"]["state"] == "open"
+    assert [event[0] for event in state["events"]] == ["assign"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_statuses"),
+    (
+        ("blocked-then-completed", ["blocked", "completed"]),
+        ("completed-then-blocked", ["completed", "blocked"]),
+    ),
+)
+def test_blocked_and_completed_reports_conflict_in_either_order(
+    loop_fixture: LoopFixture,
+    mode: str,
+    expected_statuses: list[str],
+) -> None:
+    result, runs = loop_fixture.run_loop(
+        "--max-iterations",
+        "1",
+        extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": mode},
+    )
+
+    state = loop_fixture.load_state()
+    attempt = runs[0] / "attempt-1-ticket-2"
+    report = json.loads((attempt / "completion-result.json").read_text())
+    evidence = json.loads((attempt / "completion-evidence.json").read_text())
+    assert result.returncode != 0
+    assert b"conflicting completion reports" in result.stderr.lower()
+    assert report["status"] == "conflict"
+    assert [item["status"] for item in report["reports"]] == expected_statuses
+    assert evidence["status"] == "conflict"
+    blocked_claims = [item for item in report["reports"] if item["status"] == "blocked"]
+    assert len(blocked_claims) == 1
+    assert blocked_claims[0]["reason"] in result.stderr.decode()
+    assert evidence["reports"] == report["reports"]
+    assert state["tickets"]["2"]["state"] == "open"
+    assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
+    assert [event[0] for event in state["events"]] == ["assign"]
+    assert len(state["opencode_calls"]) == 1
+    assert "implementation-2.txt" in loop_fixture.git("show", "--pretty=", "--name-only")
+    assert loop_fixture.git("status", "--porcelain") == ""
+
+
+def test_blocked_reason_is_preserved_when_opencode_also_fails(loop_fixture: LoopFixture) -> None:
+    loop_fixture.state["agent_exit"] = 7
+    loop_fixture.save_state()
+
+    result, runs = loop_fixture.run_loop(
+        "--max-iterations",
+        "1",
+        extra_env={"IMPLEMENT_LOOP_TEST_RESULT_MODE": "blocked"},
+    )
+
+    state = loop_fixture.load_state()
+    attempt = runs[0] / "attempt-1-ticket-2"
+    evidence = json.loads((attempt / "completion-evidence.json").read_text())
+    expected_reason = "External dependency is unavailable"
+    assert result.returncode != 0
+    assert b"OpenCode exited with status 7" in result.stderr
+    assert expected_reason.encode() in result.stderr
+    assert evidence["status"] == "blocked"
+    assert evidence["reason"] == expected_reason
+    assert json.loads((attempt / "process.json").read_text())["exit_code"] == 7
+    assert state["tickets"]["2"]["state"] == "open"
+    assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
+    assert [event[0] for event in state["events"]] == ["assign"]
 
 
 def test_report_write_failure_is_clear_and_does_not_close_ticket(
@@ -341,12 +476,12 @@ def test_required_record_persistence_failure_prevents_closure(loop_fixture: Loop
 def test_agent_log_write_failure_prevents_closure(loop_fixture: LoopFixture) -> None:
     def limit_file_size() -> None:
         signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
-        resource.setrlimit(resource.RLIMIT_FSIZE, (8192, 8192))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (16_384, 16_384))
 
     result, runs = loop_fixture.run_loop(
         "--max-iterations",
         "1",
-        extra_env={"IMPLEMENT_LOOP_TEST_OUTPUT": "x" * 20_000},
+        extra_env={"IMPLEMENT_LOOP_TEST_OUTPUT": "x" * 40_000},
         preexec_fn=limit_file_size,
     )
 
@@ -356,7 +491,7 @@ def test_agent_log_write_failure_prevents_closure(loop_fixture: LoopFixture) -> 
     assert result.returncode != 0
     assert b"Unable to persist the complete OpenCode output log" in result.stderr
     assert not process["log_persisted"]
-    assert (attempt / "agent.log").stat().st_size <= 8192
+    assert (attempt / "agent.log").stat().st_size <= 16_384
     assert state["tickets"]["2"]["state"] == "open"
     assert [event[0] for event in state["events"]] == ["assign"]
 

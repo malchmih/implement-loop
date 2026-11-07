@@ -122,7 +122,7 @@ if tool_name == "opencode":
     )
     report_results = []
 
-    def run_report(acceptance="passed", validation="passed", *, fail_write=False):
+    def run_completed_report(acceptance="passed", validation="passed", *, fail_write=False):
         command = [
             report_command,
             "completed",
@@ -146,20 +146,41 @@ if tool_name == "opencode":
             preexec_fn=limit_report_file,
         )
 
+    def run_blocked_report(reason="External dependency is unavailable"):
+        return subprocess.run(
+            [report_command, "blocked", "--reason", reason],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
     if mode == "report-write-failure":
-        report_results.append(run_report(fail_write=True))
+        report_results.append(run_completed_report(fail_write=True))
     elif mode == "conflicting":
-        report_results.append(run_report())
-        report_results.append(run_report(acceptance="failed"))
+        report_results.append(run_completed_report())
+        report_results.append(run_completed_report(acceptance="failed"))
     elif mode == "failed-acceptance":
-        report_results.append(run_report(acceptance="failed"))
+        report_results.append(run_completed_report(acceptance="failed"))
     elif mode == "failed-validation":
-        report_results.append(run_report(validation="failed"))
+        report_results.append(run_completed_report(validation="failed"))
     elif mode == "duplicate":
-        report_results.append(run_report())
-        report_results.append(run_report())
+        report_results.append(run_completed_report())
+        report_results.append(run_completed_report())
+    elif mode == "blocked":
+        report_results.append(run_blocked_report())
+    elif mode == "blocked-invalid-reason":
+        report_results.append(run_blocked_report(" \t "))
+    elif mode == "blocked-duplicate":
+        report_results.append(run_blocked_report())
+        report_results.append(run_blocked_report())
+    elif mode == "blocked-then-completed":
+        report_results.append(run_blocked_report())
+        report_results.append(run_completed_report())
+    elif mode == "completed-then-blocked":
+        report_results.append(run_completed_report())
+        report_results.append(run_blocked_report())
     elif mode != "missing":
-        report_results.append(run_report())
+        report_results.append(run_completed_report())
 
     state["opencode_calls"][-1]["report_help"] = help_result.stdout
     state["opencode_calls"][-1]["report_exit_codes"] = [

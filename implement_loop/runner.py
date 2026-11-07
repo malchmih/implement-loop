@@ -149,8 +149,9 @@ def _build_prompt(
         "instructions below. Any delegated "
         "workers must follow these same scope and execution restrictions. Wait "
         "for all ticket-scoped delegated work to finish and incorporate its "
-        "results before reporting completion. If blocked or if required validation "
-        "fails, do not report success.\n\n"
+        "results before reporting. If blocked, do not report completion; submit a "
+        "blocked outcome with a meaningful reason. If required validation fails, "
+        "do not claim passing completion.\n\n"
         "This attempt requires a new local descendant commit; existing commits alone do "
         "not satisfy it. Commit the completed work before reporting success.\n\n"
         "A private, Attempt-bound completion command is available outside the "
@@ -161,6 +162,12 @@ def _build_prompt(
         "report your explicit passing claims with:\n"
         f"{shlex.quote(str(report_command))} completed --acceptance-criteria passed "
         "--validation passed\n\n"
+        "If you cannot complete the ticket, report intentional non-completion with "
+        "a meaningful reason instead:\n"
+        f"{shlex.quote(str(report_command))} blocked --reason 'Describe the blocker'\n\n"
+        "Choose one outcome. Identical repeated reports are harmless, but reporting "
+        "both blocked and completed (or otherwise changing the claim) persists a "
+        "conflict and prevents automatic completion.\n\n"
         f"Use {shlex.quote(str(report_command))} --help for usage. The command supplies "
         "ticket and Attempt "
         "identity and writes the report; do not author JSON or copy identifiers. "
@@ -334,6 +341,7 @@ def _record_result(
             "The per-attempt result must be a JSON object.",
         )
 
+    validation_error: str | None
     issue = parsed.get("issue")
     if type(issue) is not int or issue != ticket_number:
         validation_error = (
@@ -341,44 +349,49 @@ def _record_result(
         )
     elif not isinstance(parsed.get("attempt_id"), str) or parsed["attempt_id"] != attempt_id:
         validation_error = "The per-attempt result is stale or identifies the wrong attempt."
-    elif parsed.get("status") == "conflict":
-        if (
-            set(parsed) == {"status", "issue", "attempt_id", "reports"}
-            and isinstance(parsed.get("reports"), list)
-            and len(parsed["reports"]) >= 2
-        ):
-            validation_error = (
-                "The persisted completion report contains conflicting completion reports."
-            )
-        else:
-            validation_error = "The persisted completion report is malformed or ambiguous."
-    elif set(parsed) != {
-        "issue",
-        "attempt_id",
-        "status",
-        "acceptance_criteria",
-        "validation",
-    }:
-        validation_error = "The per-attempt result is malformed or has ambiguous fields."
-    elif parsed.get("status") != "completed":
-        validation_error = "The per-attempt result does not report completed status."
-    elif parsed.get("acceptance_criteria") != "passed":
-        validation_error = "The per-attempt result does not report passed acceptance criteria."
-    elif parsed.get("validation") != "passed":
-        validation_error = "The per-attempt result does not report passed validation."
     else:
-        validation_error = None
+        if parsed.get("status") == "conflict":
+            validation_error = _validate_conflict(parsed, ticket_number, attempt_id)
+        else:
+            validation_error = _validate_report(parsed, ticket_number, attempt_id)
+            if validation_error is None and parsed["status"] == "completed":
+                if parsed["acceptance_criteria"] != "passed":
+                    validation_error = (
+                        "The per-attempt result does not report passed acceptance criteria."
+                    )
+                elif parsed["validation"] != "passed":
+                    validation_error = "The per-attempt result does not report passed validation."
 
     if validation_error is not None:
+        status = "conflict" if parsed.get("status") == "conflict" else "rejected"
+        error_details: dict[str, Any] = {"error": validation_error}
+        if status == "conflict":
+            error_details["reports"] = parsed.get("reports")
+        elif parsed.get("status") == "blocked" and "reason" in parsed:
+            error_details["reason"] = parsed["reason"]
         return _reject_result(
             records,
             evidence_path,
             ticket_number,
             attempt_id,
-            "rejected",
+            status,
             validation_error,
-            {"error": validation_error},
+            error_details,
         )
+    if parsed["status"] == "blocked":
+        reason = parsed["reason"]
+        records.write_json(
+            evidence_path,
+            {
+                "status": "blocked",
+                "issue": ticket_number,
+                "attempt_id": attempt_id,
+                "reason": reason,
+            },
+            exclusive=True,
+        )
+        return parsed, f"Ticket #{ticket_number} was reported blocked: {reason}"
+
     records.write_json(
         evidence_path,
         {"status": "valid", "issue": ticket_number, "attempt_id": attempt_id, "error": None},
@@ -386,6 +399,57 @@ def _record_result(
     )
     records.write_json(attempt_dir / "completion.json", parsed, exclusive=True)
     return parsed, None
+
+
+def _validate_report(report: Any, ticket_number: int, attempt_id: str) -> str | None:
+    if not isinstance(report, dict):
+        return "A persisted report is malformed or ambiguous."
+    if type(report.get("issue")) is not int or report["issue"] != ticket_number:
+        return "A persisted report identifies the wrong ticket or has a wrong-type issue number."
+    if not isinstance(report.get("attempt_id"), str) or report["attempt_id"] != attempt_id:
+        return "A persisted report is stale or identifies the wrong attempt."
+
+    if report.get("status") == "completed":
+        if set(report) != {
+            "issue",
+            "attempt_id",
+            "status",
+            "acceptance_criteria",
+            "validation",
+        }:
+            return "The per-attempt result is malformed or has ambiguous fields."
+        if report.get("acceptance_criteria") not in {"passed", "failed"}:
+            return "The per-attempt result has an invalid acceptance-criteria claim."
+        if report.get("validation") not in {"passed", "failed"}:
+            return "The per-attempt result has an invalid validation claim."
+        return None
+
+    if report.get("status") == "blocked":
+        if set(report) != {"issue", "attempt_id", "status", "reason"}:
+            return "The blocked report is malformed or has ambiguous fields."
+        reason = report.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return "The blocked report must include a nonempty reason."
+        return None
+
+    return "The per-attempt result does not report a supported completed or blocked outcome."
+
+
+def _validate_conflict(parsed: dict[str, Any], ticket_number: int, attempt_id: str) -> str:
+    if set(parsed) != {"status", "issue", "attempt_id", "reports"}:
+        return "The persisted completion report is malformed or ambiguous."
+    reports = parsed.get("reports")
+    if not isinstance(reports, list) or len(reports) != 2:
+        return "The persisted completion report is malformed or ambiguous."
+    first_error = _validate_report(reports[0], ticket_number, attempt_id)
+    second_error = _validate_report(reports[1], ticket_number, attempt_id)
+    if first_error is not None or second_error is not None or reports[0] == reports[1]:
+        return "The persisted completion report is malformed or ambiguous."
+    message = "The persisted completion report contains conflicting completion reports."
+    blocked_reasons = [report["reason"] for report in reports if report["status"] == "blocked"]
+    if blocked_reasons:
+        message += " Blocked reason(s): " + "; ".join(blocked_reasons)
+    return message
 
 
 def _reject_result(

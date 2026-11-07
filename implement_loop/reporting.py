@@ -66,6 +66,15 @@ def _report(issue: int, attempt_id: str, acceptance: str, validation: str) -> di
     }
 
 
+def _blocked_report(issue: int, attempt_id: str, reason: str) -> dict[str, Any]:
+    return {
+        "issue": issue,
+        "attempt_id": attempt_id,
+        "status": "blocked",
+        "reason": reason,
+    }
+
+
 def _existing_report(path: Path) -> dict[str, Any] | None:
     try:
         details = path.lstat()
@@ -119,12 +128,14 @@ def _submit(
     path: Path, report: dict[str, Any]
 ) -> Literal["saved", "repeated", "claim_failed", "repeated_claim_failed", "conflict"]:
     existing = _existing_report(path)
-    passed = report["acceptance_criteria"] == report["validation"] == "passed"
+    accepted = report["status"] == "blocked" or (
+        report["acceptance_criteria"] == report["validation"] == "passed"
+    )
     if existing == report:
-        return "repeated" if passed else "repeated_claim_failed"
+        return "repeated" if accepted else "repeated_claim_failed"
     if existing is None:
         _write_report(path, report)
-        return "saved" if passed else "claim_failed"
+        return "saved" if accepted else "claim_failed"
     if existing.get("status") == "conflict":
         raise ValueError("a conflicting completion report is already persisted")
 
@@ -141,10 +152,11 @@ def _submit(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="implement-loop-report",
-        description="Submit explicit completion claims for the active Implement Loop Attempt.",
+        description="Submit an explicit outcome for the active Implement Loop Attempt.",
         epilog=(
             "Completion usage: implement-loop-report completed "
-            "--acceptance-criteria passed --validation passed"
+            "--acceptance-criteria passed --validation passed\n"
+            "Blocked usage: implement-loop-report blocked --reason 'Describe the blocker'"
         ),
     )
     subcommands = parser.add_subparsers(dest="outcome", required=True)
@@ -158,6 +170,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     completed.add_argument("--acceptance-criteria", required=True, choices=("passed", "failed"))
     completed.add_argument("--validation", required=True, choices=("passed", "failed"))
+    blocked = subcommands.add_parser(
+        "blocked",
+        help="report intentional non-completion with a meaningful reason",
+        description="Record why this Attempt cannot be completed.",
+    )
+    blocked.add_argument("--reason", required=True)
     return parser
 
 
@@ -169,10 +187,16 @@ def main(argv: list[str] | None = None) -> int:
     if not context_value:
         print("Error: no active Attempt reporting context was supplied.", file=sys.stderr)
         return 1
+    if args.outcome == "blocked" and not args.reason.strip():
+        print("Error: a blocked reason must not be empty or whitespace-only.", file=sys.stderr)
+        return 1
 
     try:
         issue, attempt_id, result_path = _read_context(Path(context_value))
-        report = _report(issue, attempt_id, args.acceptance_criteria, args.validation)
+        if args.outcome == "blocked":
+            report = _blocked_report(issue, attempt_id, args.reason)
+        else:
+            report = _report(issue, attempt_id, args.acceptance_criteria, args.validation)
         submission = _submit(result_path, report)
     except (OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
@@ -200,7 +224,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     qualifier = "Repeated " if submission == "repeated" else ""
-    print(f"{qualifier}completion report saved for ticket #{issue}.")
+    if report["status"] == "blocked":
+        print(f"{qualifier}blocked report saved for ticket #{issue}: {report['reason']}")
+    else:
+        print(f"{qualifier}completion report saved for ticket #{issue}.")
     return 0
 
 

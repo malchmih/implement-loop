@@ -60,13 +60,27 @@ implement sibling tickets.
 The runner assigns the selected ticket to you and supplies a private,
 Attempt-bound reporting command outside the checkout. After implementation,
 required review and validation, joined delegated work, and committing are
-complete, report explicit claims with the command and syntax shown in the
-Attempt prompt:
+complete, report explicit passing claims with the command and syntax shown in
+the Attempt prompt:
 
 ```bash
 /path/to/implement-loop-report completed --acceptance-criteria passed --validation passed
 /path/to/implement-loop-report --help
 ```
+
+If you cannot complete the ticket, submit a blocked outcome with a meaningful
+reason instead of claiming completion:
+
+```bash
+/path/to/implement-loop-report blocked --reason "External dependency is unavailable"
+```
+
+The blocked reason is retained in private Ticket records and the run stops with
+the ticket open and assigned. Missing or invalid reports are diagnosed
+separately. Identical repeated reports are harmless; conflicting sequential
+reports (including switching between blocked and completed) stop the Attempt
+without automatic closure. Do not submit a second outcome to correct or replace
+the first one.
 
 The command supplies ticket and Attempt identity; do not author a report file or
 copy identifiers. Wait for reporting to finish and treat a nonzero result as a
@@ -113,6 +127,23 @@ Review the ticket's `agent.log`, `process.json`, result evidence, and `checks.js
 when present. Before rerunning an interrupted run, verify that the wrapper,
 OpenCode, delegated agents, and other background work have stopped. Output, record
 presence, and release of the local lock do not confirm that they have stopped.
+
+### Blocked or conflicting report
+
+An intentional blocked report is distinct from a missing or invalid handoff. Its
+reason is recorded in `completion-result.json` and `completion-evidence.json`;
+inspect these with the process status and live issue state. A blocked report
+stops the run without retrying, unassigning, rolling back, or closing the ticket.
+If OpenCode also exits unsuccessfully, both the process failure and blocked
+reason are retained. Conflicting sequential reports preserve the competing
+claims in the result evidence and prevent automatic completion.
+
+Agents are cooperative but fallible: finish and join delegated work, wait for
+the reporting command to finish, and do not submit detached or late reports.
+Completion reports are Agent attestations, not independent correctness checks
+or human approval. For already-committed work, inspect the records and use the
+separate [Manual finalization](#manually-finalize-approved-committed-work) flow
+if appropriate.
 
 ### Uncertain assignment or closure
 
