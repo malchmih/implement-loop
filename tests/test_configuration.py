@@ -4,14 +4,14 @@ import json
 import subprocess
 
 import pytest
-from support import SCRIPT, LoopTestCase
+from support import SCRIPT, LoopFixture
 
 
-def test_help_lists_only_supported_runtime_options(cli_case: LoopTestCase) -> None:
+def test_help_lists_only_supported_runtime_options(loop_fixture: LoopFixture) -> None:
     result = subprocess.run(
         [str(SCRIPT), "--help"],
-        cwd=cli_case.home,
-        env=cli_case.env,
+        cwd=loop_fixture.home,
+        env=loop_fixture.env,
         capture_output=True,
         timeout=30,
     )
@@ -28,19 +28,19 @@ def test_help_lists_only_supported_runtime_options(cli_case: LoopTestCase) -> No
         b"--keep-records-forever",
     ):
         assert removed_option not in result.stdout
-    assert not (cli_case.home / ".local/state/implement-loop").exists()
-    assert not cli_case.repository_lock_path().exists()
-    assert cli_case.load_state()["events"] == []
+    assert not (loop_fixture.home / ".local/state/implement-loop").exists()
+    assert not loop_fixture.repository_lock_path().exists()
+    assert loop_fixture.load_state()["events"] == []
 
 
-def test_built_in_opencode_defaults_and_private_state_location(cli_case: LoopTestCase) -> None:
-    result, runs = cli_case.run_loop(
+def test_built_in_opencode_defaults_and_private_state_location(loop_fixture: LoopFixture) -> None:
+    result, runs = loop_fixture.run_loop(
         "--max-iterations",
         "1",
         extra_env={"OPENCODE_TEST_CONFIG": "inherited-setting"},
     )
 
-    state = cli_case.load_state()
+    state = loop_fixture.load_state()
     assert result.returncode == 0, result.stdout.decode() + result.stderr.decode()
     call = state["opencode_calls"][0]
     assert call["args"][call["args"].index("--model") + 1] == "github-copilot/gpt-6-luna#max"
@@ -51,21 +51,21 @@ def test_built_in_opencode_defaults_and_private_state_location(cli_case: LoopTes
     assert metadata["configuration_file"] is None
     assert metadata["max_iterations"] == 1
     assert metadata["records_directory"] == str(
-        (cli_case.home / ".local/state/implement-loop").resolve()
+        (loop_fixture.home / ".local/state/implement-loop").resolve()
     )
     assert metadata["retention_days"] == 7
     assert "keep_records_forever" not in metadata
 
 
-def test_project_configuration_is_not_loaded_automatically(cli_case: LoopTestCase) -> None:
-    (cli_case.repo / ".implement-loop.toml").write_text("[execution\n")
-    cli_case.git("add", ".implement-loop.toml")
-    cli_case.git("commit", "--quiet", "-m", "Add unselected project config fixture")
+def test_project_configuration_is_not_loaded_automatically(loop_fixture: LoopFixture) -> None:
+    (loop_fixture.repo / ".implement-loop.toml").write_text("[execution\n")
+    loop_fixture.git("add", ".implement-loop.toml")
+    loop_fixture.git("commit", "--quiet", "-m", "Add unselected project config fixture")
 
-    result, _ = cli_case.run_loop("--max-iterations", "1")
+    result, _ = loop_fixture.run_loop("--max-iterations", "1")
 
     assert result.returncode == 0, result.stdout.decode() + result.stderr.decode()
-    assert len(cli_case.load_state()["opencode_calls"]) == 1
+    assert len(loop_fixture.load_state()["opencode_calls"]) == 1
 
 
 @pytest.mark.parametrize(
@@ -95,12 +95,12 @@ def test_project_configuration_is_not_loaded_automatically(cli_case: LoopTestCas
     ],
 )
 def test_invalid_user_configuration_stops_before_claiming(
-    cli_case: LoopTestCase,
+    loop_fixture: LoopFixture,
     name: str,
     contents: str | bytes,
     diagnostic: bytes,
 ) -> None:
-    config_home = cli_case.home / f"config-{name}"
+    config_home = loop_fixture.home / f"config-{name}"
     config_file = config_home / "implement-loop/config.toml"
     config_file.parent.mkdir(parents=True)
     if isinstance(contents, bytes):
@@ -108,31 +108,31 @@ def test_invalid_user_configuration_stops_before_claiming(
     else:
         config_file.write_text(contents)
 
-    result, runs = cli_case.run_loop(extra_env={"XDG_CONFIG_HOME": str(config_home)})
+    result, runs = loop_fixture.run_loop(extra_env={"XDG_CONFIG_HOME": str(config_home)})
 
     assert result.returncode == 2
     assert diagnostic in result.stderr
-    assert cli_case.load_state()["events"] == []
-    assert cli_case.load_state()["opencode_calls"] == []
+    assert loop_fixture.load_state()["events"] == []
+    assert loop_fixture.load_state()["opencode_calls"] == []
     assert runs == []
-    assert not (cli_case.home / ".local/state/implement-loop").exists()
-    assert not cli_case.repository_lock_path().exists()
+    assert not (loop_fixture.home / ".local/state/implement-loop").exists()
+    assert not loop_fixture.repository_lock_path().exists()
 
 
 def test_uninspectable_user_configuration_is_not_treated_as_missing(
-    cli_case: LoopTestCase,
+    loop_fixture: LoopFixture,
 ) -> None:
-    config_home = cli_case.home / "config home is a file"
+    config_home = loop_fixture.home / "config home is a file"
     config_home.write_text("not a directory\n")
 
-    result, runs = cli_case.run_loop(extra_env={"XDG_CONFIG_HOME": str(config_home)})
+    result, runs = loop_fixture.run_loop(extra_env={"XDG_CONFIG_HOME": str(config_home)})
 
     assert result.returncode == 2
     assert b"Cannot inspect discovered configuration file" in result.stderr
-    assert cli_case.load_state()["events"] == []
-    assert cli_case.load_state()["opencode_calls"] == []
+    assert loop_fixture.load_state()["events"] == []
+    assert loop_fixture.load_state()["opencode_calls"] == []
     assert runs == []
-    assert not (cli_case.home / ".local/state/implement-loop").exists()
+    assert not (loop_fixture.home / ".local/state/implement-loop").exists()
 
 
 @pytest.mark.parametrize(
@@ -145,18 +145,18 @@ def test_uninspectable_user_configuration_is_not_treated_as_missing(
     ],
 )
 def test_xdg_home_values_must_be_absolute(
-    cli_case: LoopTestCase,
+    loop_fixture: LoopFixture,
     variable: str,
     value: str,
 ) -> None:
-    result, runs = cli_case.run_loop(extra_env={variable: value})
+    result, runs = loop_fixture.run_loop(extra_env={variable: value})
 
     assert result.returncode == 2
     assert f"{variable} must be an absolute path".encode() in result.stderr
-    assert cli_case.load_state()["events"] == []
-    assert cli_case.load_state()["opencode_calls"] == []
+    assert loop_fixture.load_state()["events"] == []
+    assert loop_fixture.load_state()["opencode_calls"] == []
     assert runs == []
-    assert not (cli_case.home / ".local/state/implement-loop").exists()
+    assert not (loop_fixture.home / ".local/state/implement-loop").exists()
 
 
 @pytest.mark.parametrize(
@@ -171,34 +171,34 @@ def test_xdg_home_values_must_be_absolute(
     ],
 )
 def test_removed_runtime_overrides_are_rejected_before_side_effects(
-    cli_case: LoopTestCase,
+    loop_fixture: LoopFixture,
     arguments: tuple[str, ...],
 ) -> None:
-    result, runs = cli_case.run_loop(*arguments)
+    result, runs = loop_fixture.run_loop(*arguments)
 
     assert result.returncode == 2
     assert b"unrecognized arguments" in result.stderr
-    assert cli_case.load_state()["events"] == []
-    assert cli_case.load_state()["opencode_calls"] == []
+    assert loop_fixture.load_state()["events"] == []
+    assert loop_fixture.load_state()["opencode_calls"] == []
     assert runs == []
-    assert not (cli_case.home / ".local/state/implement-loop").exists()
-    assert not cli_case.repository_lock_path().exists()
+    assert not (loop_fixture.home / ".local/state/implement-loop").exists()
+    assert not loop_fixture.repository_lock_path().exists()
 
 
-def test_configuration_is_recorded_before_github_discovery(cli_case: LoopTestCase) -> None:
-    config_home = cli_case.home / "early-record-config"
+def test_configuration_is_recorded_before_github_discovery(loop_fixture: LoopFixture) -> None:
+    config_home = loop_fixture.home / "early-record-config"
     config_file = config_home / "implement-loop/config.toml"
     config_file.parent.mkdir(parents=True)
     config_file.write_text('model = "configured-model"\nvariant = "high"\n')
-    cli_case.state["repository_view_failure"] = True
-    cli_case.save_state()
+    loop_fixture.state["repository_view_failure"] = True
+    loop_fixture.save_state()
 
-    result, runs = cli_case.run_loop(extra_env={"XDG_CONFIG_HOME": str(config_home)})
+    result, runs = loop_fixture.run_loop(extra_env={"XDG_CONFIG_HOME": str(config_home)})
 
     assert result.returncode != 0
     assert b"simulated repository discovery failure" in result.stderr
-    assert cli_case.load_state()["events"] == []
-    assert cli_case.load_state()["opencode_calls"] == []
+    assert loop_fixture.load_state()["events"] == []
+    assert loop_fixture.load_state()["opencode_calls"] == []
     assert len(runs) == 1
     metadata = json.loads((runs[0] / "run.json").read_text())
     assert metadata["configuration_file"] == str(config_file)
@@ -207,51 +207,51 @@ def test_configuration_is_recorded_before_github_discovery(cli_case: LoopTestCas
 
 
 def test_missing_git_fails_before_checkout_discovery_or_side_effects(
-    cli_case: LoopTestCase,
+    loop_fixture: LoopFixture,
 ) -> None:
-    minimal_bin = cli_case.controlled_path_directory("python3", "gh", "opencode")
+    minimal_bin = loop_fixture.controlled_path_directory("python3", "gh", "opencode")
 
-    result, runs = cli_case.run_loop(extra_env={"PATH": str(minimal_bin)})
+    result, runs = loop_fixture.run_loop(extra_env={"PATH": str(minimal_bin)})
 
     assert result.returncode == 1
     assert b"'git' was not found on PATH" in result.stderr
-    assert cli_case.load_state()["events"] == []
-    assert cli_case.load_state()["opencode_calls"] == []
+    assert loop_fixture.load_state()["events"] == []
+    assert loop_fixture.load_state()["opencode_calls"] == []
     assert runs == []
-    assert not (cli_case.home / ".local/state/implement-loop").exists()
-    assert not cli_case.repository_lock_path().exists()
+    assert not (loop_fixture.home / ".local/state/implement-loop").exists()
+    assert not loop_fixture.repository_lock_path().exists()
 
 
-def test_missing_gh_fails_before_record_creation_or_side_effects(cli_case: LoopTestCase) -> None:
-    minimal_bin = cli_case.controlled_path_directory("python3", "git", "opencode")
+def test_missing_gh_fails_before_record_creation_or_side_effects(loop_fixture: LoopFixture) -> None:
+    minimal_bin = loop_fixture.controlled_path_directory("python3", "git", "opencode")
 
-    result, runs = cli_case.run_loop(extra_env={"PATH": str(minimal_bin)})
+    result, runs = loop_fixture.run_loop(extra_env={"PATH": str(minimal_bin)})
 
     assert result.returncode == 1
     assert b"'gh' was not found on PATH" in result.stderr
-    assert cli_case.load_state()["events"] == []
-    assert cli_case.load_state()["opencode_calls"] == []
+    assert loop_fixture.load_state()["events"] == []
+    assert loop_fixture.load_state()["opencode_calls"] == []
     assert runs == []
-    assert not (cli_case.home / ".local/state/implement-loop").exists()
-    assert not cli_case.repository_lock_path().exists()
+    assert not (loop_fixture.home / ".local/state/implement-loop").exists()
+    assert not loop_fixture.repository_lock_path().exists()
 
 
-def test_removed_harness_option_is_rejected_before_side_effects(cli_case: LoopTestCase) -> None:
-    result, runs = cli_case.run_loop("--harness", "copilot")
+def test_removed_harness_option_is_rejected_before_side_effects(loop_fixture: LoopFixture) -> None:
+    result, runs = loop_fixture.run_loop("--harness", "copilot")
 
     assert result.returncode == 2
     assert b"unrecognized arguments: --harness copilot" in result.stderr
-    assert cli_case.load_state()["events"] == []
-    assert cli_case.load_state()["opencode_calls"] == []
+    assert loop_fixture.load_state()["events"] == []
+    assert loop_fixture.load_state()["opencode_calls"] == []
     assert runs == []
-    assert not (cli_case.home / ".local/state/implement-loop").exists()
+    assert not (loop_fixture.home / ".local/state/implement-loop").exists()
 
 
-def test_invalid_attempt_limit_is_rejected_before_side_effects(cli_case: LoopTestCase) -> None:
-    result, runs = cli_case.run_loop("--max-iterations", "0")
+def test_invalid_attempt_limit_is_rejected_before_side_effects(loop_fixture: LoopFixture) -> None:
+    result, runs = loop_fixture.run_loop("--max-iterations", "0")
 
     assert result.returncode == 2
     assert b"positive integer" in result.stderr
-    assert cli_case.load_state()["events"] == []
+    assert loop_fixture.load_state()["events"] == []
     assert runs == []
-    assert not (cli_case.home / ".local/state/implement-loop").exists()
+    assert not (loop_fixture.home / ".local/state/implement-loop").exists()

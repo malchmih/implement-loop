@@ -16,11 +16,10 @@ mise run source-install
 
 `setup` synchronizes the committed lockfile. `check` runs Ruff, mypy, and pytest;
 `test` runs pytest, and `source-install` installs this checkout as an editable
-source command. The existing unittest-based tests remain discoverable by pytest
-while behavior groups are migrated. New pytest tests share fixtures for a real
-temporary Git checkout and fake GitHub/OpenCode commands. Tests make no live
-model calls or GitHub writes. Locked uv commands do not rewrite `uv.lock` and
-fail if it needs reconciliation.
+source command. The test suite uses pytest functions, assertions, and one shared
+fixture for a real temporary Git checkout with fake GitHub/OpenCode commands.
+Tests make no live model calls or GitHub writes. Locked uv commands do not
+rewrite `uv.lock` and fail if it needs reconciliation.
 
 The floating Python request selects the latest stable release when mise resolves
 or upgrades tools; the supported minor series is declared in `pyproject.toml`,

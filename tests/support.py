@@ -12,7 +12,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import unittest
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -423,7 +422,7 @@ def _isolated_git_environment(home: Path) -> dict[str, str]:
 
 
 class _TemporaryHomeFixture:
-    def setUp(self) -> None:
+    def initialize_home(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="implement-loop-test-")
         self.home = Path(self.temp.name)
         self.env = _isolated_git_environment(self.home)
@@ -911,18 +910,6 @@ class _LoopFixtureSupport:
 
 
 class LoopFixture(_TemporaryHomeFixture, _LoopFixtureSupport):
-    def setUp(self) -> None:
-        _TemporaryHomeFixture.setUp(self)
-        self.initialize_loop()
-
-
-class TemporaryHomeTestCase(unittest.TestCase, _TemporaryHomeFixture):
-    def setUp(self) -> None:
-        _TemporaryHomeFixture.setUp(self)
-        self.addCleanup(self.cleanup)
-
-
-class LoopTestCase(TemporaryHomeTestCase, _LoopFixtureSupport):
-    def setUp(self) -> None:
-        super().setUp()
+    def __init__(self) -> None:
+        self.initialize_home()
         self.initialize_loop()

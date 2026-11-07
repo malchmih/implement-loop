@@ -2,22 +2,22 @@ from __future__ import annotations
 
 import json
 
-from support import LoopTestCase
+from support import LoopFixture
 
 
-def test_user_toml_configures_root_opencode_preferences(cli_case: LoopTestCase) -> None:
-    config_home = cli_case.home / "user settings"
+def test_user_toml_configures_root_opencode_preferences(loop_fixture: LoopFixture) -> None:
+    config_home = loop_fixture.home / "user settings"
     config_file = config_home / "implement-loop/config.toml"
     config_file.parent.mkdir(parents=True)
     config_file.write_text('model = "provider/custom-model"\nvariant = "high"\n')
 
-    result, runs = cli_case.run_loop(
+    result, runs = loop_fixture.run_loop(
         "--max-iterations",
         "1",
         extra_env={"XDG_CONFIG_HOME": str(config_home)},
     )
 
-    state = cli_case.load_state()
+    state = loop_fixture.load_state()
     assert result.returncode == 0, result.stdout.decode() + result.stderr.decode()
     call = state["opencode_calls"][0]
     assert call["args"][call["args"].index("--model") + 1] == "provider/custom-model#high"
@@ -26,9 +26,9 @@ def test_user_toml_configures_root_opencode_preferences(cli_case: LoopTestCase) 
 
 
 def test_root_model_preference_does_not_replace_a_delegated_model(
-    cli_case: LoopTestCase,
+    loop_fixture: LoopFixture,
 ) -> None:
-    config_home = cli_case.home / "root model settings"
+    config_home = loop_fixture.home / "root model settings"
     config_file = config_home / "implement-loop/config.toml"
     config_file.parent.mkdir(parents=True)
     config_file.write_text('model = "root-provider/root-model"\nvariant = "high"\n')
@@ -51,17 +51,17 @@ def test_root_model_preference_does_not_replace_a_delegated_model(
         }
     ]
     raw_output = "\n".join(json.dumps(event) for event in events) + "\n"
-    cli_case.state["opencode_raw_output"] = raw_output
-    cli_case.save_state()
+    loop_fixture.state["opencode_raw_output"] = raw_output
+    loop_fixture.save_state()
 
-    result, runs = cli_case.run_loop(
+    result, runs = loop_fixture.run_loop(
         "--max-iterations",
         "1",
         extra_env={"XDG_CONFIG_HOME": str(config_home)},
     )
 
     assert result.returncode == 0, result.stdout.decode() + result.stderr.decode()
-    call = cli_case.load_state()["opencode_calls"][0]
+    call = loop_fixture.load_state()["opencode_calls"][0]
     assert call["args"][call["args"].index("--model") + 1] == "root-provider/root-model#high"
     recorded_events = [
         json.loads(line)
@@ -70,27 +70,27 @@ def test_root_model_preference_does_not_replace_a_delegated_model(
     assert recorded_events[0]["part"]["state"]["input"]["model"] == delegated_model
 
 
-def test_default_attempt_limit_is_ten(cli_case: LoopTestCase) -> None:
+def test_default_attempt_limit_is_ten(loop_fixture: LoopFixture) -> None:
     for ticket_number in range(3, 13):
-        cli_case.add_ticket(ticket_number)
-    cli_case.save_state()
+        loop_fixture.add_ticket(ticket_number)
+    loop_fixture.save_state()
 
-    result, _ = cli_case.run_loop()
+    result, _ = loop_fixture.run_loop()
 
-    state = cli_case.load_state()
+    state = loop_fixture.load_state()
     assert result.returncode == 0, result.stdout.decode() + result.stderr.decode()
     assert [call["ticket"] for call in state["opencode_calls"]] == list(range(2, 12))
     assert state["tickets"]["12"]["state"] == "open"
     assert b"Attempt limit reached after 10 invocation(s)" in result.stdout
 
 
-def test_explicit_attempt_limit_stops_before_the_next_ticket(cli_case: LoopTestCase) -> None:
-    cli_case.add_ticket(3)
-    cli_case.save_state()
+def test_explicit_attempt_limit_stops_before_the_next_ticket(loop_fixture: LoopFixture) -> None:
+    loop_fixture.add_ticket(3)
+    loop_fixture.save_state()
 
-    result, _ = cli_case.run_loop("--max-iterations", "1")
+    result, _ = loop_fixture.run_loop("--max-iterations", "1")
 
-    state = cli_case.load_state()
+    state = loop_fixture.load_state()
     assert result.returncode == 0, result.stdout.decode() + result.stderr.decode()
     assert [call["ticket"] for call in state["opencode_calls"]] == [2]
     assert state["tickets"]["3"]["state"] == "open"
