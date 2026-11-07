@@ -165,6 +165,39 @@ def test_new_commit_is_required(loop_fixture: LoopFixture) -> None:
     assert [event[0] for event in state["events"]] == ["assign"]
 
 
+def test_existing_commit_does_not_satisfy_new_commit_requirement(
+    loop_fixture: LoopFixture,
+) -> None:
+    implementation = loop_fixture.repo / "implementation-2.txt"
+    implementation.write_text("implementation committed before the run\n")
+    loop_fixture.git("add", implementation.name)
+    loop_fixture.git("commit", "--quiet", "-m", "Existing implementation for ticket 2")
+    existing_head = loop_fixture.git("rev-parse", "HEAD")
+
+    loop_fixture.add_ticket(3)
+    loop_fixture.state["comments"]["2"].append(
+        {"user": {"login": "reviewer"}, "body": "Human approval received."}
+    )
+    loop_fixture.state["make_commit"] = False
+    loop_fixture.save_state()
+
+    result, _ = loop_fixture.run_loop("--max-iterations", "2")
+
+    state = loop_fixture.load_state()
+    assert result.returncode != 0
+    assert b"No new commit was made" in result.stderr
+    assert [call["ticket"] for call in state["opencode_calls"]] == [2]
+    assert state["tickets"]["2"]["state"] == "open"
+    assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
+    assert state["tickets"]["3"]["state"] == "open"
+    assert state["tickets"]["3"]["assignees"] == []
+    assert [event[:2] for event in state["events"]] == [["assign", 2]]
+    assert result.stdout.count(b"Agent output") == 1
+    assert loop_fixture.git("rev-parse", "HEAD") == existing_head
+    assert loop_fixture.git("status", "--porcelain") == ""
+    assert implementation.read_text() == "implementation committed before the run\n"
+
+
 def test_dirty_checkout_after_execution_is_rejected(loop_fixture: LoopFixture) -> None:
     loop_fixture.state["agent_action"] = "dirty"
     loop_fixture.state["make_commit"] = False
