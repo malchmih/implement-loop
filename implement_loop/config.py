@@ -15,10 +15,7 @@ from .harness import HarnessSettings, default_opencode_settings
 from .records import RunRecordSettings
 
 _POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]{0,8}$")
-_NONNEGATIVE_INTEGER = re.compile(r"^(0|[1-9][0-9]{0,8})$")
-_MAX_INTEGER = 999_999_999
-_DEFAULT_MAX_ITERATIONS = 5
-_DEFAULT_RETENTION_DAYS = 7
+_DEFAULT_MAX_ITERATIONS = 10
 
 
 @dataclass(frozen=True)
@@ -36,48 +33,10 @@ class _ConfigurationError(ValueError):
     """A user configuration cannot be applied safely."""
 
 
-@dataclass(frozen=True)
-class _RecordPreferences:
-    directory: Path | None
-    retention_days: int | None
-
-
-@dataclass(frozen=True)
-class _Preferences:
-    """Configuration values before the positional spec number is attached."""
-
-    max_iterations: int
-    opencode: HarnessSettings
-    records: _RecordPreferences
-
-
 def _positive_integer(value: str) -> int:
     if not _POSITIVE_INTEGER.fullmatch(value):
         raise argparse.ArgumentTypeError("must be a positive integer with at most 9 digits")
     return int(value)
-
-
-def _nonnegative_integer(value: str) -> int:
-    if not _NONNEGATIVE_INTEGER.fullmatch(value):
-        raise argparse.ArgumentTypeError("must be a non-negative integer with at most 9 digits")
-    return int(value)
-
-
-def _nonempty_setting(value: str) -> str:
-    if (
-        not value
-        or value.isspace()
-        or "\x00" in value
-        or any(character.isspace() for character in value)
-    ):
-        raise argparse.ArgumentTypeError("must be a non-empty value without whitespace or NUL")
-    return value
-
-
-def _path_argument(value: str) -> str:
-    if not value.strip() or "\x00" in value:
-        raise argparse.ArgumentTypeError("must be a non-empty path")
-    return value
 
 
 def _absolute_xdg_directory(environment_name: str, value: str) -> Path:
@@ -107,8 +66,8 @@ def _default_config_path() -> Path:
     return config_home / "implement-loop" / "config.toml"
 
 
-def _read_config_file(path: Path, *, explicit: bool) -> dict[str, Any] | None:
-    if not explicit and not os.path.lexists(path):
+def _read_config_file(path: Path) -> dict[str, Any] | None:
+    if not os.path.lexists(path):
         return None
     try:
         with path.open("rb") as config_file:
@@ -120,38 +79,10 @@ def _read_config_file(path: Path, *, explicit: bool) -> dict[str, Any] | None:
             f"Configuration file {path} is not valid UTF-8: {error}"
         ) from error
     except OSError as error:
-        selection = "explicitly selected" if explicit else "discovered"
         raise _ConfigurationError(
-            f"Cannot read {selection} configuration file {path}: {error}"
+            f"Cannot read discovered configuration file {path}: {error}"
         ) from error
-    if not isinstance(document, dict):
-        raise _ConfigurationError(f"Configuration file {path} must contain a TOML table.")
     return document
-
-
-def _selected_config_file(raw_path: str | None) -> tuple[Path | None, dict[str, Any]]:
-    if raw_path is None:
-        path = _default_config_path()
-        document = _read_config_file(path, explicit=False)
-        if document is None:
-            return None, {}
-        return path, document
-
-    path = _resolve_path(raw_path, "--config-file")
-    document = _read_config_file(path, explicit=True)
-    assert document is not None
-    return path, document
-
-
-def _table(value: Any, context: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise _ConfigurationError(f"{context} must be a TOML table.")
-    return value
-
-
-def _section(table: dict[str, Any], key: str, context: str) -> dict[str, Any]:
-    value = table.get(key, {})
-    return _table(value, f"{context}.{key}")
 
 
 def _reject_unknown_keys(table: dict[str, Any], allowed: set[str], context: str) -> None:
@@ -177,94 +108,23 @@ def _config_setting_string(value: Any, context: str) -> str:
     return value
 
 
-def _config_integer(value: Any, context: str, *, allow_zero: bool) -> int:
-    minimum = 0 if allow_zero else 1
-    if type(value) is not int or not minimum <= value <= _MAX_INTEGER:
-        qualifier = "non-negative" if allow_zero else "positive"
-        raise _ConfigurationError(f"{context} must be a {qualifier} integer with at most 9 digits.")
-    return value
+def _opencode_settings(document: dict[str, Any] | None) -> HarnessSettings:
+    settings = default_opencode_settings()
+    if document is None:
+        return settings
 
-
-def _config_path(value: Any, context: str) -> Path:
-    if not isinstance(value, str) or not value.strip() or "\x00" in value:
-        raise _ConfigurationError(f"{context} must be a non-empty path string.")
-    return _resolve_path(value, context)
-
-
-def _apply_opencode_table(settings: HarnessSettings, table: dict[str, Any]) -> HarnessSettings:
-    context = "execution.harnesses.opencode"
-    _reject_unknown_keys(table, {"model", "variant"}, context)
+    _reject_unknown_keys(document, {"model", "variant"}, "root")
     model = (
-        _config_setting_string(table["model"], f"{context}.model")
-        if "model" in table
+        _config_setting_string(document["model"], "model")
+        if "model" in document
         else settings.model
     )
     variant = (
-        _config_setting_string(table["variant"], f"{context}.variant")
-        if "variant" in table
+        _config_setting_string(document["variant"], "variant")
+        if "variant" in document
         else settings.model_variant
     )
     return replace(settings, model=model, model_variant=variant)
-
-
-def _apply_config(document: dict[str, Any], preferences: _Preferences) -> _Preferences:
-    _reject_unknown_keys(document, {"execution", "records"}, "root")
-    execution = _section(document, "execution", "root")
-    _reject_unknown_keys(execution, {"max_attempts", "harnesses"}, "execution")
-    if "max_attempts" in execution:
-        preferences = replace(
-            preferences,
-            max_iterations=_config_integer(
-                execution["max_attempts"], "execution.max_attempts", allow_zero=False
-            ),
-        )
-
-    harnesses = _section(execution, "harnesses", "execution")
-    _reject_unknown_keys(harnesses, {"opencode"}, "execution.harnesses")
-    if "opencode" in harnesses:
-        preferences = replace(
-            preferences,
-            opencode=_apply_opencode_table(
-                preferences.opencode,
-                _table(harnesses["opencode"], "execution.harnesses.opencode"),
-            ),
-        )
-
-    records = _section(document, "records", "root")
-    _reject_unknown_keys(
-        records,
-        {"directory", "retention_days", "keep_forever"},
-        "records",
-    )
-    record_preferences = preferences.records
-    if "directory" in records:
-        record_preferences = replace(
-            record_preferences,
-            directory=_config_path(records["directory"], "records.directory"),
-        )
-    if "retention_days" in records:
-        record_preferences = replace(
-            record_preferences,
-            retention_days=_config_integer(
-                records["retention_days"], "records.retention_days", allow_zero=True
-            ),
-        )
-    if "keep_forever" in records:
-        keep_forever = records["keep_forever"]
-        if type(keep_forever) is not bool:
-            raise _ConfigurationError("records.keep_forever must be true or false.")
-        if keep_forever:
-            record_preferences = replace(record_preferences, retention_days=None)
-
-    return replace(preferences, records=record_preferences)
-
-
-def _default_preferences() -> _Preferences:
-    return _Preferences(
-        max_iterations=_DEFAULT_MAX_ITERATIONS,
-        opencode=default_opencode_settings(),
-        records=_RecordPreferences(directory=None, retention_days=_DEFAULT_RETENTION_DAYS),
-    )
 
 
 def _default_records_dir() -> Path:
@@ -277,103 +137,38 @@ def _default_records_dir() -> Path:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> Options:
-    """Parse the compact invocation and apply defaults, user config, then CLI values."""
+    """Parse the invocation and apply built-in and optional user OpenCode settings."""
 
     parser = argparse.ArgumentParser(
         prog="implement-loop",
         description=("Implement eligible, prepared direct child issues of a GitHub spec."),
         epilog=(
-            "Each OpenCode invocation is one attempt. The loop stops successfully "
-            "when no eligible child remains. User settings are read from "
+            "The optional user settings file is read from "
             "${XDG_CONFIG_HOME:-~/.config}/implement-loop/config.toml."
         ),
     )
     parser.add_argument("spec_number", metavar="SPEC_NUMBER", type=_positive_integer)
     parser.add_argument(
-        "--config-file",
-        metavar="PATH",
-        type=_path_argument,
-        help="use this TOML file instead of the discovered user configuration",
-    )
-    parser.add_argument(
         "--max-iterations",
         metavar="N",
         type=_positive_integer,
-        default=None,
-        help="maximum OpenCode invocations (default: 5)",
-    )
-    parser.add_argument(
-        "--opencode-model",
-        metavar="MODEL",
-        type=_nonempty_setting,
-        help="OpenCode model name",
-    )
-    parser.add_argument(
-        "--opencode-variant",
-        metavar="VARIANT",
-        type=_nonempty_setting,
-        help="OpenCode model variant (default: max)",
-    )
-    parser.add_argument(
-        "--records-dir",
-        metavar="PATH",
-        type=_path_argument,
-        help="directory for private loop-owned run records",
-    )
-    retention = parser.add_mutually_exclusive_group()
-    retention.add_argument(
-        "--retention-days",
-        metavar="N",
-        type=_nonnegative_integer,
-        help="remove unmarked loop records older than N days at startup (default: 7)",
-    )
-    retention.add_argument(
-        "--keep-records-forever",
-        action="store_true",
-        default=None,
-        help="disable startup expiry of loop-owned run records",
+        default=_DEFAULT_MAX_ITERATIONS,
+        help="maximum ticket Attempts (default: 10)",
     )
     parsed = parser.parse_args(argv)
 
     try:
-        config_file, document = _selected_config_file(parsed.config_file)
-        preferences = _apply_config(document, _default_preferences())
-
-        if parsed.max_iterations is not None:
-            preferences = replace(preferences, max_iterations=parsed.max_iterations)
-        if parsed.opencode_model is not None:
-            preferences = replace(
-                preferences,
-                opencode=replace(preferences.opencode, model=parsed.opencode_model),
-            )
-        if parsed.opencode_variant is not None:
-            preferences = replace(
-                preferences,
-                opencode=replace(preferences.opencode, model_variant=parsed.opencode_variant),
-            )
-        if parsed.records_dir is not None:
-            records_directory = _resolve_path(parsed.records_dir, "--records-dir")
-        elif preferences.records.directory is not None:
-            records_directory = preferences.records.directory
-        else:
-            records_directory = _default_records_dir()
-
-        retention_days = preferences.records.retention_days
-        if parsed.retention_days is not None:
-            retention_days = parsed.retention_days
-        elif parsed.keep_records_forever:
-            retention_days = None
-        records = RunRecordSettings(
-            directory=records_directory,
-            retention_days=retention_days,
-        )
+        config_file = _default_config_path()
+        document = _read_config_file(config_file)
+        opencode = _opencode_settings(document)
+        records = RunRecordSettings(directory=_default_records_dir())
     except _ConfigurationError as error:
         parser.error(str(error))
 
     return Options(
         spec_number=parsed.spec_number,
-        max_iterations=preferences.max_iterations,
-        opencode=preferences.opencode,
+        max_iterations=parsed.max_iterations,
+        opencode=opencode,
         records=records,
-        config_file=config_file,
+        config_file=config_file if document is not None else None,
     )

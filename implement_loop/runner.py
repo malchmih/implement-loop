@@ -23,7 +23,7 @@ from .git import (
 )
 from .github import GitHub, JsonObject, Repository
 from .harness import ProcessOutcome, run_opencode, select_opencode
-from .records import RunRecords
+from .records import RETENTION_DAYS, RunRecords
 
 _MAX_PROMPT_BYTES = 100_000
 
@@ -413,8 +413,7 @@ def run(options: Options, diagnostics: DiagnosticContext) -> None:
                 str(options.config_file) if options.config_file is not None else None
             ),
             "records_directory": str(records.records_dir),
-            "retention_days": options.records.retention_days,
-            "keep_records_forever": options.records.retention_days is None,
+            "retention_days": RETENTION_DAYS,
             **harness.metadata(),
             "started_at": records.started_at.isoformat(),
         }

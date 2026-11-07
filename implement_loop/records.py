@@ -21,14 +21,14 @@ from .errors import LoopError
 _RUN_NAME = re.compile(r"^run-([0-9]{8}T[0-9]{6}Z)-([A-Za-z0-9]{6})$")
 _RUN_SUFFIX_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 _SECONDS_PER_DAY = 24 * 60 * 60
+RETENTION_DAYS = 7
 
 
 @dataclass(frozen=True)
 class RunRecordSettings:
-    """Resolved location and expiry policy for private run records."""
+    """Resolved standard location for private run records."""
 
     directory: Path
-    retention_days: int | None
 
 
 class RunRecords:
@@ -60,7 +60,7 @@ class RunRecords:
             raise LoopError(
                 "The run-record location must be a dedicated directory outside the target "
                 "checkout, not an ancestor of it, the home directory, or filesystem root. "
-                "Choose an external --records-dir, records.directory, or XDG_STATE_HOME."
+                "Use the standard user state directory or an external XDG_STATE_HOME."
             )
 
         try:
@@ -101,7 +101,7 @@ class RunRecords:
             records.write_text(records.active_marker, f"{os.getpid()}\n", exclusive=True)
         except OSError as error:
             raise LoopError(f"Cannot create the active run marker: {error}") from error
-        records.prune_expired(settings.retention_days)
+        records.prune_expired()
         return records
 
     def attempt_directory(self, attempt_number: int, ticket_number: int) -> Path:
@@ -134,11 +134,8 @@ class RunRecords:
         except OSError as error:
             raise LoopError(f"Cannot persist required run record {path}: {error}") from error
 
-    def prune_expired(self, retention_days: int | None) -> None:
+    def prune_expired(self) -> None:
         """Remove only expired, unmarked run directories; cleanup never blocks a run."""
-
-        if retention_days is None:
-            return
 
         try:
             entries = list(os.scandir(self.records_dir))
@@ -146,7 +143,7 @@ class RunRecords:
             self._warn(f"Cannot scan run records at {self.records_dir}; skipping cleanup: {error}")
             return
 
-        cutoff = time.time() - retention_days * _SECONDS_PER_DAY
+        cutoff = time.time() - RETENTION_DAYS * _SECONDS_PER_DAY
         for entry in entries:
             if not entry.name.startswith("run-") or entry.is_symlink():
                 continue

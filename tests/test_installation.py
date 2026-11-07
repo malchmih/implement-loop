@@ -91,24 +91,16 @@ class SourceCommandIntegrationTests(LoopTestCase):
     def test_source_default_opencode_honors_config_and_progresses_returned_queue(self) -> None:
         source = SCRIPT.parent
 
-        records_dir = self.home / "configured private records"
         config_home = self.home / "configured user settings"
         config_file = config_home / "implement-loop/config.toml"
         config_file.parent.mkdir(parents=True)
-        config_file.write_text(
-            "[execution]\n"
-            "max_attempts = 2\n\n"
-            "[execution.harnesses.opencode]\n"
-            'model = "provider/custom-opencode"\n'
-            'variant = "high"\n\n'
-            "[records]\n"
-            f'directory = "{records_dir}"\n'
-            "retention_days = 14\n"
-        )
+        config_file.write_text('model = "provider/custom-opencode"\nvariant = "high"\n')
 
         self.add_ticket(3)
         self.add_ticket(4)
         self.state["children"] = [{"number": 3}, {"number": 2}, {"number": 4}]
+        state_home = self.home / "configured XDG state"
+        records_dir = state_home / "implement-loop"
         self.state["records_dir"] = str(records_dir)
         self.save_state()
 
@@ -117,9 +109,10 @@ class SourceCommandIntegrationTests(LoopTestCase):
         (nested / "target.txt").write_text("target repository, not source checkout\n")
         self.git("add", "nested")
         self.git("commit", "--quiet", "-m", "Add target subdirectory")
-        state_home = self.home / "configured XDG state"
 
         result, _ = self.run_loop(
+            "--max-iterations",
+            "2",
             cwd=nested,
             executable=SCRIPT,
             extra_env={
@@ -166,8 +159,8 @@ class SourceCommandIntegrationTests(LoopTestCase):
         self.assertEqual(run_metadata["max_iterations"], 2)
         self.assertEqual(run_metadata["configuration_file"], str(config_file.resolve()))
         self.assertEqual(run_metadata["records_directory"], str(records_dir.resolve()))
-        self.assertEqual(run_metadata["retention_days"], 14)
-        self.assertFalse((state_home / "implement-loop").exists())
+        self.assertEqual(run_metadata["retention_days"], 7)
+        self.assertTrue((state_home / "implement-loop").is_dir())
 
         for attempt_number, ticket_number in enumerate((3, 2), start=1):
             attempt = run_dir / f"attempt-{attempt_number}-ticket-{ticket_number}"
@@ -202,20 +195,12 @@ class SourceCommandIntegrationTests(LoopTestCase):
         self.git("commit", "--quiet", "-m", "Existing implementation for ticket 2")
         existing_head = self.git("rev-parse", "HEAD")
 
-        records_dir = self.home / "finalization private records"
         config_home = self.home / "finalization user settings"
         config_file = config_home / "implement-loop/config.toml"
         config_file.parent.mkdir(parents=True)
-        config_file.write_text(
-            "[execution]\n"
-            "max_attempts = 2\n\n"
-            "[execution.harnesses.opencode]\n"
-            'model = "provider/custom-opencode"\n'
-            'variant = "high"\n\n'
-            "[records]\n"
-            f'directory = "{records_dir}"\n'
-            "retention_days = 30\n"
-        )
+        config_file.write_text('model = "provider/custom-opencode"\nvariant = "high"\n')
+        state_home = self.home / "finalization XDG state"
+        records_dir = state_home / "implement-loop"
         self.add_ticket(3)
         self.state["comments"]["2"].append(
             {"user": {"login": "reviewer"}, "body": "Human approval received."}
@@ -225,8 +210,13 @@ class SourceCommandIntegrationTests(LoopTestCase):
         self.save_state()
 
         result, _ = self.run_loop(
+            "--max-iterations",
+            "2",
             executable=SCRIPT,
-            extra_env={"XDG_CONFIG_HOME": str(config_home)},
+            extra_env={
+                "XDG_CONFIG_HOME": str(config_home),
+                "XDG_STATE_HOME": str(state_home),
+            },
         )
 
         state = self.load_state()
@@ -263,7 +253,7 @@ class SourceCommandIntegrationTests(LoopTestCase):
         self.assertEqual(run_metadata["harness"], "opencode")
         self.assertEqual(run_metadata["model"], "provider/custom-opencode")
         self.assertEqual(run_metadata["max_iterations"], 2)
-        self.assertEqual(run_metadata["retention_days"], 30)
+        self.assertEqual(run_metadata["retention_days"], 7)
 
         attempt = run_dir / "attempt-1-ticket-2"
         prompt = state["opencode_calls"][0]["prompt"]

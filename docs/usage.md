@@ -35,9 +35,11 @@ implement-loop 123
 implement-loop 123 --max-iterations 10
 ```
 
-OpenCode is the only supported agent CLI. The default limit is five OpenCode
-invocations. See [configuration](configuration.md) for
-other settings and options.
+OpenCode is the only supported agent CLI. The default limit is ten ticket
+Attempts. The optional user TOML file controls only the root OpenCode model and
+variant; the limit is set with `--max-iterations`. See
+[configuration](configuration.md) for supported settings and intentional
+compatibility breaks.
 
 The loop considers direct child issues in GitHub's returned order. It skips
 closed, blocked, or assigned tickets, including tickets assigned to you. After
@@ -87,6 +89,12 @@ git status --short --branch
 git log -5 --oneline
 gh issue view "$TICKET" --comments
 ```
+
+Records use the standard user state location
+`${XDG_STATE_HOME:-$HOME/.local/state}/implement-loop`; there is no separate
+records-path option or retention override. Records older than seven days are
+eligible for conservative cleanup on a later startup. Treat any printed path as
+authoritative if the environment's XDG state directory has changed.
 
 Review the ticket's `agent.log`, `process.json`, result evidence, and `checks.json`
 when present. Before rerunning an interrupted run, verify that the wrapper,

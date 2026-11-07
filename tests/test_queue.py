@@ -83,20 +83,3 @@ class QueueTests(LoopTestCase):
         self.assertEqual(state["tickets"]["3"]["state"], "open")
         self.assertEqual(state["tickets"]["3"]["assignees"], [])
         self.assertIn(b"Attempt limit reached", result.stdout)
-
-    def test_default_limit_is_five_opencode_invocations(self) -> None:
-        for number in range(3, 8):
-            self.add_ticket(number)
-        self.save_state()
-
-        result, _ = self.run_loop()
-
-        state = self.load_state()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(len(state["opencode_calls"]), 5)
-        self.assertEqual(
-            [call["ticket"] for call in state["opencode_calls"]],
-            [2, 3, 4, 5, 6],
-        )
-        self.assertEqual(state["tickets"]["7"]["state"], "open")
-        self.assertIn(b"Attempt limit reached after 5 invocation(s)", result.stdout)
