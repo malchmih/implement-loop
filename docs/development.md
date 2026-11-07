@@ -23,10 +23,12 @@ model calls or GitHub writes. Locked uv commands do not rewrite `uv.lock` and
 fail if it needs reconciliation.
 
 The floating Python request selects the latest stable release when mise resolves
-or upgrades tools; it does not replace the interpreter in an existing uv
-environment. To refresh after a Python release change, run `mise upgrade python`,
-remove the local `.venv`, then run `mise run setup` to create the environment with
-the newly selected interpreter.
+or upgrades tools; the supported minor series is declared in `pyproject.toml`,
+Ruff, and mypy. When adopting a new stable series, update those settings and the
+run `mise upgrade python`, then regenerate the lockfile with
+`mise exec -- uv lock`. The floating request does not replace the interpreter in
+an existing uv environment: remove the local `.venv`, then run `mise run setup`
+to create an environment with the newly selected interpreter.
 
 ## Source installation smoke check
 

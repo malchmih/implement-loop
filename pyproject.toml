@@ -3,7 +3,7 @@ name = "implement-loop"
 version = "0.1.0"
 description = "A local sequential runner for prepared GitHub issue queues"
 license = "0BSD"
-requires-python = ">=3.15"
+requires-python = ">=3.15,<3.16"
 dependencies = []
 scripts = { implement-loop = "implement_loop.cli:main" }
 
