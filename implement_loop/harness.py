@@ -156,7 +156,7 @@ class _OpenCodeRenderer:
         try:
             line = raw_line.decode("utf-8")
             record = json.loads(line)
-        except (UnicodeDecodeError, ValueError, RecursionError):
+        except UnicodeDecodeError, ValueError, RecursionError:
             self._render_block(
                 ["OpenCode diagnostic", *self._indented(raw_line.decode("utf-8", "replace"))]
             )
@@ -1131,7 +1131,7 @@ class _OpenCodeRenderer:
     def _compact(value: Any) -> str:
         try:
             return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-        except (TypeError, ValueError, RecursionError):
+        except TypeError, ValueError, RecursionError:
             return "<structured details unavailable>"
 
     def _style(self, text: str, code: str) -> str:

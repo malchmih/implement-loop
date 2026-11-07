@@ -2661,7 +2661,7 @@ class HarnessTests(LoopTestCase):
                     try:
                         process.stdin.write(b"x")
                         process.stdin.flush()
-                    except (BrokenPipeError, OSError, ValueError):
+                    except BrokenPipeError, OSError, ValueError:
                         pass
                     try:
                         process.stdin.close()
@@ -2770,7 +2770,7 @@ class HarnessTests(LoopTestCase):
                     try:
                         process.stdin.write(b"x")
                         process.stdin.flush()
-                    except (BrokenPipeError, OSError, ValueError):
+                    except BrokenPipeError, OSError, ValueError:
                         pass
                     try:
                         process.stdin.close()
@@ -2881,7 +2881,7 @@ class HarnessTests(LoopTestCase):
                     try:
                         process.stdin.write(b"x")
                         process.stdin.flush()
-                    except (BrokenPipeError, OSError, ValueError):
+                    except BrokenPipeError, OSError, ValueError:
                         pass
                     try:
                         process.stdin.close()

@@ -253,7 +253,7 @@ def _record_result(
 
     try:
         parsed = json.loads(raw_result.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except UnicodeDecodeError, json.JSONDecodeError:
         return _reject_result(
             records,
             evidence_path,
@@ -679,7 +679,7 @@ def run(options: Options, diagnostics: DiagnosticContext) -> None:
                         file=sys.stderr,
                     )
             diagnostics.clear_ticket()
-    except (KeyboardInterrupt, LoopError, OSError):
+    except KeyboardInterrupt, LoopError, OSError:
         diagnostics.handled_failure = True
         raise
     finally:

@@ -1,10 +1,11 @@
 # Implement Loop
 
 Implement prepared direct child GitHub issues sequentially from the target
-checkout. Source-installed use is supported on Linux and macOS with Python 3.11+
-and [uv](https://docs.astral.sh/uv/). A run also needs Git, an authenticated `gh`
-session, the OpenCode CLI, and the external `implement` skill. See
-[workflow prerequisites](docs/usage.md#before-a-run) for setup and permissions.
+checkout. Source-installed use is supported on Linux and macOS with the latest
+stable CPython and [uv](https://docs.astral.sh/uv/). A run also needs Git, an
+authenticated `gh` session, the OpenCode CLI, and the external `implement`
+skill. See [workflow prerequisites](docs/usage.md#before-a-run) for setup and
+permissions.
 
 ## Install and run
 
@@ -14,9 +15,9 @@ Install the source command with uv:
 uv tool install --from git+https://github.com/malchmih/implement-loop implement-loop
 ```
 
-uv installs the command in an isolated environment using an available system or
-uv-managed Python 3.11 or later. This installs source code, not a bundled runtime
-executable; Python and the installed package remain required at runtime. Ensure
+uv installs the command in an isolated environment using a system or uv-managed
+supported CPython. This installs source code, not a bundled runtime executable;
+Python and the installed package remain required at runtime. Ensure
 uv's tool bin directory (usually `~/.local/bin`) is on your `PATH`. Upgrade with
 `uv tool upgrade implement-loop`.
 

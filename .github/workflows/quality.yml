@@ -14,68 +14,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  static:
-    name: Static checks
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.11"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with:
-          version: "0.13.5"
-          enable-cache: false
-
-      - name: Run static checks
-        run: make check-static
-
-  tests:
-    name: Behavioral tests (${{ matrix.platform }}, Python ${{ matrix.python-version }})
+  checks:
+    name: Checks (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: ubuntu-24.04
             platform: Linux
-            python-version: "3.11"
-          - runner: ubuntu-24.04
-            platform: Linux
-            python-version: "3.15"
           - runner: macos-26
             platform: macOS
-            python-version: "3.11"
-          - runner: macos-26
-            platform: macOS
-            python-version: "3.15"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - name: Set up mise
+        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2
         with:
-          python-version: ${{ matrix.python-version }}
+          cache: false
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with:
-          version: "0.13.5"
-          enable-cache: false
-
-      - name: Run behavioral tests
-        env:
-          UV_PYTHON: ${{ matrix.python-version }}
-        run: make test
+      - name: Run checks
+        run: mise run check
