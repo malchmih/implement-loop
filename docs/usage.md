@@ -2,7 +2,9 @@
 
 ## Before a run
 
-Install the command for your platform using the [README instructions](../README.md#install-and-run).
+Install the source command for Linux or macOS using the [README instructions](../README.md#install-and-run).
+The installation needs the latest stable supported CPython and uv; uv may use a
+system or uv-managed Python. Add uv's tool bin directory to `PATH` if needed.
 The target checkout must have an existing commit and attached branch, with no
 staged, unstaged, untracked, or submodule changes. Check it with
 `git status --short --branch`.
@@ -13,15 +15,13 @@ A run also requires:
   issues and dependencies, assign issues, comment, and close issues. Check the
   session with `gh auth status`; a valid session does not guarantee repository
   write permission.
-- OpenCode V2 (the default) or GitHub Copilot CLI (`--harness copilot`), with
-  authentication and an available model. Only the selected harness is needed.
+- OpenCode V2, with authentication and an available model.
 - The external skill named `implement`. It is not bundled, installed, or
-  configured by Implement Loop. For a personal skill shared by both harnesses,
-  use `~/.agents/skills/implement/SKILL.md`. OpenCode also discovers
-  `~/.config/opencode/skills/`; Copilot also discovers `~/.copilot/skills/`.
-  Project skill locations include `.agents/skills` and `.claude/skills` for
-  both harnesses, plus `.opencode/skills` for OpenCode and `.github/skills` for
-  Copilot.
+  configured by Implement Loop. OpenCode discovers personal skills in
+  `~/.agents/skills/implement/SKILL.md`, `~/.claude/skills/implement/SKILL.md`,
+  and `~/.config/opencode/skills/implement/SKILL.md`, and project skills in
+  `.agents/skills/implement/SKILL.md`, `.claude/skills/implement/SKILL.md`, and
+  `.opencode/skills/implement/SKILL.md`.
 
 The runner does not install or configure these tools. A command being on `PATH`
 does not confirm authentication, model access, or successful skill loading.
@@ -32,36 +32,82 @@ Run from the target checkout:
 
 ```bash
 implement-loop 123
-implement-loop 123 --harness copilot
 implement-loop 123 --max-iterations 10
 ```
 
-OpenCode is the default; `--harness` accepts `opencode` or `copilot`. The default
-limit is five harness invocations. See [configuration](configuration.md) for
-other settings and options.
+OpenCode is the only supported agent CLI. The default limit is ten ticket
+Attempts. The optional user TOML file controls only the root OpenCode model and
+variant; the limit is set with `--max-iterations`. See
+[configuration](configuration.md) for supported settings and intentional
+compatibility breaks.
 
 The loop considers direct child issues in GitHub's returned order. It skips
 closed, blocked, or assigned tickets, including tickets assigned to you. After
 each confirmed closure it refreshes the queue; it does not poll. A Loop run can
 stop at its invocation limit or when no eligible child remains, and a successful
-stop does not mean every child is complete. An Attempt is one harness
+stop does not mean every child is complete. An Attempt is one OpenCode
 invocation for a selected ticket. Preparing or assigning a ticket alone is not
 an Attempt, and Ticket records can exist before one starts.
 
 ## Permissions, commits, and closure
 
-Use only trusted repositories, issue content, and skills. The selected harness
-runs unattended with the permissions available through its own configuration;
+Use only trusted repositories, issue content, and skills. OpenCode runs
+unattended with the permissions available through its own configuration;
 Implement Loop is not a sandbox and does not enforce a filesystem or network
 boundary. Parent and ticket text is requirements context, not permission to
 implement sibling tickets.
 
-The runner assigns the selected ticket to you. After the external skill reports
-completion, the runner checks the harness result, its result-file attestation,
-the original branch, a clean checkout, a new local descendant commit, and the
-ticket's current state before closing it. The commit stays local: the runner
-does not push, open a PR, or merge. The result file and wrapper checks are not
-independent proof of semantic correctness.
+The runner assigns the selected ticket to you and supplies a private,
+Attempt-bound reporting command outside the checkout. After implementation,
+required review and validation, joined delegated work, and committing are
+complete, report explicit passing claims with the command and syntax shown in
+the Attempt prompt:
+
+```bash
+/path/to/implement-loop-report completed --acceptance-criteria passed --validation passed
+/path/to/implement-loop-report --help
+```
+
+If the original prompt is lost while that OpenCode invocation is still active,
+the runner exposes the private command path as
+`IMPLEMENT_LOOP_REPORT_COMMAND` in the harness environment. In a shell available
+to that invocation, recover its usage with:
+
+```bash
+"$IMPLEMENT_LOOP_REPORT_COMMAND" --help
+```
+
+Use the command path from that environment for reporting; the command continues
+to supply ticket and Attempt identity itself. This discovery path exists only
+for the active Attempt. It does not recover a prior Attempt or replace the
+original handoff instructions of a wrapper that is already running. In
+particular, code and documentation changed by an Attempt do not retroactively
+change that same Attempt's prompt or environment.
+
+If you cannot complete the ticket, submit a blocked outcome with a meaningful
+reason of at least five non-whitespace characters instead of claiming
+completion:
+
+```bash
+/path/to/implement-loop-report blocked --reason "External dependency is unavailable"
+```
+
+The blocked reason is retained in private Ticket records and the run stops with
+the ticket open and assigned. Missing or invalid reports are diagnosed
+separately. The command rejects blank or shorter placeholder text; the agent is
+responsible for making the reason a useful explanation. Identical repeated
+reports are harmless; conflicting sequential reports (including switching
+between blocked and completed) stop the Attempt without automatic closure. Do
+not submit a second outcome to correct or replace the first one.
+
+The command supplies ticket and Attempt identity; do not author a report file or
+copy identifiers. Wait for reporting to finish and treat a nonzero result as a
+failed handoff. Reporting itself does not close issues or change the checkout.
+Only after the harness exits successfully does the runner check the persisted
+Agent attestation, original branch, clean checkout, new local descendant commit,
+and the ticket's current state before closing it. The commit stays local: the
+runner does not push, open a PR, or merge. Agent attestation and wrapper checks
+are not independent proof of semantic correctness or human approval.
 
 ## Troubleshoot missing output
 
@@ -89,10 +135,41 @@ git log -5 --oneline
 gh issue view "$TICKET" --comments
 ```
 
-Review the ticket's `agent.log`, `process.json`, result evidence, and `checks.json`
-when present. Before rerunning an interrupted run, verify that the wrapper,
-harness, delegated agents, and other background work have stopped. Output, record
-presence, and release of the local lock do not confirm that they have stopped.
+Records use the standard user state location
+`${XDG_STATE_HOME:-$HOME/.local/state}/implement-loop`; there is no separate
+records-path option or retention override. Records older than seven days are
+eligible for conservative cleanup on a later startup. Treat any printed path as
+authoritative if the environment's XDG state directory has changed.
+
+Review the Ticket records' `context.json` and `prompt.txt` for the selected
+requirements, `agent.log` for raw harness output, `completion-result.json` when a
+report was submitted, and `outcome.json` for the process status, report decision,
+final checks, commit, and closure status. An interrupted outcome does not establish
+a successful harness exit, even if a report file is present. Before rerunning an
+interrupted run, inspect and verify that the wrapper, OpenCode, delegated agents,
+and other background work have stopped. Output, record markers, and release of the
+local lock do not confirm that they have stopped.
+
+### Blocked or conflicting report
+
+An intentional blocked report is distinct from a missing or invalid handoff. Its
+reason is in the submitted `completion-result.json` and summarized in
+`outcome.json`; inspect these with the process status and live issue state. Missing
+and invalid reports, including their available diagnostics, are summarized in
+`outcome.json`. A blocked report stops the run without retrying, unassigning,
+rolling back, or closing the ticket. If OpenCode also exits unsuccessfully, both
+the process failure and blocked reason are retained. Conflicting sequential
+reports preserve the competing claims in `completion-result.json` and prevent
+automatic completion. The submitted report is the single persisted handoff
+evidence; `outcome.json` records the runner's decision and checks, not a second
+report authority.
+
+Agents are cooperative but fallible: finish and join delegated work, wait for
+the reporting command to finish, and do not submit detached or late reports.
+Completion reports are Agent attestations, not independent correctness checks
+or human approval. For already-committed work, inspect the records and use the
+separate [Manual finalization](#manually-finalize-approved-committed-work) flow
+if appropriate.
 
 ### Uncertain assignment or closure
 
@@ -113,11 +190,11 @@ still assigned to you, remove your assignment deliberately before retrying:
 gh issue edit "$TICKET" --remove-assignee @me
 ```
 
-For an uncertain closure, inspect `closure-comment.txt`, `checks.json`, and
-`closed-ticket.json` in the ticket records when present. A missing
-`closed-ticket.json` does not prove that closure failed. If the issue is closed,
-do not close it again; if it is still open, review the commit and records before
-retrying or [manually finalizing approved work](#manually-finalize-approved-committed-work).
+For an uncertain closure, inspect the `closure` and `checks` sections of
+`outcome.json` along with the live issue. A missing closure confirmation does not
+prove that closure failed. If the issue is closed, do not close it again; if it is
+still open, review the commit and records before retrying or
+[manually finalizing approved work](#manually-finalize-approved-committed-work).
 
 ### Stale lock or active-run marker
 
@@ -130,7 +207,7 @@ pid="$(cat "$lock/pid")"
 ps -p "$pid" -o pid=,command=
 ```
 
-Check that the PID is the expected wrapper and that its harness, agents, and
+Check that the PID is the expected wrapper and that OpenCode, agents, and
 other background work have also stopped. Only then remove that specific stale
 lock:
 

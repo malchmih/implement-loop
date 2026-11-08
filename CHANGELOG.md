@@ -4,6 +4,8 @@ Manually maintained highlights of user-facing changes.
 
 ## Unreleased
 
+- Replace standalone executable downloads and builds with source installation
+  through uv.
 - Remove the no-new-commit exception. Every successful attempt now requires a
   new descendant commit; finalize already-committed work manually after required
   review, validation, and approval.

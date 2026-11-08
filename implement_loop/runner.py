@@ -1,16 +1,15 @@
-"""Orchestrate a safe, sequential harness-backed ticket lifecycle."""
+"""Orchestrate a safe, sequential OpenCode-backed ticket lifecycle."""
 
 from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import stat
 import sys
 import tempfile
 import uuid
-from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -24,39 +23,45 @@ from .git import (
     require_new_descendant,
 )
 from .github import GitHub, JsonObject, Repository
-from .harness import HarnessSpec, ProcessOutcome, run_harness, select_harness
-from .records import RunRecords
+from .harness import ProcessOutcome, run_opencode, select_opencode
+from .records import RETENTION_DAYS, RunRecords
+from .reporting import is_acceptable_blocked_reason, unique_json_object
 
 _MAX_PROMPT_BYTES = 100_000
 
 
-class NormalStopReason(Enum):
-    """Why a Loop run stopped without an execution failure."""
-
-    NO_ELIGIBLE_CHILDREN = "No eligible children"
-    ATTEMPT_LIMIT_REACHED = "Attempt limit reached"
-
-
-@dataclass(frozen=True)
-class RunResult:
-    """Explicit normal-stop details returned after runner cleanup."""
-
-    repository_name: str
-    stop_reason: NormalStopReason
-
-
-def _require_command(name: str, *, harness: HarnessSpec | None = None) -> None:
+def _require_command(name: str) -> None:
     if shutil.which(name) is None:
-        harness_context = f" for the selected {harness.display_name} harness" if harness else ""
         raise LoopError(
-            f"Required executable {name!r}{harness_context} was not found on PATH. "
+            f"Required executable {name!r} was not found on PATH. "
             f"Manually install {name!r} or add it to PATH, then retry."
         )
 
 
-def _new_result_destination(target_root: Path, attempt_id: str) -> tuple[Path, Path]:
+def _write_private_file(path: Path, contents: bytes, mode: int) -> None:
+    descriptor: int | None = None
     try:
-        directory = Path(tempfile.mkdtemp(prefix=f"implement-loop-result-{attempt_id}-")).resolve()
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        with os.fdopen(descriptor, "wb") as output:
+            descriptor = None
+            output.write(contents)
+    except OSError as error:
+        raise LoopError(
+            f"Cannot create private per-attempt reporting file {path}: {error}"
+        ) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _new_report_command(
+    target_root: Path,
+    ticket_number: int,
+    attempt_id: str,
+    result_path: Path,
+) -> tuple[Path, Path]:
+    try:
+        directory = Path(tempfile.mkdtemp(prefix="implement-loop-report-")).resolve()
     except OSError as error:
         raise LoopError(f"Cannot create a private temporary result directory: {error}") from error
     if directory.is_relative_to(target_root.resolve()):
@@ -76,7 +81,12 @@ def _new_result_destination(target_root: Path, attempt_id: str) -> tuple[Path, P
         except OSError:
             pass
         raise LoopError(f"Cannot make the temporary result directory private: {error}") from error
-    result_path = directory / "completion-result.json"
+    if result_path.is_relative_to(target_root.resolve()):
+        try:
+            shutil.rmtree(directory)
+        except OSError:
+            pass
+        raise LoopError("The per-attempt report destination must be outside the target checkout.")
     if os.path.lexists(result_path):
         try:
             shutil.rmtree(directory)
@@ -85,7 +95,33 @@ def _new_result_destination(target_root: Path, attempt_id: str) -> tuple[Path, P
         raise LoopError(
             "The unique completion-result destination already exists; refusing to reuse it."
         )
-    return directory, result_path
+    context_path = directory / "report-context.json"
+    report_command = directory / "implement-loop-report"
+    context = {
+        "issue": ticket_number,
+        "attempt_id": attempt_id,
+        "result_path": str(result_path),
+    }
+    source_module = Path(__file__).with_name("reporting.py").resolve()
+    command = (
+        "#!/bin/sh\n"
+        f"IMPLEMENT_LOOP_REPORT_CONTEXT={shlex.quote(str(context_path))} \\\n"
+        f'exec {shlex.quote(sys.executable)} {shlex.quote(str(source_module))} "$@"\n'
+    )
+    try:
+        _write_private_file(
+            context_path,
+            (json.dumps(context, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(),
+            0o600,
+        )
+        _write_private_file(report_command, command.encode(), 0o700)
+    except LoopError:
+        try:
+            shutil.rmtree(directory)
+        except OSError:
+            pass
+        raise
+    return directory, report_command
 
 
 def _build_prompt(
@@ -94,8 +130,7 @@ def _build_prompt(
     branch: str,
     spec_number: int,
     ticket_number: int,
-    attempt_id: str,
-    result_path: Path,
+    report_command: Path,
     context: dict[str, Any],
     skill_reference: str,
 ) -> str:
@@ -114,22 +149,36 @@ def _build_prompt(
         "instructions below. Any delegated "
         "workers must follow these same scope and execution restrictions. Wait "
         "for all ticket-scoped delegated work to finish and incorporate its "
-        "results before reporting completion. If blocked or if required validation "
-        "fails, do not report success.\n\n"
+        "results before reporting. If blocked, do not report completion; submit a "
+        "blocked outcome with a meaningful reason. If required validation fails, "
+        "do not claim passing completion.\n\n"
         "This attempt requires a new local descendant commit; existing commits alone do "
         "not satisfy it. Commit the completed work before reporting success.\n\n"
-        "After implementation, review, and required validation have succeeded—and the "
-        "completed work is committed—write one JSON object to this initially absent "
-        "file:\n"
-        f"{result_path}\n"
-        f"Attempt ID: {attempt_id}\n"
-        "The JSON must identify this ticket and attempt and use exactly these "
-        'success values: {"issue": '
-        f'{ticket_number}, "attempt_id": "{attempt_id}", '
-        '"status": "completed", "acceptance_criteria": '
-        '"passed", "validation": "passed"}. Do not use transcript '
-        "markers as completion evidence. This file is an agent attestation, "
-        "not independent proof of correctness.\n\n"
+        "A private, Attempt-bound completion command is available outside the "
+        "checkout at:\nCompletion report command: "
+        f"{shlex.quote(str(report_command))}\n\n"
+        "Only after implementation, required review and validation, all delegated "
+        "work has finished and been joined, and the completed work is committed, "
+        "report your explicit passing claims with:\n"
+        f"{shlex.quote(str(report_command))} completed --acceptance-criteria passed "
+        "--validation passed\n\n"
+        "If you cannot complete the ticket, report intentional non-completion with "
+        "a meaningful reason instead:\n"
+        f"{shlex.quote(str(report_command))} blocked --reason 'Describe the blocker'\n\n"
+        "Choose one outcome. Identical repeated reports are harmless, but reporting "
+        "both blocked and completed (or otherwise changing the claim) persists a "
+        "conflict and prevents automatic completion.\n\n"
+        f"Use {shlex.quote(str(report_command))} --help for usage. The command supplies "
+        "ticket and Attempt "
+        "identity and writes the report; do not author JSON or copy identifiers. "
+        "Wait for the command to finish, and treat a nonzero result as a failed "
+        "handoff. Reporting does not close issues, change implementation files, "
+        "create commits, or terminate this harness. This Agent attestation is not "
+        "independent proof of correctness.\n\n"
+        "If you lose this prompt during the active Attempt, recover the command "
+        'usage in a shell with "$IMPLEMENT_LOOP_REPORT_COMMAND" --help. The '
+        "runner provides this environment variable; it contains only the private "
+        "command path, not ticket or Attempt identity.\n\n"
         "Requirements data follows as JSON:\n"
         f"{requirements}\n"
     )
@@ -215,42 +264,31 @@ def _select_ticket(
     )
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"invalid JSON constant {value!r}")
+
+
 def _record_result(
     result_path: Path,
-    attempt_dir: Path,
-    records: RunRecords,
     ticket_number: int,
     attempt_id: str,
-) -> tuple[JsonObject | None, str | None]:
-    evidence_path = attempt_dir / "completion-evidence.json"
+) -> tuple[JsonObject | None, str | None, dict[str, Any]]:
     if not os.path.lexists(result_path):
         return _reject_result(
-            records,
-            evidence_path,
-            ticket_number,
-            attempt_id,
             "missing",
-            "The selected harness did not write the required per-attempt result file.",
+            "OpenCode did not submit a required per-attempt completion report.",
         )
 
     try:
         details = result_path.lstat()
     except OSError as error:
         return _reject_result(
-            records,
-            evidence_path,
-            ticket_number,
-            attempt_id,
             "unreadable",
             "The per-attempt result file could not be read.",
-            {"error": str(error)},
+            {"cause": str(error)},
         )
     if not stat.S_ISREG(details.st_mode):
         return _reject_result(
-            records,
-            evidence_path,
-            ticket_number,
-            attempt_id,
             "wrong_file_type",
             "The per-attempt result destination is not a regular file.",
         )
@@ -259,101 +297,146 @@ def _record_result(
         raw_result = result_path.read_bytes()
     except OSError as error:
         return _reject_result(
-            records,
-            evidence_path,
-            ticket_number,
-            attempt_id,
             "unreadable",
             "The per-attempt result file could not be read.",
-            {"error": str(error)},
+            {"cause": str(error)},
         )
-    records.write_bytes(attempt_dir / "completion-result.json", raw_result, exclusive=True)
-
     try:
-        parsed = json.loads(raw_result.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        parsed = json.loads(
+            raw_result.decode("utf-8"),
+            object_pairs_hook=unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except UnicodeDecodeError, json.JSONDecodeError, ValueError:
         return _reject_result(
-            records,
-            evidence_path,
-            ticket_number,
-            attempt_id,
             "malformed_json",
-            "The per-attempt result file is not valid UTF-8 JSON.",
+            "The per-attempt result file is not valid UTF-8 JSON or contains ambiguous fields.",
         )
     if not isinstance(parsed, dict):
         return _reject_result(
-            records,
-            evidence_path,
-            ticket_number,
-            attempt_id,
             "wrong_json_type",
             "The per-attempt result must be a JSON object.",
         )
 
-    issue = parsed.get("issue")
-    if type(issue) is not int or issue != ticket_number:
-        validation_error = (
-            "The per-attempt result identifies the wrong ticket or has a wrong-type issue number."
-        )
-    elif not isinstance(parsed.get("attempt_id"), str) or parsed["attempt_id"] != attempt_id:
-        validation_error = "The per-attempt result is stale or identifies the wrong attempt."
-    elif parsed.get("status") != "completed":
-        validation_error = "The per-attempt result does not report completed status."
-    elif parsed.get("acceptance_criteria") != "passed":
-        validation_error = "The per-attempt result does not report passed acceptance criteria."
-    elif parsed.get("validation") != "passed":
-        validation_error = "The per-attempt result does not report passed validation."
+    validation_error: str | None
+    if parsed.get("status") == "conflict":
+        validation_error = _validate_conflict(parsed, ticket_number, attempt_id)
     else:
-        validation_error = None
+        validation_error = _validate_report(parsed, ticket_number, attempt_id)
+        if validation_error is None and parsed["status"] == "completed":
+            if parsed["acceptance_criteria"] != "passed":
+                validation_error = (
+                    "The per-attempt result does not report passed acceptance criteria."
+                )
+            elif parsed["validation"] != "passed":
+                validation_error = "The per-attempt result does not report passed validation."
 
     if validation_error is not None:
+        status = "conflict" if parsed.get("status") == "conflict" else "rejected"
+        error_details: dict[str, Any] = {"error": validation_error}
+        if status == "conflict":
+            error_details["reports"] = parsed.get("reports")
+        elif parsed.get("status") == "blocked" and "reason" in parsed:
+            error_details["reason"] = parsed["reason"]
         return _reject_result(
-            records,
-            evidence_path,
-            ticket_number,
-            attempt_id,
-            "rejected",
+            status,
             validation_error,
-            {"error": validation_error},
+            error_details,
         )
-    records.write_json(
-        evidence_path,
-        {"status": "valid", "issue": ticket_number, "attempt_id": attempt_id, "error": None},
-        exclusive=True,
-    )
-    records.write_json(attempt_dir / "completion.json", parsed, exclusive=True)
-    return parsed, None
+    if parsed["status"] == "blocked":
+        reason = parsed["reason"]
+        return (
+            parsed,
+            f"Ticket #{ticket_number} was reported blocked: {reason}",
+            {"status": "blocked", "reason": reason},
+        )
+
+    return parsed, None, {"status": "valid"}
+
+
+def _validate_report(report: Any, ticket_number: int, attempt_id: str) -> str | None:
+    if not isinstance(report, dict):
+        return "A persisted report is malformed or ambiguous."
+    identity_error = _validate_report_identity(report, ticket_number, attempt_id)
+    if identity_error is not None:
+        return identity_error
+
+    if report.get("status") == "completed":
+        if set(report) != {
+            "issue",
+            "attempt_id",
+            "status",
+            "acceptance_criteria",
+            "validation",
+        }:
+            return "The per-attempt result is malformed or has ambiguous fields."
+        if report.get("acceptance_criteria") not in {"passed", "failed"}:
+            return "The per-attempt result has an invalid acceptance-criteria claim."
+        if report.get("validation") not in {"passed", "failed"}:
+            return "The per-attempt result has an invalid validation claim."
+        return None
+
+    if report.get("status") == "blocked":
+        if set(report) != {"issue", "attempt_id", "status", "reason"}:
+            return "The blocked report is malformed or has ambiguous fields."
+        reason = report.get("reason")
+        if not is_acceptable_blocked_reason(reason):
+            return "The blocked report must include at least five non-whitespace reason characters."
+        return None
+
+    return "The per-attempt result does not report a supported completed or blocked outcome."
+
+
+def _validate_report_identity(
+    report: dict[str, Any], ticket_number: int, attempt_id: str
+) -> str | None:
+    if type(report.get("issue")) is not int or report["issue"] != ticket_number:
+        return "A persisted report identifies the wrong ticket or has a wrong-type issue number."
+    if not isinstance(report.get("attempt_id"), str) or report["attempt_id"] != attempt_id:
+        return "A persisted report is stale or identifies the wrong attempt."
+    return None
+
+
+def _validate_conflict(parsed: dict[str, Any], ticket_number: int, attempt_id: str) -> str:
+    identity_error = _validate_report_identity(parsed, ticket_number, attempt_id)
+    if identity_error is not None:
+        return identity_error
+    if set(parsed) != {"status", "issue", "attempt_id", "reports"}:
+        return "The persisted completion report is malformed or ambiguous."
+    reports = parsed.get("reports")
+    if not isinstance(reports, list) or len(reports) != 2:
+        return "The persisted completion report is malformed or ambiguous."
+    first_error = _validate_report(reports[0], ticket_number, attempt_id)
+    second_error = _validate_report(reports[1], ticket_number, attempt_id)
+    if first_error is not None or second_error is not None or reports[0] == reports[1]:
+        return "The persisted completion report is malformed or ambiguous."
+    message = "The persisted completion report contains conflicting completion reports."
+    blocked_reasons = [report["reason"] for report in reports if report["status"] == "blocked"]
+    if blocked_reasons:
+        message += " Blocked reason(s): " + "; ".join(blocked_reasons)
+    return message
 
 
 def _reject_result(
-    records: RunRecords,
-    evidence_path: Path,
-    ticket_number: int,
-    attempt_id: str,
     status: str,
     message: str,
     details: dict[str, Any] | None = None,
-) -> tuple[None, str]:
-    evidence: dict[str, Any] = {
-        "status": status,
-        "issue": ticket_number,
-        "attempt_id": attempt_id,
-    }
+) -> tuple[None, str, dict[str, Any]]:
+    summary: dict[str, Any] = {"status": status, "error": message}
     if details:
-        evidence.update(details)
-    records.write_json(evidence_path, evidence, exclusive=True)
-    return None, message
+        summary.update({key: value for key, value in details.items() if key != "reports"})
+    return None, message, summary
 
 
-def _process_failure(outcome: ProcessOutcome, harness: HarnessSpec) -> list[str]:
+def _process_failure(outcome: ProcessOutcome) -> list[str]:
     failures: list[str] = []
     if outcome.spawn_error is not None:
         failures.append(outcome.spawn_error)
     elif outcome.exit_code != 0:
-        failures.append(f"{harness.display_name} exited with status {outcome.exit_code}.")
+        failures.append(f"OpenCode exited with status {outcome.exit_code}.")
     if not outcome.log_persisted:
         failures.append(
-            f"Unable to persist the complete {harness.display_name} output log"
+            "Unable to persist the complete OpenCode output log"
             + (f": {outcome.log_error}." if outcome.log_error else ".")
         )
     return failures
@@ -365,14 +448,13 @@ def _closure_comment(
     before_commit: str,
     spec_number: int,
     ticket_number: int,
-    harness: HarnessSpec,
 ) -> str:
     return (
         f"Implemented locally by implement-loop on branch {branch} at commit {commit}. "
         "The agent attested that acceptance criteria and required validation passed. "
-        f"The wrapper verified successful {harness.display_name} exit, "
-        "persisted process/result records, "
-        "valid per-attempt result evidence, an unchanged branch, a clean checkout, "
+        "The wrapper verified successful OpenCode exit, "
+        "persisted raw output and a compact Attempt outcome, a valid Agent report, "
+        "an unchanged branch, a clean checkout, "
         "a new descendant commit was produced and verified from pre-attempt commit "
         f"{before_commit}, an open parent spec, and the ticket's open/unblocked/direct-child "
         f"status with exclusive assignment for ticket #{ticket_number} under spec #{spec_number}. "
@@ -388,27 +470,24 @@ def _write_attempt_context(
     spec_comments: list[JsonObject],
     ticket_comments: list[JsonObject],
 ) -> dict[str, Any]:
-    records.write_json(attempt_dir / "spec.json", spec, exclusive=True)
-    records.write_json(attempt_dir / "ticket.json", ticket, exclusive=True)
-    records.write_json(attempt_dir / "spec-comments.json", spec_comments, exclusive=True)
-    records.write_json(attempt_dir / "ticket-comments.json", ticket_comments, exclusive=True)
-    return {
+    context = {
         "spec": spec,
         "ticket": ticket,
         "spec_comments": spec_comments,
         "ticket_comments": ticket_comments,
     }
+    records.write_json(attempt_dir / "context.json", context, exclusive=True)
+    return context
 
 
-def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
-    """Run up to the configured number of sequential harness-backed attempts."""
+def run(options: Options, diagnostics: DiagnosticContext) -> None:
+    """Run up to the configured number of sequential OpenCode-backed attempts."""
 
     os.umask(0o077)
     _require_command("git")
     _require_command("gh")
-    harness_settings = options.opencode if options.harness == "opencode" else options.copilot
-    harness = select_harness(options.harness, harness_settings)
-    _require_command(harness.executable, harness=harness)
+    harness = select_opencode(options.opencode)
+    _require_command(harness.executable)
     checkout = discover_checkout(Path.cwd())
     lock = RepositoryLock(checkout.common_dir)
     lock.acquire()
@@ -433,8 +512,7 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
                 str(options.config_file) if options.config_file is not None else None
             ),
             "records_directory": str(records.records_dir),
-            "retention_days": options.records.retention_days,
-            "keep_records_forever": options.records.retention_days is None,
+            "retention_days": RETENTION_DAYS,
             **harness.metadata(),
             "started_at": records.started_at.isoformat(),
         }
@@ -442,31 +520,18 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
 
         github = GitHub(checkout.root)
         repository = github.resolve_repository()
-        diagnostics.repository_name = repository.name_with_owner
         login = github.authenticated_login(repository)
         spec = github.get_spec(repository, options.spec_number)
         repository_url = spec.get("repository_url")
         if not isinstance(repository_url, str) or not repository_url:
             raise LoopError(f"Spec #{options.spec_number} is missing repository metadata.")
 
-        records.write_json(
-            records.run_dir / "repository.json",
-            {
-                "name_with_owner": repository.name_with_owner,
-                "host": repository.host,
-                "url": repository.url,
-                "repository_url": repository_url,
-            },
-            exclusive=True,
-        )
         run_metadata.update(
             repository=repository.repo_ref,
             github_host=repository.host,
             login=login,
         )
         records.write_json(records.run_dir / "run.json", run_metadata)
-        records.write_json(records.run_dir / "user.json", {"login": login}, exclusive=True)
-        records.write_json(records.run_dir / "spec.json", spec, exclusive=True)
         print(
             f"Spec #{options.spec_number} | {repository.repo_ref} | branch "
             f"{checkout.branch} | max {options.max_iterations} attempts"
@@ -483,26 +548,19 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
                 options.spec_number,
                 repository_url,
             )
-            records.write_json(records.run_dir / "spec.json", spec)
             if ticket is None:
                 print(
                     "No eligible children: "
                     f"{counts['open']} open candidates; {counts['blocked']} blocked; "
                     f"{counts['assigned']} otherwise assigned. Completed {completed} ticket(s)."
                 )
-                return RunResult(
-                    repository_name=repository.name_with_owner,
-                    stop_reason=NormalStopReason.NO_ELIGIBLE_CHILDREN,
-                )
+                return
             if attempts >= options.max_iterations:
                 print(
                     f"Attempt limit reached after {attempts} invocation(s); "
                     f"completed {completed} ticket(s)."
                 )
-                return RunResult(
-                    repository_name=repository.name_with_owner,
-                    stop_reason=NormalStopReason.ATTEMPT_LIMIT_REACHED,
-                )
+                return
 
             ticket_number = ticket["number"]
             diagnostics.ticket_number = ticket_number
@@ -512,10 +570,17 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
             attempt_id = str(uuid.uuid4())
             attempt_dir = records.attempt_directory(attempt_number, ticket_number)
             diagnostics.ticket_records = attempt_dir
-            result_directory, result_path = _new_result_destination(
+            result_path = attempt_dir / "completion-result.json"
+            result_directory, report_command = _new_report_command(
                 checkout.root,
+                ticket_number,
                 attempt_id,
+                result_path,
             )
+            attempt_outcome_path = attempt_dir / "outcome.json"
+            attempt_outcome: dict[str, Any] | None = None
+            checks_started = False
+            close_started = False
             try:
                 spec_comments = github.get_comments(repository, options.spec_number)
                 ticket_comments = github.get_comments(repository, ticket_number)
@@ -532,8 +597,7 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
                     branch=checkout.branch,
                     spec_number=options.spec_number,
                     ticket_number=ticket_number,
-                    attempt_id=attempt_id,
-                    result_path=result_path,
+                    report_command=report_command,
                     context=context,
                     skill_reference=harness.skill_reference,
                 )
@@ -545,7 +609,7 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
                 if os.path.lexists(result_path):
                     raise LoopError(
                         "The unique completion-result destination already exists; "
-                        "refusing to invoke the selected harness."
+                        "refusing to invoke OpenCode."
                     )
                 records.write_text(attempt_dir / "prompt.txt", prompt, exclusive=True)
                 records.write_json(
@@ -562,24 +626,13 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
 
                 assert_checkout(checkout)
                 github.assign(repository, ticket_number, login)
-                claimed_spec, claimed_ticket, claimed_children = _assert_owned_ticket(
+                _assert_owned_ticket(
                     github,
                     repository,
                     options.spec_number,
                     ticket_number,
                     repository_url,
                     login,
-                )
-                records.write_json(attempt_dir / "claimed-spec.json", claimed_spec, exclusive=True)
-                records.write_json(
-                    attempt_dir / "claimed-ticket.json",
-                    claimed_ticket,
-                    exclusive=True,
-                )
-                records.write_json(
-                    attempt_dir / "claimed-children.json",
-                    claimed_children,
-                    exclusive=True,
                 )
                 assert_checkout(checkout)
                 before_head = current_head(checkout)
@@ -591,40 +644,67 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
                 )
                 attempts += 1
 
+                attempt_outcome = {
+                    "status": "running",
+                    "process": {"status": "not_finished"},
+                    "report": {"status": "not_evaluated"},
+                    "checks": {},
+                    "commit": None,
+                    "closure": {"status": "not_attempted"},
+                }
+                records.write_json(attempt_outcome_path, attempt_outcome, exclusive=True)
+
                 def mark_harness_invocation_starting() -> None:
                     diagnostics.harness_invoked = True
 
-                outcome = run_harness(
+                process_outcome = run_opencode(
                     harness,
                     prompt,
                     checkout.root,
                     attempt_dir / "agent.log",
+                    report_command,
                     on_invocation_starting=mark_harness_invocation_starting,
                 )
-                if outcome.spawn_error is not None:
+                if process_outcome.spawn_error is not None:
                     diagnostics.harness_invoked = False
-                records.write_json(attempt_dir / "process.json", outcome.as_json(), exclusive=True)
-                result, result_error = _record_result(
+                attempt_outcome["process"] = process_outcome.as_json()
+                result, result_error, report_summary = _record_result(
                     result_path,
-                    attempt_dir,
-                    records,
                     ticket_number,
                     attempt_id,
                 )
-                failures = _process_failure(outcome, harness)
+                attempt_outcome["report"] = report_summary
+                process_failures = _process_failure(process_outcome)
+                failures = list(process_failures)
                 if result_error is not None:
                     failures.append(result_error)
                 if failures:
-                    raise LoopError(" ".join(failures) + f" Ticket #{ticket_number} stays open.")
+                    diagnostic = " ".join(failures) + f" Ticket #{ticket_number} stays open."
+                    attempt_outcome["status"] = (
+                        "blocked"
+                        if result is not None
+                        and result["status"] == "blocked"
+                        and not process_failures
+                        else "failed"
+                    )
+                    records.write_json(attempt_outcome_path, attempt_outcome)
+                    raise LoopError(diagnostic)
                 if result is None:
-                    raise LoopError(
+                    diagnostic = (
                         f"No valid result evidence for ticket #{ticket_number}; it stays open."
                     )
+                    attempt_outcome["status"] = "failed"
+                    attempt_outcome["diagnostic"] = diagnostic
+                    records.write_json(attempt_outcome_path, attempt_outcome)
+                    raise LoopError(diagnostic)
 
+                records.write_json(attempt_outcome_path, attempt_outcome)
+
+                checks_started = True
                 assert_checkout(checkout)
                 after_head = current_head(checkout)
                 require_new_descendant(checkout, before_head, after_head)
-                final_spec, final_ticket, final_children = _assert_owned_ticket(
+                _assert_owned_ticket(
                     github,
                     repository,
                     options.spec_number,
@@ -632,53 +712,30 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
                     repository_url,
                     login,
                 )
-                records.write_json(
-                    attempt_dir / "pre-closure-spec.json", final_spec, exclusive=True
-                )
-                records.write_json(
-                    attempt_dir / "pre-closure-ticket.json",
-                    final_ticket,
-                    exclusive=True,
-                )
-                records.write_json(
-                    attempt_dir / "pre-closure-children.json",
-                    final_children,
-                    exclusive=True,
-                )
                 closure_comment = _closure_comment(
                     checkout.branch,
                     after_head,
                     before_head,
                     options.spec_number,
                     ticket_number,
-                    harness,
                 )
-                records.write_text(attempt_dir / "commit", f"{after_head}\n", exclusive=True)
-                records.write_text(
-                    attempt_dir / "closure-comment.txt",
-                    closure_comment + "\n",
-                    exclusive=True,
-                )
-                records.write_json(
-                    attempt_dir / "checks.json",
-                    {
-                        "harness": harness.name,
-                        "harness_exit": 0,
-                        "records_persisted": True,
-                        "result_evidence": "valid",
-                        "agent_attestation": {
-                            "acceptance_criteria": result["acceptance_criteria"],
-                            "validation": result["validation"],
-                        },
-                        "branch_unchanged": True,
-                        "checkout_clean": True,
-                        "new_descendant_commit": True,
-                        "parent_open": True,
-                        "ticket_open_unblocked_direct_child_exclusively_assigned": True,
-                    },
-                    exclusive=True,
-                )
+                attempt_outcome["checks"] = {
+                    "records_persisted": True,
+                    "report_evidence_valid": True,
+                    "branch_unchanged": True,
+                    "checkout_clean": True,
+                    "new_descendant_commit": True,
+                    "parent_open": True,
+                    "ticket_open_unblocked_direct_child_exclusively_assigned": True,
+                }
+                attempt_outcome["commit"] = {"before": before_head, "after": after_head}
+                attempt_outcome["closure"] = {
+                    "status": "pending",
+                    "comment": closure_comment,
+                }
+                records.write_json(attempt_outcome_path, attempt_outcome)
 
+                close_started = True
                 github.close(repository, ticket_number, closure_comment)
                 try:
                     closed_ticket = github.get_ticket(repository, ticket_number, repository_url)
@@ -690,13 +747,48 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
                     ) from error
                 if closed_ticket.get("state") != "closed":
                     raise LoopError(f"GitHub did not confirm ticket #{ticket_number} was closed.")
-                records.write_json(
-                    attempt_dir / "closed-ticket.json",
-                    closed_ticket,
-                    exclusive=True,
-                )
+                attempt_outcome["status"] = "completed"
+                attempt_outcome["checks"]["ticket_closed"] = True
+                attempt_outcome["closure"]["status"] = "confirmed"
+                records.write_json(attempt_outcome_path, attempt_outcome)
                 completed += 1
                 print(f"Completed ticket #{ticket_number} at {after_head}.")
+            except KeyboardInterrupt:
+                if attempt_outcome is not None and attempt_outcome["status"] == "running":
+                    if attempt_outcome["process"].get("status") == "not_finished":
+                        attempt_outcome["process"] = {
+                            "status": "interrupted",
+                            "exit_code": None,
+                        }
+                    attempt_outcome["status"] = "interrupted"
+                    if checks_started and not attempt_outcome["checks"]:
+                        attempt_outcome["checks"] = {"status": "interrupted"}
+                    else:
+                        attempt_outcome["diagnostic"] = (
+                            "The harness or wrapper was interrupted before the Attempt completed."
+                        )
+                    if attempt_outcome["closure"]["status"] == "pending":
+                        attempt_outcome["closure"]["status"] = (
+                            "uncertain" if close_started else "not_attempted"
+                        )
+                    records.write_json(attempt_outcome_path, attempt_outcome)
+                raise
+            except (LoopError, OSError) as error:
+                if attempt_outcome is not None and attempt_outcome["status"] == "running":
+                    attempt_outcome["status"] = "failed"
+                    if checks_started and not attempt_outcome["checks"]:
+                        attempt_outcome["checks"] = {
+                            "status": "failed",
+                            "diagnostic": str(error),
+                        }
+                    else:
+                        attempt_outcome["diagnostic"] = str(error)
+                    if attempt_outcome["closure"]["status"] == "pending":
+                        attempt_outcome["closure"]["status"] = (
+                            "uncertain" if close_started else "not_attempted"
+                        )
+                    records.write_json(attempt_outcome_path, attempt_outcome)
+                raise
             finally:
                 try:
                     shutil.rmtree(result_directory)
@@ -707,7 +799,7 @@ def run(options: Options, diagnostics: DiagnosticContext) -> RunResult:
                         file=sys.stderr,
                     )
             diagnostics.clear_ticket()
-    except (KeyboardInterrupt, LoopError, OSError):
+    except KeyboardInterrupt, LoopError, OSError:
         diagnostics.handled_failure = True
         raise
     finally:

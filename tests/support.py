@@ -4,7 +4,6 @@ import json
 import os
 import pty
 import select
-import shlex
 import shutil
 import signal
 import socket
@@ -12,7 +11,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import unittest
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -25,9 +23,13 @@ LIVE_READY_TIMEOUT = 20.0
 FAKE_TOOL = r"""#!/usr/bin/env python3
 import json
 import os
+import resource
 from pathlib import Path
 import re
+import shlex
+import signal
 import socket
+import stat
 import subprocess
 import sys
 
@@ -65,34 +67,56 @@ def write_opencode_text_event(text, session_id):
     })
 
 tool_name = Path(sys.argv[0]).name
-if tool_name in ("copilot", "opencode"):
-    if tool_name == "opencode":
-        prompt = args[-1] if args else ""
+if tool_name == "opencode":
+    prompt = args[-1] if args else ""
+    mode = os.environ.get("IMPLEMENT_LOOP_TEST_RESULT_MODE", "valid")
+    state_home = Path(os.environ.get("XDG_STATE_HOME", home / ".local/state"))
+    if mode == "rediscover-report":
+        # Simulate losing the original prompt: use only the active-attempt environment.
+        args[-1] = ""
+        prompt = args[-1]
+        report_command = os.environ.get("IMPLEMENT_LOOP_REPORT_COMMAND")
+        if not report_command:
+            sys.exit("Missing IMPLEMENT_LOOP_REPORT_COMMAND")
+        attempt_metadata_files = list(
+            (state_home / "implement-loop").glob("run-*/attempt-*/attempt.json")
+        )
+        if len(attempt_metadata_files) != 1:
+            sys.exit("Expected one active Attempt")
+        attempt_metadata = json.loads(attempt_metadata_files[0].read_text())
+        ticket_number = attempt_metadata["issue"]
     else:
-        prompt = args[args.index("-p") + 1] if "-p" in args else ""
-    ticket_number = int(
-        re.search(r"(?:/implement|@implement) Implement only ticket #(\d+)", prompt).group(1)
+        ticket_number = int(
+            re.search(r"(?:/implement|@implement) Implement only ticket #(\d+)", prompt).group(1)
+        )
+        report_command = shlex.split(next(
+            line.removeprefix("Completion report command: ").strip()
+            for line in prompt.splitlines()
+            if line.startswith("Completion report command: ")
+        ))[0]
+    attempt_dir = next(
+        (state_home / "implement-loop").glob(f"run-*/attempt-*-ticket-{ticket_number}")
     )
+    attempt_metadata = json.loads((attempt_dir / "attempt.json").read_text())
+    attempt_id = attempt_metadata["attempt_id"]
+    result_path = Path(attempt_metadata["result_path"])
     exit_status = state.get("agent_exit_by_ticket", {}).get(
         str(ticket_number), state.get("agent_exit", 0)
-    )
-    attempt_id = next(
-        line.removeprefix("Attempt ID: ").strip()
-        for line in prompt.splitlines() if line.startswith("Attempt ID: ")
-    )
-    result_path = next(
-        line.strip() for line in prompt.splitlines()
-        if line.strip().endswith("/completion-result.json")
     )
     call = {
         "args": args,
         "prompt": prompt,
         "attempt_id": attempt_id,
         "ticket": ticket_number,
+        "report_command": report_command,
+        "report_discovery_source": (
+            "environment" if mode == "rediscover-report" else "prompt"
+        ),
+        "report_directory_mode": stat.S_IMODE(Path(report_command).parent.stat().st_mode),
+        "report_command_mode": stat.S_IMODE(Path(report_command).stat().st_mode),
         "result_initially_absent": not Path(result_path).exists(),
         "no_color": os.environ.get("NO_COLOR"),
         "force_color": os.environ.get("FORCE_COLOR"),
-        "copilot_config": os.environ.get("COPILOT_TEST_CONFIG"),
         "opencode_config": os.environ.get("OPENCODE_TEST_CONFIG"),
     }
     state.setdefault(f"{tool_name}_calls", []).append(call)
@@ -108,9 +132,134 @@ if tool_name in ("copilot", "opencode"):
         subprocess.run(["git", "add", output_path.name], check=True)
         subprocess.run([
             "git", "commit", "--quiet", "-m",
-            f"Implement ticket {ticket_number}\n\n"
-            "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>"
+            f"Implement ticket {ticket_number}"
         ], check=True)
+
+    help_result = subprocess.run(
+        [report_command, "--help"], check=False, capture_output=True, text=True
+    )
+    report_results = []
+
+    def run_completed_report(acceptance="passed", validation="passed", *, fail_write=False):
+        command = [
+            report_command,
+            "completed",
+            "--acceptance-criteria",
+            acceptance,
+            "--validation",
+            validation,
+        ]
+        if not fail_write:
+            return subprocess.run(command, check=False, capture_output=True, text=True)
+
+        def limit_report_file():
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+
+        return subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            preexec_fn=limit_report_file,
+        )
+
+    def run_blocked_report(reason="External dependency is unavailable"):
+        return subprocess.run(
+            [report_command, "blocked", "--reason", reason],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    if mode == "report-write-failure":
+        report_results.append(run_completed_report(fail_write=True))
+    elif mode == "conflicting":
+        report_results.append(run_completed_report())
+        report_results.append(run_completed_report(acceptance="failed"))
+    elif mode == "failed-acceptance":
+        report_results.append(run_completed_report(acceptance="failed"))
+    elif mode == "failed-validation":
+        report_results.append(run_completed_report(validation="failed"))
+    elif mode == "duplicate":
+        report_results.append(run_completed_report())
+        report_results.append(run_completed_report())
+    elif mode == "blocked":
+        report_results.append(run_blocked_report())
+    elif mode == "blocked-invalid-reason":
+        report_results.append(run_blocked_report(" \t "))
+    elif mode == "blocked-placeholder-reason":
+        report_results.append(run_blocked_report("x"))
+    elif mode == "blocked-duplicate":
+        report_results.append(run_blocked_report())
+        report_results.append(run_blocked_report())
+    elif mode == "blocked-then-completed":
+        report_results.append(run_blocked_report())
+        report_results.append(run_completed_report())
+    elif mode == "completed-then-blocked":
+        report_results.append(run_completed_report())
+        report_results.append(run_blocked_report())
+    elif mode != "missing":
+        report_results.append(run_completed_report())
+
+    state["opencode_calls"][-1]["report_help"] = help_result.stdout
+    state["opencode_calls"][-1]["report_exit_codes"] = [
+        result.returncode for result in report_results
+    ]
+    state["opencode_calls"][-1]["report_errors"] = [
+        result.stderr for result in report_results if result.stderr
+    ]
+    state["opencode_calls"][-1]["report_mode"] = (
+        stat.S_IMODE(result_path.stat().st_mode) if result_path.is_file() else None
+    )
+    state["report_observation"] = {
+        "ticket_state": ticket_for(ticket_number)["state"],
+        "events": list(state["events"]),
+        "head": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "status": subprocess.check_output(["git", "status", "--porcelain"], text=True).strip(),
+    }
+    save_state()
+
+    if mode in {
+        "malformed",
+        "duplicate-field",
+        "extra-field",
+        "wrong-root",
+        "wrong-ticket",
+        "wrong-ticket-number",
+        "wrong-attempt",
+        "wrong-status",
+    }:
+        result = {
+            "issue": ticket_number,
+            "attempt_id": attempt_id,
+            "status": "completed",
+            "acceptance_criteria": "passed",
+            "validation": "passed",
+        }
+        if mode == "malformed":
+            Path(result_path).write_text("{not-json")
+        elif mode == "duplicate-field":
+            Path(result_path).write_text(
+                '{"issue":2,"issue":2,"attempt_id":"%s",'
+                '"status":"completed","acceptance_criteria":"passed",'
+                '"validation":"passed"}' % attempt_id
+            )
+        elif mode == "extra-field":
+            result["unexpected"] = True
+            Path(result_path).write_text(json.dumps(result))
+        elif mode == "wrong-root":
+            Path(result_path).write_text(json.dumps([result]))
+        else:
+            if mode == "wrong-ticket":
+                result["issue"] = "not-a-number"
+            elif mode == "wrong-ticket-number":
+                result["issue"] = ticket_number + 1
+            elif mode == "wrong-attempt":
+                result["attempt_id"] = "stale-attempt"
+            elif mode == "wrong-status":
+                result["status"] = "failed"
+            Path(result_path).write_text(json.dumps(result))
 
     action = state.get("agent_action_by_ticket", {}).get(
         str(ticket_number), state.get("agent_action")
@@ -153,54 +302,22 @@ if tool_name in ("copilot", "opencode"):
         state["spec"]["state"] = "closed"
         save_state()
     elif action == "break_records":
-        attempt_dir = next(
-            (home / ".local/state/implement-loop").glob(
-                f"run-*/attempt-*-ticket-{ticket_number}"
-            )
-        )
-        attempt_dir.chmod(0o500)
+        outcome = attempt_dir / "outcome.json"
+        outcome.unlink()
+        outcome.mkdir(mode=0o700)
 
     if state.get("fail_preclosure_read_after_harness"):
         state["fail_next_issue_read_for"] = ticket_number
         save_state()
 
-    mode = os.environ.get("IMPLEMENT_LOOP_TEST_RESULT_MODE", "valid")
-    if mode != "missing":
-        result = {
-            "issue": ticket_number,
-            "attempt_id": attempt_id,
-            "status": "completed",
-            "acceptance_criteria": "passed",
-            "validation": "passed",
-        }
-        if mode == "malformed":
-            Path(result_path).write_text("{not-json")
-        elif mode == "wrong-root":
-            Path(result_path).write_text(json.dumps([result]))
-        else:
-            if mode == "wrong-ticket":
-                result["issue"] = "not-a-number"
-            elif mode == "wrong-ticket-number":
-                result["issue"] = ticket_number + 1
-            elif mode == "wrong-attempt":
-                result["attempt_id"] = "stale-attempt"
-            elif mode == "wrong-status":
-                result["status"] = "failed"
-            elif mode == "failed-acceptance":
-                result["acceptance_criteria"] = "failed"
-            elif mode == "failed-validation":
-                result["validation"] = "failed"
-            Path(result_path).write_text(json.dumps(result))
-
+    report_output = "\n".join(
+        [help_result.stdout, *(result.stdout + result.stderr for result in report_results)]
+    )
     output = os.environ.get(
         "IMPLEMENT_LOOP_TEST_OUTPUT",
-        state.get(
-            "agent_output",
-            'IMPLEMENT_LOOP_COMPLETE {"issue":2,"status":"completed",'
-            '"acceptance_criteria":"passed","validation":"passed"}',
-        ),
+        state.get("agent_output", report_output),
     )
-    if tool_name == "opencode" and "opencode_raw_output" in state:
+    if "opencode_raw_output" in state:
         raw_output = state["opencode_raw_output"].encode("utf-8")
         split_bytes = os.environ.get("IMPLEMENT_LOOP_TEST_OPENCODE_SPLIT_BYTES")
         if split_bytes is None:
@@ -225,9 +342,8 @@ if tool_name in ("copilot", "opencode"):
         sys.exit(int(exit_status))
     live_fragment = os.environ.get("IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_FRAGMENT")
     if live_fragment is not None:
-        if tool_name == "opencode":
-            write_opencode_text_event("Live **agent** text", "ses_live_fixture")
-            write_opencode_event({
+        write_opencode_text_event("Live **agent** text", "ses_live_fixture")
+        write_opencode_event({
                 "type": "tool_use",
                 "timestamp": 1,
                 "sessionID": "ses_live_fixture",
@@ -241,9 +357,9 @@ if tool_name in ("copilot", "opencode"):
                         "output": live_fragment,
                     },
                 },
-            })
-            if os.environ.get("IMPLEMENT_LOOP_TEST_LIVE_FAILURE") == "1":
-                write_opencode_event({
+        })
+        if os.environ.get("IMPLEMENT_LOOP_TEST_LIVE_FAILURE") == "1":
+            write_opencode_event({
                     "type": "tool_use",
                     "timestamp": 2,
                     "sessionID": "ses_live_fixture",
@@ -256,24 +372,15 @@ if tool_name in ("copilot", "opencode"):
                             "error": "live failure details",
                         },
                     },
-                })
-        else:
-            sys.stdout.write(live_fragment)
-            sys.stdout.flush()
+            })
         with socket.create_connection(
             ("127.0.0.1", int(os.environ["IMPLEMENT_LOOP_TEST_LIVE_OUTPUT_READY_PORT"])),
             timeout=20,
         ) as ready_connection:
             ready_connection.sendall(b"R")
         sys.stdin.buffer.read(1)
-        if tool_name != "opencode":
-            sys.stdout.write("\n")
-            sys.stdout.flush()
         sys.exit(int(exit_status))
-    if tool_name == "opencode":
-        write_opencode_text_event("Agent output\n" + output, "ses_fixture")
-    else:
-        sys.stdout.write("Agent output\n" + output + "\n")
+    write_opencode_text_event("Agent output\n" + output, "ses_fixture")
     sys.exit(int(exit_status))
 
 if args[:2] == ["repo", "view"]:
@@ -321,8 +428,8 @@ elif args[:2] == ["issue", "edit"]:
     if state.get("claim_remove_child"):
         state["children"] = [child for child in state["children"] if child["number"] != number]
     state.setdefault("events", []).append(["assign", number, login])
-    if state.get("remove_copilot_before_invocation"):
-        (Path(os.environ["PATH"].split(os.pathsep)[0]) / "copilot").unlink()
+    if state.get("remove_opencode_before_invocation"):
+        (Path(os.environ["PATH"].split(os.pathsep)[0]) / "opencode").unlink()
     if state.get("precreate_agent_log_before_invocation"):
         state_home = Path(os.environ.get("XDG_STATE_HOME", home / ".local/state"))
         records_dir = Path(state.get("records_dir", state_home / "implement-loop"))
@@ -418,39 +525,6 @@ save_state()
 print(json.dumps(result))
 """
 
-FAKE_ALERT_TOOL = r"""#!/usr/bin/env python3
-import json
-import os
-from pathlib import Path
-import sys
-import time
-
-tool_name = Path(sys.argv[0]).name
-state = json.loads(Path(os.environ["IMPLEMENT_LOOP_TEST_STATE"]).read_text())
-repository = Path(os.environ["IMPLEMENT_LOOP_TEST_REPO"])
-state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
-records_dir = Path(state.get("records_dir", state_home / "implement-loop"))
-event = {
-    "tool": tool_name,
-    "args": sys.argv[1:],
-    "lock_exists": (repository / ".git/implement-loop.lock").exists(),
-    "active_run_markers": sorted(str(path) for path in records_dir.glob("run-*/active.pid")),
-}
-with Path(os.environ["IMPLEMENT_LOOP_TEST_ALERT_LOG"]).open("a") as log:
-    log.write(json.dumps(event) + "\n")
-
-mode = os.environ.get(
-    f"IMPLEMENT_LOOP_TEST_{tool_name.upper().replace('-', '_')}_MODE"
-)
-if mode in ("fail", "hang"):
-    print("simulated alert stdout", flush=True)
-    print("simulated alert stderr", file=sys.stderr, flush=True)
-if mode == "fail":
-    sys.exit(1)
-if mode == "hang":
-    time.sleep(60)
-"""
-
 
 def _without_inherited_git_environment(environment: Mapping[str, str]) -> dict[str, str]:
     return {key: value for key, value in environment.items() if not key.startswith("GIT_")}
@@ -470,10 +544,9 @@ def _isolated_git_environment(home: Path) -> dict[str, str]:
     return environment
 
 
-class TemporaryHomeTestCase(unittest.TestCase):
-    def setUp(self) -> None:
+class _TemporaryHomeFixture:
+    def initialize_home(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="implement-loop-test-")
-        self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
         self.env = _isolated_git_environment(self.home)
         for variable in ("GH_REPO", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "NO_COLOR", "FORCE_COLOR"):
@@ -481,23 +554,10 @@ class TemporaryHomeTestCase(unittest.TestCase):
         self.bin = self.home / "bin"
         self.bin.mkdir()
         self.env["PATH"] = str(self.bin) + os.pathsep + self.env["PATH"]
-        self.invocation_markers: dict[str, Path] = {}
         self.controlled_path_count = 0
 
-    def add_invocation_marker(self, command: str) -> Path:
-        executable = self.bin / command
-        marker = self.home / f"{command}.invoked"
-        executable.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(marker))}\n")
-        executable.chmod(0o700)
-        self.invocation_markers[command] = marker
-        return marker
-
-    def assert_commands_not_invoked(self, *commands: str) -> None:
-        for command in commands:
-            marker = self.invocation_markers.get(command)
-            self.assertIsNotNone(marker, f"no invocation marker configured for {command}")
-            assert marker is not None
-            self.assertFalse(marker.exists(), f"{command} was invoked; marker: {marker}")
+    def cleanup(self) -> None:
+        self.temp.cleanup()
 
     def copy_source_tree(self) -> Path:
         source = self.home / "source checkout"
@@ -517,26 +577,16 @@ class TemporaryHomeTestCase(unittest.TestCase):
         return source
 
 
-class LoopTestCase(TemporaryHomeTestCase):
-    def setUp(self) -> None:
-        super().setUp()
+class _LoopFixtureSupport:
+    def initialize_loop(self) -> None:
         self.repo = self.home / "repo"
         self.repo.mkdir()
         for tool in (
             "gh",
-            "copilot",
             "opencode",
-            "osascript",
-            "afplay",
-            "notify-send",
-            "canberra-gtk-play",
         ):
             path = self.bin / tool
-            path.write_text(
-                FAKE_ALERT_TOOL
-                if tool in ("osascript", "afplay", "notify-send", "canberra-gtk-play")
-                else FAKE_TOOL
-            )
+            path.write_text(FAKE_TOOL)
             path.chmod(0o700)
 
         self.state_path = self.home / "github-state.json"
@@ -544,7 +594,6 @@ class LoopTestCase(TemporaryHomeTestCase):
         self.save_state()
         self.env["IMPLEMENT_LOOP_TEST_STATE"] = str(self.state_path)
         self.env["IMPLEMENT_LOOP_TEST_REPO"] = str(self.repo)
-        self.env["IMPLEMENT_LOOP_TEST_ALERT_LOG"] = str(self.home / "alert-calls.jsonl")
 
         self.git("init", "--quiet")
         self.git("symbolic-ref", "HEAD", "refs/heads/main")
@@ -583,25 +632,11 @@ class LoopTestCase(TemporaryHomeTestCase):
             },
             "comment_page_size": 1,
             "events": [],
-            "copilot_calls": [],
             "opencode_calls": [],
-            "agent_output": (
-                'IMPLEMENT_LOOP_COMPLETE {"issue":2,"status":"completed",'
-                '"acceptance_criteria":"passed","validation":"passed"}'
-            ),
         }
 
     def save_state(self) -> None:
         self.state_path.write_text(json.dumps(self.state))
-
-    def set_repository_identity(self, name: str) -> None:
-        repository_url = f"https://api.github.com/repos/{name}"
-        self.state["repository_name"] = name
-        self.state["repository_url"] = repository_url
-        self.state["spec"]["repository_url"] = repository_url
-        for ticket in self.state["tickets"].values():
-            ticket["repository_url"] = repository_url
-        self.save_state()
 
     def add_ticket(
         self,
@@ -658,12 +693,11 @@ class LoopTestCase(TemporaryHomeTestCase):
                 target = Path(sys.executable)
             elif command == "git":
                 git = shutil.which("git", path=self.env["PATH"])
-                self.assertIsNotNone(git, "test environment needs git")
-                assert git is not None
+                assert git is not None, "test environment needs git"
                 target = Path(git)
             else:
                 target = self.bin / command
-                self.assertTrue(target.is_file(), f"no fake executable for {command}")
+                assert target.is_file(), f"no fake executable for {command}"
             (directory / command).symlink_to(target)
         return directory
 
@@ -681,7 +715,6 @@ class LoopTestCase(TemporaryHomeTestCase):
     def run_loop(
         self,
         *args: str,
-        harness: str | None = "copilot",
         extra_env: dict[str, str] | None = None,
         cwd: Path | None = None,
         preexec_fn: Callable[[], None] | None = None,
@@ -694,8 +727,6 @@ class LoopTestCase(TemporaryHomeTestCase):
         state_dir = state_home / "implement-loop"
         existing_runs = set(state_dir.glob("run-*")) if state_dir.exists() else set()
         command = [str(executable), "1"]
-        if harness is not None:
-            command.extend(("--harness", harness))
         command.extend(args)
         result = subprocess.run(
             command,
@@ -716,10 +747,8 @@ class LoopTestCase(TemporaryHomeTestCase):
         self,
         result: subprocess.CompletedProcess[bytes],
         executable: str,
-        *,
-        harness: str | None = None,
     ) -> None:
-        self.assertNotEqual(result.returncode, 0, result.stdout.decode() + result.stderr.decode())
+        assert result.returncode != 0, result.stdout.decode() + result.stderr.decode()
         output = (result.stdout + result.stderr).lower()
         for guidance in (
             executable.encode(),
@@ -728,18 +757,15 @@ class LoopTestCase(TemporaryHomeTestCase):
             b"add it to path",
             b"retry",
         ):
-            self.assertIn(guidance.lower(), output)
-        if harness is not None:
-            self.assertIn(f"selected {harness} harness".encode().lower(), output)
+            assert guidance.lower() in output
 
     def assert_missing_executable_stopped_before_run(self, runs: list[Path]) -> None:
         state = self.load_state()
-        self.assertEqual(state["events"], [])
-        self.assertEqual(state["opencode_calls"], [])
-        self.assertEqual(state["copilot_calls"], [])
-        self.assertEqual(runs, [])
-        self.assertFalse((self.home / ".local/state/implement-loop").exists())
-        self.assertFalse(self.repository_lock_path().exists())
+        assert state["events"] == []
+        assert state["opencode_calls"] == []
+        assert runs == []
+        assert not (self.home / ".local/state/implement-loop").exists()
+        assert not self.repository_lock_path().exists()
 
     def _read_until_output(
         self,
@@ -753,21 +779,26 @@ class LoopTestCase(TemporaryHomeTestCase):
         while fragment not in output:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                self.fail(f"Timed out waiting for {fragment!r}; received {bytes(output)!r}")
+                raise AssertionError(
+                    f"Timed out waiting for {fragment!r}; received {bytes(output)!r}"
+                )
             readable, _, _ = select.select([descriptor], [], [], remaining)
             if not readable:
-                self.fail(f"Timed out waiting for {fragment!r}; received {bytes(output)!r}")
+                raise AssertionError(
+                    f"Timed out waiting for {fragment!r}; received {bytes(output)!r}"
+                )
             try:
                 chunk = os.read(descriptor, 4096)
             except OSError as error:
-                self.fail(f"Caller output closed before {fragment!r} arrived: {error}")
+                raise AssertionError(
+                    f"Caller output closed before {fragment!r} arrived: {error}"
+                ) from error
             if not chunk:
-                self.fail(f"Caller output closed before {fragment!r} arrived")
+                raise AssertionError(f"Caller output closed before {fragment!r} arrived")
             output.extend(chunk)
 
     def _assert_live_harness_output(
         self,
-        harness: str,
         *,
         terminal: bool,
         no_color: bool = False,
@@ -805,8 +836,6 @@ class LoopTestCase(TemporaryHomeTestCase):
                     "1",
                     "--max-iterations",
                     "1",
-                    "--harness",
-                    harness,
                 ],
                 cwd=self.repo,
                 env=env,
@@ -821,7 +850,7 @@ class LoopTestCase(TemporaryHomeTestCase):
 
             with ready_listener.accept()[0] as ready_connection:
                 ready_connection.settimeout(LIVE_READY_TIMEOUT)
-                self.assertEqual(ready_connection.recv(1), b"R")
+                assert ready_connection.recv(1) == b"R"
 
             if terminal:
                 assert master is not None
@@ -843,46 +872,47 @@ class LoopTestCase(TemporaryHomeTestCase):
                     timeout=LIVE_OUTPUT_TIMEOUT,
                 )
 
-            self.assertIsNone(process.poll(), "harness exited before the test released it")
+            assert process.poll() is None, "harness exited before the test released it"
             attempt_dirs = list(
                 (self.home / ".local/state/implement-loop").glob("run-*/attempt-1-ticket-2")
             )
-            self.assertEqual(len(attempt_dirs), 1)
+            assert len(attempt_dirs) == 1
             attempt_dir = attempt_dirs[0]
-            self.assertTrue((attempt_dir.parent / "active.pid").is_file())
+            assert (attempt_dir.parent / "active.pid").is_file()
             for fragment_line in live_output_fragment.splitlines():
-                self.assertIn(fragment_line, output)
-            if harness == "opencode":
-                heading = "── Agent ──".encode()
+                assert fragment_line in output
+            heading = "── Agent ──".encode()
+            if terminal and not no_color:
+                assert b"\x1b[1;36m" + heading + b"\x1b[0m\r\nLive **agent** text\r\n\r\n" in output
+                assert (
+                    b"\x1b[32m\xe2\x9c\x93\x1b[0m "
+                    b"\x1b[1mLive completed tool\x1b[0m "
+                    b"\x1b[2m(live_tool)\x1b[0m" in output
+                )
+                assert b'  \x1b[2m\xe2\x94\x82\x1b[0m {"fixture":"live"}' in output
+            else:
+                newline = b"\r\n" if terminal else b"\n"
+                assert heading + newline + b"Live **agent** text" + newline * 2 in output
+                assert b"\xe2\x9c\x93 Live completed tool (live_tool)" in output
+                assert b"\x1b[" not in output
+            assert output.count(heading) == 1
+            if include_failure:
                 if terminal and not no_color:
-                    self.assertIn(
-                        b"\x1b[1;36m" + heading + b"\x1b[0m\r\nLive **agent** text\r\n\r\n",
-                        output,
+                    assert (
+                        b"\x1b[31m\xe2\x9c\x97\x1b[0m "
+                        b"\x1b[1mLive failed tool\x1b[0m "
+                        b"\x1b[2m(live_failure)\x1b[0m" in output
                     )
-                    self.assertIn(
-                        b"\x1b[32m\xe2\x9c\x93\x1b[0m "
-                        b"\x1b[1mLive completed tool\x1b[0m "
-                        b"\x1b[2m(live_tool)\x1b[0m",
-                        output,
-                    )
-                    self.assertIn(b'  \x1b[2m\xe2\x94\x82\x1b[0m {"fixture":"live"}', output)
                 else:
-                    newline = b"\r\n" if terminal else b"\n"
-                    self.assertIn(heading + newline + b"Live **agent** text" + newline * 2, output)
-                    self.assertIn(b"\xe2\x9c\x93 Live completed tool (live_tool)", output)
-                    self.assertNotIn(b"\x1b[", output)
-                self.assertEqual(output.count(heading), 1)
-                if include_failure:
-                    if terminal and not no_color:
-                        self.assertIn(
-                            b"\x1b[31m\xe2\x9c\x97\x1b[0m "
-                            b"\x1b[1mLive failed tool\x1b[0m "
-                            b"\x1b[2m(live_failure)\x1b[0m",
-                            output,
-                        )
-                    else:
-                        self.assertIn("✗ Live failed tool (live_failure)".encode(), output)
-                expected_event = {
+                    assert "✗ Live failed tool (live_failure)".encode() in output
+            expected_events = [
+                {
+                    "type": "text",
+                    "timestamp": 1,
+                    "sessionID": "ses_live_fixture",
+                    "part": {"type": "text", "text": "Live **agent** text"},
+                },
+                {
                     "type": "tool_use",
                     "timestamp": 1,
                     "sessionID": "ses_live_fixture",
@@ -896,56 +926,44 @@ class LoopTestCase(TemporaryHomeTestCase):
                             "output": live_output_fragment.decode("utf-8"),
                         },
                     },
-                }
-                expected_events = [
+                },
+            ]
+            if include_failure:
+                expected_events.append(
                     {
-                        "type": "text",
-                        "timestamp": 1,
+                        "type": "tool_use",
+                        "timestamp": 2,
                         "sessionID": "ses_live_fixture",
-                        "part": {"type": "text", "text": "Live **agent** text"},
-                    },
-                    expected_event,
-                ]
-                if include_failure:
-                    expected_events.append(
-                        {
-                            "type": "tool_use",
-                            "timestamp": 2,
-                            "sessionID": "ses_live_fixture",
-                            "part": {
-                                "type": "tool",
-                                "tool": "live_failure",
-                                "state": {
-                                    "status": "error",
-                                    "title": "Live failed tool",
-                                    "error": "live failure details",
-                                },
+                        "part": {
+                            "type": "tool",
+                            "tool": "live_failure",
+                            "state": {
+                                "status": "error",
+                                "title": "Live failed tool",
+                                "error": "live failure details",
                             },
-                        }
-                    )
-                expected_log = "".join(
-                    json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
-                    for event in expected_events
-                ).encode("utf-8")
-                self.assertEqual((attempt_dir / "agent.log").read_bytes(), expected_log)
-            else:
-                self.assertEqual((attempt_dir / "agent.log").read_bytes(), live_output_fragment)
+                        },
+                    }
+                )
+            expected_log = "".join(
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                for event in expected_events
+            ).encode("utf-8")
+            assert (attempt_dir / "agent.log").read_bytes() == expected_log
 
             assert process.stdin is not None
             process.stdin.write(b"x")
             process.stdin.flush()
             process.stdin.close()
-            self.assertEqual(
-                process.wait(timeout=LIVE_READY_TIMEOUT),
-                0,
-                bytes(output).decode("utf-8", errors="replace"),
+            assert process.wait(timeout=LIVE_READY_TIMEOUT) == 0, bytes(output).decode(
+                "utf-8", errors="replace"
             )
 
-            call = self.load_state()[f"{harness}_calls"][0]
+            call = self.load_state()["opencode_calls"][0]
             expected_no_color = "1" if no_color or not terminal else None
             expected_force_color = "1" if terminal and not no_color else "0"
-            self.assertEqual(call["no_color"], expected_no_color)
-            self.assertEqual(call["force_color"], expected_force_color)
+            assert call["no_color"] == expected_no_color
+            assert call["force_color"] == expected_force_color
             return bytes(output)
         finally:
             if process is not None:
@@ -953,7 +971,7 @@ class LoopTestCase(TemporaryHomeTestCase):
                     try:
                         process.stdin.write(b"x")
                         process.stdin.flush()
-                    except (BrokenPipeError, OSError, ValueError):
+                    except BrokenPipeError, OSError, ValueError:
                         pass
                     try:
                         process.stdin.close()
@@ -985,22 +1003,8 @@ class LoopTestCase(TemporaryHomeTestCase):
     def load_state(self) -> dict[str, object]:
         return json.loads(self.state_path.read_text())
 
-    def alert_calls(self) -> list[dict[str, object]]:
-        path = Path(self.env["IMPLEMENT_LOOP_TEST_ALERT_LOG"])
-        if not path.exists():
-            return []
-        return [json.loads(line) for line in path.read_text().splitlines()]
 
-    def clear_alert_calls(self) -> None:
-        Path(self.env["IMPLEMENT_LOOP_TEST_ALERT_LOG"]).unlink(missing_ok=True)
-
-    def platform_test_environment(self, platform: str) -> dict[str, str]:
-        """Exercise a platform adapter from CLI subprocess tests on any host OS."""
-        startup_directory = self.home / "test-python-startup"
-        startup_directory.mkdir(exist_ok=True)
-        (startup_directory / "sitecustomize.py").write_text(
-            "import sys\n"
-            "if sys.argv[0].rsplit('/', 1)[-1] == 'implement-loop':\n"
-            f"    sys.platform = {platform!r}\n"
-        )
-        return {"PYTHONPATH": str(startup_directory)}
+class LoopFixture(_TemporaryHomeFixture, _LoopFixtureSupport):
+    def __init__(self) -> None:
+        self.initialize_home()
+        self.initialize_loop()

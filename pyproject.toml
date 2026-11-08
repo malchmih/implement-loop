@@ -3,20 +3,23 @@ name = "implement-loop"
 version = "0.1.0"
 description = "A local sequential runner for prepared GitHub issue queues"
 license = "0BSD"
-requires-python = ">=3.11"
+requires-python = ">=3.15,<3.16"
 dependencies = []
+scripts = { implement-loop = "implement_loop.cli:main" }
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["implement_loop"]
 
 [dependency-groups]
-build = [
-    "pyinstaller==6.22.3",
-]
 dev = [
     "mypy>=1.13,<2",
+    "pytest>=9,<10",
     "ruff>=0.11,<1",
 ]
-
-[tool.uv]
-package = false
 
 [[tool.uv.index]]
 name = "pypi"
@@ -25,12 +28,12 @@ default = true
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py315"
 
 [tool.ruff.lint]
 select = ["B", "E", "F", "I", "UP"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.15"
 files = ["implement_loop"]
 strict = true

@@ -1,4 +1,4 @@
-"""Module entry point for direct and frozen execution."""
+"""Module entry point for direct execution."""
 
 from __future__ import annotations
 
