@@ -2783,7 +2783,7 @@ def test_opencode_final_unterminated_write_failure_does_not_fail_raw_logging(
         assert process.returncode != 0
         assert b"did not submit a required per-attempt completion report" in (stderr or b"")
         assert b"Unable to persist the complete OpenCode output log" not in (stderr or b"")
-        process_record = json.loads((attempts[0] / "process.json").read_text())
+        process_record = json.loads((attempts[0] / "outcome.json").read_text())["process"]
         assert process_record["log_persisted"]
         assert process_record["stream_error"] is not None
         assert agent_log.read_bytes() == raw_bytes

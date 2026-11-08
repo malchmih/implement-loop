@@ -35,11 +35,27 @@ def test_run_records_are_private_and_redirected_output_disables_color(
     assert call["force_color"] == "0"
     run_dir = runs[0]
     attempt = run_dir / "attempt-1-ticket-2"
+    context = json.loads((attempt / "context.json").read_text())
+    outcome = json.loads((attempt / "outcome.json").read_text())
     assert stat.S_IMODE(run_dir.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(run_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE(attempt.stat().st_mode) == 0o700
     assert stat.S_IMODE((attempt / "prompt.txt").stat().st_mode) == 0o600
     assert stat.S_IMODE((attempt / "agent.log").stat().st_mode) == 0o600
+    assert stat.S_IMODE((attempt / "context.json").stat().st_mode) == 0o600
+    assert stat.S_IMODE((attempt / "outcome.json").stat().st_mode) == 0o600
+    assert stat.S_IMODE((attempt / "completion-result.json").stat().st_mode) == 0o600
+    assert context["spec"]["number"] == 1
+    assert context["ticket"]["number"] == 2
+    assert context["spec_comments"] == [{"author": "owner", "body": "Parent comment fixture."}]
+    assert context["ticket_comments"] == [
+        {"author": "owner", "body": "Ticket comment fixture."},
+        {"author": "reviewer", "body": "Second paginated ticket comment."},
+    ]
+    assert "Ticket comment fixture." in (attempt / "prompt.txt").read_text()
+    assert b"Agent output" in (attempt / "agent.log").read_bytes()
+    assert outcome["status"] == "completed"
+    assert outcome["report"]["status"] == "valid"
     assert not run_dir.is_relative_to(loop_fixture.repo)
 
 

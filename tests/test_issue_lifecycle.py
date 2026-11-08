@@ -124,9 +124,10 @@ def test_opencode_spawn_failure_reports_no_invocation_started(loop_fixture: Loop
     state = loop_fixture.load_state()
     assert state["opencode_calls"] == []
     assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
-    process = json.loads((attempt / "process.json").read_text())
-    assert process["exit_code"] is None
-    assert "could not be started" in process["spawn_error"]
+    outcome = json.loads((attempt / "outcome.json").read_text())
+    assert outcome["status"] == "failed"
+    assert outcome["process"]["exit_code"] is None
+    assert "could not be started" in outcome["process"]["spawn_error"]
 
 
 def test_queue_refresh_failure_does_not_report_completed_ticket_records(
@@ -169,8 +170,12 @@ def test_failed_preclosure_read_preserves_work_and_stops_the_queue(
     assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
     assert state["tickets"]["3"]["assignees"] == []
     assert [event[0] for event in state["events"]] == ["assign"]
-    assert (attempt / "completion.json").is_file()
-    assert (attempt / "process.json").is_file()
+    outcome = json.loads((attempt / "outcome.json").read_text())
+    assert outcome["status"] == "failed"
+    assert outcome["process"]["exit_code"] == 0
+    assert outcome["report"]["status"] == "valid"
+    assert outcome["checks"]["status"] == "failed"
+    assert "simulated required issue read failure" in outcome["checks"]["diagnostic"]
     assert "implementation-2.txt" in loop_fixture.git("show", "--pretty=", "--name-only")
 
 
@@ -204,8 +209,9 @@ def test_failed_closure_confirmation_does_not_start_another_ticket(
     assert state["tickets"]["3"]["state"] == "open"
     assert state["tickets"]["3"]["assignees"] == []
     assert [event[0] for event in state["events"]] == ["assign", "close"]
-    assert (attempt / "closure-comment.txt").is_file()
-    assert not (attempt / "closed-ticket.json").exists()
+    outcome = json.loads((attempt / "outcome.json").read_text())
+    assert outcome["closure"]["status"] == "uncertain"
+    assert "Implemented locally by implement-loop" in outcome["closure"]["comment"]
 
 
 def test_cross_repository_child_fails_closed(loop_fixture: LoopFixture) -> None:
@@ -304,7 +310,6 @@ def test_failed_claim_writes_stop_without_rolling_back_partial_assignment(
         [] if failure_mode == "before_write" else ["assign"]
     )
     assert (attempt / "attempt.json").is_file()
-    assert not (attempt / "process.json").exists()
 
 
 def test_blocker_appearing_after_claim_prevents_harness_invocation(
@@ -348,15 +353,13 @@ def test_claim_recheck_refuses_a_closed_ticket_or_parent(
     loop_fixture.state[claim_option] = True
     loop_fixture.save_state()
 
-    result, runs = loop_fixture.run_loop()
+    result, _ = loop_fixture.run_loop()
 
     state = loop_fixture.load_state()
-    attempt = runs[0] / "attempt-1-ticket-2"
     assert result.returncode != 0
     assert state["opencode_calls"] == []
     assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
     assert [event[0] for event in state["events"]] == ["assign"]
-    assert not (attempt / "process.json").exists()
     assert state["tickets"]["2"]["state"] == ("closed" if changed_issue == "ticket" else "open")
     assert state["spec"]["state"] == ("closed" if changed_issue == "parent" else "open")
 
@@ -428,10 +431,9 @@ def test_ticket_closed_during_execution_is_not_closed_again_or_followed(
     loop_fixture.state["agent_action"] = "close_ticket"
     loop_fixture.save_state()
 
-    result, runs = loop_fixture.run_loop("--max-iterations", "2")
+    result, _ = loop_fixture.run_loop("--max-iterations", "2")
 
     state = loop_fixture.load_state()
-    attempt = runs[0] / "attempt-1-ticket-2"
     assert result.returncode != 0
     assert b"no longer open" in result.stderr
     assert [call["ticket"] for call in state["opencode_calls"]] == [2]
@@ -439,7 +441,6 @@ def test_ticket_closed_during_execution_is_not_closed_again_or_followed(
     assert state["tickets"]["3"]["state"] == "open"
     assert state["tickets"]["3"]["assignees"] == []
     assert [event[0] for event in state["events"]] == ["assign"]
-    assert not (attempt / "closed-ticket.json").exists()
     assert "implementation-2.txt" in loop_fixture.git("show", "--pretty=", "--name-only")
 
 
@@ -489,7 +490,8 @@ def test_partial_closure_outcomes_preserve_work_and_stop_before_the_next_ticket(
 
     state = loop_fixture.load_state()
     attempt = runs[0] / "attempt-1-ticket-2"
-    closure_comment = (attempt / "closure-comment.txt").read_text().strip()
+    outcome = json.loads((attempt / "outcome.json").read_text())
+    closure_comment = outcome["closure"]["comment"]
     assert result.returncode != 0
     assert (
         b"simulated GitHub closure failure detail\nadditional closure stderr detail"
@@ -510,9 +512,8 @@ def test_partial_closure_outcomes_preserve_work_and_stop_before_the_next_ticket(
         assert state["comments"]["2"][-1]["body"] == closure_comment
     else:
         assert state["tickets"]["2"]["state"] == "closed"
-    assert (attempt / "checks.json").is_file()
-    assert (attempt / "closure-comment.txt").is_file()
-    assert not (attempt / "closed-ticket.json").exists()
+    assert outcome["checks"]["report_evidence_valid"]
+    assert outcome["closure"]["status"] == "uncertain"
 
 
 def test_oversized_context_fails_before_claim_without_truncation(loop_fixture: LoopFixture) -> None:

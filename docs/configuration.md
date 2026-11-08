@@ -50,9 +50,10 @@ home directory itself, or filesystem root.
 A missing record directory is created with mode `0700`. An existing directory
 must already have that mode; the runner will not change permissions on a
 possibly shared directory. Run and attempt directories are private (`0700`),
-and files are private (`0600`). Records can contain repository paths, issue and
-comment snapshots, prompts, full OpenCode output, process results, and
-completion evidence. Treat them as sensitive.
+and files are private (`0600`). Ticket records retain the selected issue context,
+the supplied prompt, full OpenCode output, the raw report when submitted, and a
+compact Attempt outcome with process, check, commit, and closure evidence. Treat
+them as sensitive.
 
 When log persistence succeeds, the full output is in the ticket's `agent.log`;
 a log-write failure is reported and can leave it incomplete. Raw OpenCode

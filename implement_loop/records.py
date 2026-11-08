@@ -32,7 +32,7 @@ class RunRecordSettings:
 
 
 class RunRecords:
-    """A private run directory containing context, prompts, and process evidence."""
+    """A private run directory containing context, prompts, and outcome evidence."""
 
     def __init__(self, records_dir: Path, run_dir: Path, started_at: datetime) -> None:
         self.records_dir = records_dir

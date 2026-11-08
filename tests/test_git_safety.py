@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 
@@ -230,7 +231,8 @@ def test_submodule_changes_after_execution_prevent_closure_and_are_preserved(
     assert [event[0] for event in state["events"]] == ["assign"]
     assert (submodule / "uncommitted.txt").read_text() == "submodule work to preserve\n"
     assert "implementation-2.txt" in loop_fixture.git("show", "--pretty=", "--name-only")
-    assert (runs[0] / "attempt-1-ticket-2/process.json").is_file()
+    outcome = json.loads((runs[0] / "attempt-1-ticket-2/outcome.json").read_text())
+    assert outcome["status"] == "failed"
 
 
 @pytest.mark.parametrize("action", ("dirty", "change_owner"))
@@ -249,7 +251,8 @@ def test_opencode_requires_clean_checkout_and_exclusive_ownership(
     assert state["tickets"]["2"]["state"] == "open"
     assert [event[0] for event in state["events"]] == ["assign"]
     assert "implementation-2.txt" in loop_fixture.git("show", "--pretty=", "--name-only")
-    assert (runs[0] / "attempt-1-ticket-2/process.json").is_file()
+    outcome = json.loads((runs[0] / "attempt-1-ticket-2/outcome.json").read_text())
+    assert outcome["status"] == "failed"
     if action == "dirty":
         assert b"checkout is not clean" in result.stderr
         assert (loop_fixture.repo / "unfinished.txt").is_file()

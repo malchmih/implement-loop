@@ -302,7 +302,9 @@ if tool_name == "opencode":
         state["spec"]["state"] = "closed"
         save_state()
     elif action == "break_records":
-        attempt_dir.chmod(0o500)
+        outcome = attempt_dir / "outcome.json"
+        outcome.unlink()
+        outcome.mkdir(mode=0o700)
 
     if state.get("fail_preclosure_read_after_harness"):
         state["fail_next_issue_read_for"] = ticket_number

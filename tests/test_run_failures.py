@@ -83,6 +83,12 @@ def test_interruption_reports_run_and_ticket_records(
         assert attempt_directory.is_dir()
         assert not (run_directory / "active.pid").exists()
         assert not loop_fixture.repository_lock_path().exists()
+        outcome = json.loads((attempt_directory / "outcome.json").read_text())
+        assert outcome["status"] == "interrupted"
+        assert outcome["process"]["exit_code"] is None
+        assert outcome["report"]["status"] == "not_evaluated"
+        assert outcome["checks"] == {}
+        assert outcome["commit"] is None
         state = loop_fixture.load_state()
         assert len(state["opencode_calls"]) == 1
         agent_log = (attempt_directory / "agent.log").read_bytes()
@@ -128,8 +134,10 @@ def test_missing_report_does_not_close_ticket(loop_fixture: LoopFixture) -> None
     assert len(state["opencode_calls"]) == 1
     assert len(runs) == 1
     attempt = runs[0] / "attempt-1-ticket-2"
-    evidence = json.loads((attempt / "completion-evidence.json").read_text())
-    assert evidence["status"] == "missing"
+    outcome = json.loads((attempt / "outcome.json").read_text())
+    assert outcome["status"] == "failed"
+    assert outcome["report"]["status"] == "missing"
+    assert "did not submit" in outcome["report"]["error"]
     assert b"did not submit a required per-attempt completion report" in result.stderr
     assert b"usage:" in state["opencode_calls"][0]["report_help"].encode().lower()
     assert not (attempt / "completion-result.json").exists()
@@ -158,7 +166,23 @@ def test_valid_report_closes_ticket_after_clean_descendant_commit(
     assert len(runs) == 1
     attempt = runs[0] / "attempt-1-ticket-2"
     metadata = json.loads((attempt / "attempt.json").read_text())
-    completion = json.loads((attempt / "completion.json").read_text())
+    completion = json.loads((attempt / "completion-result.json").read_text())
+    outcome = json.loads((attempt / "outcome.json").read_text())
+    assert outcome["status"] == "completed"
+    assert outcome["process"]["exit_code"] == 0
+    assert outcome["report"]["status"] == "valid"
+    assert outcome["checks"] == {
+        "records_persisted": True,
+        "report_evidence_valid": True,
+        "branch_unchanged": True,
+        "checkout_clean": True,
+        "new_descendant_commit": True,
+        "parent_open": True,
+        "ticket_open_unblocked_direct_child_exclusively_assigned": True,
+        "ticket_closed": True,
+    }
+    assert outcome["commit"]["after"] == loop_fixture.git("rev-parse", "HEAD")
+    assert outcome["closure"]["status"] == "confirmed"
     assert completion["issue"] == 2
     assert completion["attempt_id"] == metadata["attempt_id"]
     call = state["opencode_calls"][0]
@@ -196,11 +220,9 @@ def test_valid_report_closes_ticket_after_clean_descendant_commit(
     assert call["opencode_config"] == "inherited-setting"
     assert "branch main" in state["events"][1][2]
     assert "The wrapper did not push or open a PR" in state["events"][1][2]
-    assert (attempt / "commit").read_text().strip() == loop_fixture.git("rev-parse", "HEAD")
+    assert outcome["commit"]["after"] == loop_fixture.git("rev-parse", "HEAD")
     assert loop_fixture.git("status", "--porcelain") == ""
     assert (attempt / "agent.log").is_file()
-    assert (attempt / "process.json").is_file()
-    assert (attempt / "commit").is_file()
     assert not (runs[0] / "active.pid").exists()
 
 
@@ -298,14 +320,14 @@ def test_blocked_report_preserves_reason_and_stops_without_closing_ticket(
     attempt = runs[0] / "attempt-1-ticket-2"
     expected_reason = "External dependency is unavailable"
     report = json.loads((attempt / "completion-result.json").read_text())
-    evidence = json.loads((attempt / "completion-evidence.json").read_text())
+    outcome = json.loads((attempt / "outcome.json").read_text())
     assert result.returncode != 0
     assert expected_reason.encode() in result.stderr
     assert report["status"] == "blocked"
     assert report["reason"] == expected_reason
-    assert evidence["status"] == "blocked"
-    assert evidence["reason"] == expected_reason
-    assert not (attempt / "completion.json").exists()
+    assert outcome["status"] == "blocked"
+    assert outcome["report"]["status"] == "blocked"
+    assert outcome["report"]["reason"] == expected_reason
     assert state["tickets"]["2"]["state"] == "open"
     assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
     assert [event[0] for event in state["events"]] == ["assign"]
@@ -325,9 +347,9 @@ def test_blocked_report_rejects_an_invalid_reason(loop_fixture: LoopFixture, mod
 
     state = loop_fixture.load_state()
     attempt = runs[0] / "attempt-1-ticket-2"
-    evidence = json.loads((attempt / "completion-evidence.json").read_text())
+    outcome = json.loads((attempt / "outcome.json").read_text())
     assert result.returncode != 0
-    assert evidence["status"] == "missing"
+    assert outcome["report"]["status"] == "missing"
     assert b"did not submit a required per-attempt completion report" in result.stderr
     assert any(
         "at least five non-whitespace characters" in error
@@ -376,16 +398,16 @@ def test_blocked_and_completed_reports_conflict_in_either_order(
     state = loop_fixture.load_state()
     attempt = runs[0] / "attempt-1-ticket-2"
     report = json.loads((attempt / "completion-result.json").read_text())
-    evidence = json.loads((attempt / "completion-evidence.json").read_text())
+    outcome = json.loads((attempt / "outcome.json").read_text())
     assert result.returncode != 0
     assert b"conflicting completion reports" in result.stderr.lower()
     assert report["status"] == "conflict"
     assert [item["status"] for item in report["reports"]] == expected_statuses
-    assert evidence["status"] == "conflict"
+    assert outcome["report"]["status"] == "conflict"
+    assert "conflicting completion reports" in outcome["report"]["error"]
     blocked_claims = [item for item in report["reports"] if item["status"] == "blocked"]
     assert len(blocked_claims) == 1
     assert blocked_claims[0]["reason"] in result.stderr.decode()
-    assert evidence["reports"] == report["reports"]
     assert state["tickets"]["2"]["state"] == "open"
     assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
     assert [event[0] for event in state["events"]] == ["assign"]
@@ -406,14 +428,15 @@ def test_blocked_reason_is_preserved_when_opencode_also_fails(loop_fixture: Loop
 
     state = loop_fixture.load_state()
     attempt = runs[0] / "attempt-1-ticket-2"
-    evidence = json.loads((attempt / "completion-evidence.json").read_text())
+    outcome = json.loads((attempt / "outcome.json").read_text())
     expected_reason = "External dependency is unavailable"
     assert result.returncode != 0
     assert b"OpenCode exited with status 7" in result.stderr
     assert expected_reason.encode() in result.stderr
-    assert evidence["status"] == "blocked"
-    assert evidence["reason"] == expected_reason
-    assert json.loads((attempt / "process.json").read_text())["exit_code"] == 7
+    assert outcome["status"] == "failed"
+    assert outcome["report"]["status"] == "blocked"
+    assert outcome["report"]["reason"] == expected_reason
+    assert outcome["process"]["exit_code"] == 7
     assert state["tickets"]["2"]["state"] == "open"
     assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
     assert [event[0] for event in state["events"]] == ["assign"]
@@ -439,6 +462,9 @@ def test_report_write_failure_is_clear_and_does_not_close_ticket(
         "cannot persist completion report" in error.lower()
         for error in state["opencode_calls"][0]["report_errors"]
     )
+    outcome = json.loads((attempt / "outcome.json").read_text())
+    assert outcome["status"] == "failed"
+    assert outcome["report"]["status"] == "missing"
     assert not (attempt / "completion-result.json").exists()
     assert "implementation-2.txt" in loop_fixture.git("show", "--pretty=", "--name-only")
     assert loop_fixture.git("status", "--porcelain") == ""
@@ -478,8 +504,9 @@ def test_invalid_report_never_closes_or_unassigns_ticket(
     assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
     assert [event[0] for event in state["events"]] == ["assign"]
     attempt = runs[-1] / "attempt-1-ticket-2"
-    evidence = json.loads((attempt / "completion-evidence.json").read_text())
-    assert evidence["status"] != "valid"
+    outcome = json.loads((attempt / "outcome.json").read_text())
+    assert outcome["report"]["status"] != "valid"
+    assert outcome["report"]["error"]
     assert (attempt / "completion-result.json").is_file()
 
 
@@ -499,8 +526,9 @@ def test_nonzero_opencode_exit_rejects_valid_report(loop_fixture: LoopFixture) -
     attempt = runs[-1] / "attempt-1-ticket-2"
     assert f"Run records: {runs[-1].resolve()}".encode() in result.stderr
     assert f"Ticket #2 records: {attempt.resolve()}".encode() in result.stderr
-    assert json.loads((attempt / "process.json").read_text())["exit_code"] == 7
-    assert json.loads((attempt / "completion-evidence.json").read_text())["status"] == "valid"
+    outcome = json.loads((attempt / "outcome.json").read_text())
+    assert outcome["process"]["exit_code"] == 7
+    assert outcome["report"]["status"] == "valid"
 
 
 def test_required_record_persistence_failure_prevents_closure(loop_fixture: LoopFixture) -> None:
@@ -516,7 +544,7 @@ def test_required_record_persistence_failure_prevents_closure(loop_fixture: Loop
     assert b"Cannot persist required run record" in result.stderr
     assert state["tickets"]["2"]["state"] == "open"
     assert [event[0] for event in state["events"]] == ["assign"]
-    attempt.chmod(0o700)
+    (attempt / "outcome.json").rmdir()
 
 
 def test_agent_log_write_failure_prevents_closure(loop_fixture: LoopFixture) -> None:
@@ -533,10 +561,10 @@ def test_agent_log_write_failure_prevents_closure(loop_fixture: LoopFixture) -> 
 
     state = loop_fixture.load_state()
     attempt = runs[-1] / "attempt-1-ticket-2"
-    process = json.loads((attempt / "process.json").read_text())
+    outcome = json.loads((attempt / "outcome.json").read_text())
     assert result.returncode != 0
     assert b"Unable to persist the complete OpenCode output log" in result.stderr
-    assert not process["log_persisted"]
+    assert not outcome["process"]["log_persisted"]
     assert (attempt / "agent.log").stat().st_size <= 16_384
     assert state["tickets"]["2"]["state"] == "open"
     assert [event[0] for event in state["events"]] == ["assign"]
@@ -564,5 +592,5 @@ def test_rejected_opencode_model_stops_without_retry_or_fallback(loop_fixture: L
     assert state["tickets"]["2"]["assignees"] == [{"login": "tester"}]
     assert [event[0] for event in state["events"]] == ["assign"]
     attempt = runs[0] / "attempt-1-ticket-2"
-    assert json.loads((attempt / "process.json").read_text())["exit_code"] == 1
+    assert json.loads((attempt / "outcome.json").read_text())["process"]["exit_code"] == 1
     assert b"Model unavailable" in (attempt / "agent.log").read_bytes()

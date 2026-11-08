@@ -141,20 +141,28 @@ records-path option or retention override. Records older than seven days are
 eligible for conservative cleanup on a later startup. Treat any printed path as
 authoritative if the environment's XDG state directory has changed.
 
-Review the ticket's `agent.log`, `process.json`, result evidence, and `checks.json`
-when present. Before rerunning an interrupted run, verify that the wrapper,
-OpenCode, delegated agents, and other background work have stopped. Output, record
-presence, and release of the local lock do not confirm that they have stopped.
+Review the Ticket records' `context.json` and `prompt.txt` for the selected
+requirements, `agent.log` for raw harness output, `completion-result.json` when a
+report was submitted, and `outcome.json` for the process status, report decision,
+final checks, commit, and closure status. An interrupted outcome does not establish
+a successful harness exit, even if a report file is present. Before rerunning an
+interrupted run, inspect and verify that the wrapper, OpenCode, delegated agents,
+and other background work have stopped. Output, record markers, and release of the
+local lock do not confirm that they have stopped.
 
 ### Blocked or conflicting report
 
 An intentional blocked report is distinct from a missing or invalid handoff. Its
-reason is recorded in `completion-result.json` and `completion-evidence.json`;
-inspect these with the process status and live issue state. A blocked report
-stops the run without retrying, unassigning, rolling back, or closing the ticket.
-If OpenCode also exits unsuccessfully, both the process failure and blocked
-reason are retained. Conflicting sequential reports preserve the competing
-claims in the result evidence and prevent automatic completion.
+reason is in the submitted `completion-result.json` and summarized in
+`outcome.json`; inspect these with the process status and live issue state. Missing
+and invalid reports, including their available diagnostics, are summarized in
+`outcome.json`. A blocked report stops the run without retrying, unassigning,
+rolling back, or closing the ticket. If OpenCode also exits unsuccessfully, both
+the process failure and blocked reason are retained. Conflicting sequential
+reports preserve the competing claims in `completion-result.json` and prevent
+automatic completion. The submitted report is the single persisted handoff
+evidence; `outcome.json` records the runner's decision and checks, not a second
+report authority.
 
 Agents are cooperative but fallible: finish and join delegated work, wait for
 the reporting command to finish, and do not submit detached or late reports.
@@ -182,11 +190,11 @@ still assigned to you, remove your assignment deliberately before retrying:
 gh issue edit "$TICKET" --remove-assignee @me
 ```
 
-For an uncertain closure, inspect `closure-comment.txt`, `checks.json`, and
-`closed-ticket.json` in the ticket records when present. A missing
-`closed-ticket.json` does not prove that closure failed. If the issue is closed,
-do not close it again; if it is still open, review the commit and records before
-retrying or [manually finalizing approved work](#manually-finalize-approved-committed-work).
+For an uncertain closure, inspect the `closure` and `checks` sections of
+`outcome.json` along with the live issue. A missing closure confirmation does not
+prove that closure failed. If the issue is closed, do not close it again; if it is
+still open, review the commit and records before retrying or
+[manually finalizing approved work](#manually-finalize-approved-committed-work).
 
 ### Stale lock or active-run marker
 
