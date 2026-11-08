@@ -1173,6 +1173,7 @@ def run_opencode(
     prompt: str,
     cwd: Path,
     log_path: Path,
+    report_command: Path,
     *,
     on_invocation_starting: Callable[[], None] | None = None,
 ) -> ProcessOutcome:
@@ -1182,6 +1183,7 @@ def run_opencode(
         harness.command(prompt),
         cwd,
         log_path,
+        report_command=report_command,
         on_invocation_starting=on_invocation_starting,
     )
 
@@ -1191,6 +1193,7 @@ def _run_process(
     cwd: Path,
     log_path: Path,
     *,
+    report_command: Path,
     on_invocation_starting: Callable[[], None] | None = None,
 ) -> ProcessOutcome:
     environment = os.environ.copy()
@@ -1199,6 +1202,7 @@ def _run_process(
         environment["FORCE_COLOR"] = "0"
     else:
         environment["FORCE_COLOR"] = "1"
+    environment["IMPLEMENT_LOOP_REPORT_COMMAND"] = str(report_command)
 
     started_at = _timestamp()
     try:

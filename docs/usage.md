@@ -68,6 +68,22 @@ the Attempt prompt:
 /path/to/implement-loop-report --help
 ```
 
+If the original prompt is lost while that OpenCode invocation is still active,
+the runner exposes the private command path as
+`IMPLEMENT_LOOP_REPORT_COMMAND` in the harness environment. In a shell available
+to that invocation, recover its usage with:
+
+```bash
+"$IMPLEMENT_LOOP_REPORT_COMMAND" --help
+```
+
+Use the command path from that environment for reporting; the command continues
+to supply ticket and Attempt identity itself. This discovery path exists only
+for the active Attempt. It does not recover a prior Attempt or replace the
+original handoff instructions of a wrapper that is already running. In
+particular, code and documentation changed by an Attempt do not retroactively
+change that same Attempt's prompt or environment.
+
 If you cannot complete the ticket, submit a blocked outcome with a meaningful
 reason of at least five non-whitespace characters instead of claiming
 completion:

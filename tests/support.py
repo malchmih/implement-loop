@@ -69,15 +69,31 @@ def write_opencode_text_event(text, session_id):
 tool_name = Path(sys.argv[0]).name
 if tool_name == "opencode":
     prompt = args[-1] if args else ""
-    ticket_number = int(
-        re.search(r"(?:/implement|@implement) Implement only ticket #(\d+)", prompt).group(1)
-    )
-    report_command = shlex.split(next(
-        line.removeprefix("Completion report command: ").strip()
-        for line in prompt.splitlines()
-        if line.startswith("Completion report command: ")
-    ))[0]
+    mode = os.environ.get("IMPLEMENT_LOOP_TEST_RESULT_MODE", "valid")
     state_home = Path(os.environ.get("XDG_STATE_HOME", home / ".local/state"))
+    if mode == "rediscover-report":
+        # Simulate losing the original prompt: use only the active-attempt environment.
+        args[-1] = ""
+        prompt = args[-1]
+        report_command = os.environ.get("IMPLEMENT_LOOP_REPORT_COMMAND")
+        if not report_command:
+            sys.exit("Missing IMPLEMENT_LOOP_REPORT_COMMAND")
+        attempt_metadata_files = list(
+            (state_home / "implement-loop").glob("run-*/attempt-*/attempt.json")
+        )
+        if len(attempt_metadata_files) != 1:
+            sys.exit("Expected one active Attempt")
+        attempt_metadata = json.loads(attempt_metadata_files[0].read_text())
+        ticket_number = attempt_metadata["issue"]
+    else:
+        ticket_number = int(
+            re.search(r"(?:/implement|@implement) Implement only ticket #(\d+)", prompt).group(1)
+        )
+        report_command = shlex.split(next(
+            line.removeprefix("Completion report command: ").strip()
+            for line in prompt.splitlines()
+            if line.startswith("Completion report command: ")
+        ))[0]
     attempt_dir = next(
         (state_home / "implement-loop").glob(f"run-*/attempt-*-ticket-{ticket_number}")
     )
@@ -93,6 +109,9 @@ if tool_name == "opencode":
         "attempt_id": attempt_id,
         "ticket": ticket_number,
         "report_command": report_command,
+        "report_discovery_source": (
+            "environment" if mode == "rediscover-report" else "prompt"
+        ),
         "report_directory_mode": stat.S_IMODE(Path(report_command).parent.stat().st_mode),
         "report_command_mode": stat.S_IMODE(Path(report_command).stat().st_mode),
         "result_initially_absent": not Path(result_path).exists(),
@@ -116,7 +135,6 @@ if tool_name == "opencode":
             f"Implement ticket {ticket_number}"
         ], check=True)
 
-    mode = os.environ.get("IMPLEMENT_LOOP_TEST_RESULT_MODE", "valid")
     help_result = subprocess.run(
         [report_command, "--help"], check=False, capture_output=True, text=True
     )

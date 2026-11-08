@@ -175,6 +175,10 @@ def _build_prompt(
         "handoff. Reporting does not close issues, change implementation files, "
         "create commits, or terminate this harness. This Agent attestation is not "
         "independent proof of correctness.\n\n"
+        "If you lose this prompt during the active Attempt, recover the command "
+        'usage in a shell with "$IMPLEMENT_LOOP_REPORT_COMMAND" --help. The '
+        "runner provides this environment variable; it contains only the private "
+        "command path, not ticket or Attempt identity.\n\n"
         "Requirements data follows as JSON:\n"
         f"{requirements}\n"
     )
@@ -722,6 +726,7 @@ def run(options: Options, diagnostics: DiagnosticContext) -> None:
                     prompt,
                     checkout.root,
                     attempt_dir / "agent.log",
+                    report_command,
                     on_invocation_starting=mark_harness_invocation_starting,
                 )
                 if outcome.spawn_error is not None:

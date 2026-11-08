@@ -182,6 +182,7 @@ def test_valid_report_closes_ticket_after_clean_descendant_commit(
     assert call["report_exit_codes"] == [0]
     assert "completed" in call["report_help"]
     assert "blocked" in call["report_help"]
+    assert '"$IMPLEMENT_LOOP_REPORT_COMMAND" --help' in call["prompt"]
     normalized_help = " ".join(call["report_help"].split())
     assert "--acceptance-criteria passed --validation passed" in normalized_help
     assert "blocked --reason 'Describe the blocker'" in normalized_help
@@ -201,6 +202,49 @@ def test_valid_report_closes_ticket_after_clean_descendant_commit(
     assert (attempt / "process.json").is_file()
     assert (attempt / "commit").is_file()
     assert not (runs[0] / "active.pid").exists()
+
+
+def test_report_usage_can_be_rediscovered_after_prompt_loss(loop_fixture: LoopFixture) -> None:
+    report_tools = loop_fixture.home / "private report tools"
+    report_tools.mkdir()
+    result, runs = loop_fixture.run_loop(
+        "--max-iterations",
+        "1",
+        extra_env={
+            "IMPLEMENT_LOOP_TEST_RESULT_MODE": "rediscover-report",
+            "TMPDIR": str(report_tools),
+        },
+    )
+
+    state = loop_fixture.load_state()
+    attempt = runs[0] / "attempt-1-ticket-2"
+    metadata = json.loads((attempt / "attempt.json").read_text())
+    report = json.loads((attempt / "completion-result.json").read_text())
+    call = state["opencode_calls"][0]
+    assert result.returncode == 0, result.stderr.decode()
+    assert call["args"][-1] == ""
+    assert call["prompt"] == ""
+    assert call["report_discovery_source"] == "environment"
+    assert " " in call["report_command"]
+    assert Path(call["report_command"]).parent.parent == report_tools
+    assert not Path(call["report_command"]).exists()
+    assert call["report_directory_mode"] == 0o700
+    assert call["report_command_mode"] == 0o700
+    assert "usage:" in call["report_help"].lower()
+    assert "completed --acceptance-criteria passed --validation passed" in " ".join(
+        call["report_help"].split()
+    )
+    assert call["report_exit_codes"] == [0]
+    assert metadata["attempt_id"] not in call["report_command"]
+    assert report == {
+        "issue": 2,
+        "attempt_id": metadata["attempt_id"],
+        "status": "completed",
+        "acceptance_criteria": "passed",
+        "validation": "passed",
+    }
+    assert state["tickets"]["2"]["state"] == "closed"
+    assert [event[0] for event in state["events"]] == ["assign", "close"]
 
 
 def test_identical_completion_reports_are_harmless(loop_fixture: LoopFixture) -> None:
