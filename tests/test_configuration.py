@@ -201,7 +201,7 @@ def test_configuration_is_recorded_before_github_discovery(loop_fixture: LoopFix
     assert loop_fixture.load_state()["opencode_calls"] == []
     assert len(runs) == 1
     metadata = json.loads((runs[0] / "run.json").read_text())
-    assert metadata["configuration_file"] == str(config_file)
+    assert metadata["configuration_file"] == str(config_file.resolve())
     assert metadata["model"] == "configured-model"
     assert metadata["model_variant"] == "high"
 

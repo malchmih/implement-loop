@@ -189,11 +189,11 @@ def test_valid_report_closes_ticket_after_clean_descendant_commit(
     assert completion["attempt_id"] not in call["report_command"]
     assert call["result_initially_absent"]
     assert Path(metadata["result_path"]).is_file()
-    assert Path(metadata["result_path"]) == attempt / "completion-result.json"
+    assert Path(metadata["result_path"]) == (attempt / "completion-result.json").resolve()
     assert not Path(metadata["result_path"]).is_relative_to(loop_fixture.repo)
     assert Path(call["report_command"]).is_absolute()
     assert call["report_command"] not in str(loop_fixture.repo)
-    assert Path(call["report_command"]).parent.parent == report_tools
+    assert Path(call["report_command"]).parent.parent == report_tools.resolve()
     assert " " in call["report_command"]
     assert call["report_directory_mode"] == 0o700
     assert call["report_command_mode"] == 0o700
@@ -248,7 +248,7 @@ def test_report_usage_can_be_rediscovered_after_prompt_loss(loop_fixture: LoopFi
     assert call["prompt"] == ""
     assert call["report_discovery_source"] == "environment"
     assert " " in call["report_command"]
-    assert Path(call["report_command"]).parent.parent == report_tools
+    assert Path(call["report_command"]).parent.parent == report_tools.resolve()
     assert not Path(call["report_command"]).exists()
     assert call["report_directory_mode"] == 0o700
     assert call["report_command_mode"] == 0o700

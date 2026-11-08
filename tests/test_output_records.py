@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import pty
+import select
 import stat
 import subprocess
 import time
@@ -208,21 +209,36 @@ def test_cleanup_removal_failure_warns_without_blocking_run(loop_fixture: LoopFi
 
 
 def test_terminal_output_enables_color_when_no_color_is_unset(loop_fixture: LoopFixture) -> None:
+    # Exceed PTY buffers on both supported platforms to catch an undrained terminal.
+    loop_fixture.state["agent_output"] = "Terminal output\n" * 4096
+    loop_fixture.save_state()
     master, slave = pty.openpty()
     try:
-        result = subprocess.run(
+        with subprocess.Popen(
             [str(SCRIPT), "1", "--max-iterations", "1"],
             cwd=loop_fixture.repo,
             env=loop_fixture.env,
             stdout=slave,
             stderr=slave,
-            timeout=30,
-        )
+        ) as process:
+            try:
+                deadline = time.monotonic() + 30
+                while process.poll() is None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(process.args, 30)
+                    # Drain while waiting: an unread PTY blocks the child once full.
+                    if select.select([master], [], [], min(remaining, 0.1))[0]:
+                        os.read(master, 65536)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+            returncode = process.wait()
     finally:
         os.close(slave)
         os.close(master)
 
-    assert result.returncode == 0
+    assert returncode == 0
     call = loop_fixture.load_state()["opencode_calls"][0]
     assert call["no_color"] is None
     assert call["force_color"] == "1"

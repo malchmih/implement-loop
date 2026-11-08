@@ -22,7 +22,7 @@ def test_user_toml_configures_root_opencode_preferences(loop_fixture: LoopFixtur
     call = state["opencode_calls"][0]
     assert call["args"][call["args"].index("--model") + 1] == "provider/custom-model#high"
     metadata = json.loads((runs[0] / "run.json").read_text())
-    assert metadata["configuration_file"] == str(config_file)
+    assert metadata["configuration_file"] == str(config_file.resolve())
 
 
 def test_root_model_preference_does_not_replace_a_delegated_model(
