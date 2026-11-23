@@ -117,6 +117,7 @@ _FILE_MODIFICATION_CONTRACTS = {
     ),
     "write": _FileModificationContract(("path", "content"), ("path",), (), "Write file", "Write"),
 }
+_BACKGROUND_WAIT_TITLE_LIMIT = 5
 
 
 def _timestamp() -> str:
@@ -227,7 +228,52 @@ class _OpenCodeRenderer:
             else:
                 self._render_error("OpenCode error", error)
             return
+        if event_type == "background_wait":
+            pending = self._background_wait_titles(record)
+            if pending is None:
+                self._render_fallback("OpenCode event: background_wait", self._compact(record))
+            else:
+                titles, total_count = pending
+                self._render_background_wait(titles, total_count)
+            return
         self._render_fallback(f"OpenCode event: {event_type}", self._compact(record))
+
+    @classmethod
+    def _background_wait_titles(cls, record: dict[str, Any]) -> tuple[list[str], int] | None:
+        if not cls._has_event_envelope(record):
+            return None
+        jobs = record.get("jobs")
+        if not isinstance(jobs, list) or not jobs:
+            return None
+
+        titles: list[str] = []
+        for index, job in enumerate(jobs):
+            if not isinstance(job, dict) or any(
+                not isinstance(job.get(key), str) or not job[key].strip()
+                for key in ("id", "kind", "title")
+            ):
+                return None
+            title = cls._bounded_single_line(job["title"])
+            if title is None:
+                return None
+            if index < _BACKGROUND_WAIT_TITLE_LIMIT:
+                titles.append(title)
+        return titles, len(jobs)
+
+    def _render_background_wait(self, titles: list[str], total_count: int) -> None:
+        quantity = "job" if total_count == 1 else "jobs"
+        lines = [self._style(f"Waiting for {total_count} background {quantity}", "1;33")]
+        omitted_count = total_count - len(titles)
+        for index, title in enumerate(titles):
+            connector = "├" if omitted_count or index < len(titles) - 1 else "└"
+            lines.append(f"  {self._style(connector, '2')} {title}")
+        if omitted_count:
+            omitted_quantity = "job" if omitted_count == 1 else "jobs"
+            lines.append(
+                f"  {self._style('└', '2')} ... {omitted_count} additional background "
+                f"{omitted_quantity} omitted"
+            )
+        self._render_block(lines)
 
     def _render_text(self, text: str) -> None:
         if not text:

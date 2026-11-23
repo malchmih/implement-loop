@@ -2400,6 +2400,80 @@ def _run_opencode_events(
     return raw_output, result.stdout.decode("utf-8"), runs
 
 
+def test_opencode_background_wait_shows_one_pending_title_and_preserves_raw_event(
+    loop_fixture: LoopFixture,
+) -> None:
+    event = {
+        "type": "background_wait",
+        "timestamp": 1,
+        "sessionID": "ses_background_wait",
+        "jobs": [{"id": "job_test_suite", "kind": "shell", "title": "Run the full test suite"}],
+    }
+
+    raw_output, visible, runs = _run_opencode_events(loop_fixture, [event])
+
+    assert "Waiting for 1 background job\n  └ Run the full test suite" in visible
+    assert "job_test_suite" not in visible
+    assert '"jobs"' not in visible
+    log = runs[0] / "attempt-1-ticket-2/agent.log"
+    assert log.read_bytes() == raw_output.encode("utf-8")
+
+
+def test_opencode_background_wait_bounds_multiple_pending_titles(
+    loop_fixture: LoopFixture,
+) -> None:
+    jobs = [
+        {"id": f"job_{index}", "kind": "shell", "title": f"Background task {index}"}
+        for index in range(1, 8)
+    ]
+    event = {
+        "type": "background_wait",
+        "timestamp": 1,
+        "sessionID": "ses_background_wait",
+        "jobs": jobs,
+    }
+
+    raw_output, visible, runs = _run_opencode_events(loop_fixture, [event])
+
+    assert "Waiting for 7 background jobs" in visible
+    for index in range(1, 6):
+        assert f"Background task {index}" in visible
+    assert "Background task 6" not in visible
+    assert "Background task 7" not in visible
+    assert "... 2 additional background jobs omitted" in visible
+    assert all(f"job_{index}" not in visible for index in range(1, 8))
+    assert '"jobs"' not in visible
+    log = runs[0] / "attempt-1-ticket-2/agent.log"
+    assert log.read_bytes() == raw_output.encode("utf-8")
+
+
+def test_opencode_malformed_background_wait_keeps_diagnostic_fallback(
+    loop_fixture: LoopFixture,
+) -> None:
+    events = [
+        {
+            "type": "background_wait",
+            "timestamp": 1,
+            "sessionID": "ses_background_wait",
+            "jobs": [],
+        },
+        {
+            "type": "background_wait",
+            "timestamp": 2,
+            "sessionID": "ses_background_wait",
+            "jobs": [{"id": "job_without_title", "kind": "shell"}],
+        },
+    ]
+
+    raw_output, visible, runs = _run_opencode_events(loop_fixture, events)
+
+    assert visible.count("? OpenCode event: background_wait") == 2
+    assert "job_without_title" in visible
+    assert "Waiting for" not in visible
+    log = runs[0] / "attempt-1-ticket-2/agent.log"
+    assert log.read_bytes() == raw_output.encode("utf-8")
+
+
 def test_opencode_shell_success_shows_command_and_compact_output(loop_fixture: LoopFixture) -> None:
     outputs = (
         ("Empty result", "printf ''", ""),
