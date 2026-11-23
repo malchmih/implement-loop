@@ -124,6 +124,7 @@ _FILE_MODIFICATION_CONTRACTS = {
     "write": _FileModificationContract(("path", "content"), ("path",), (), "Write file", "Write"),
 }
 _BACKGROUND_WAIT_TITLE_LIMIT = 5
+_SINGLE_LINE_LIMIT = 240
 
 
 def _timestamp() -> str:
@@ -333,10 +334,22 @@ class _OpenCodeRenderer:
         )
         shell_command = self._shell_command(tool_name, input_value)
         output = state.get("output")
+        code_mode_preview = self._code_mode_source_preview(tool_name, input_value)
         if failed:
             if tool_name.casefold() == "question" and self._render_question_cancellation(
                 tool_name, input_value, error
             ):
+                return
+            if code_mode_preview is not None:
+                self._render_action_block(
+                    title,
+                    tool_name,
+                    failed=True,
+                    details=[
+                        ("├", code_mode_preview),
+                        ("└", self._failure_detail(error, output)),
+                    ],
+                )
                 return
             failure_details: list[tuple[str, str]] = []
             if delegated:
@@ -376,6 +389,15 @@ class _OpenCodeRenderer:
             if questions is not None and answers is not None and isinstance(output, str):
                 self._render_question_summary(title, tool_name, questions, answers)
                 return
+
+        if code_mode_preview is not None:
+            self._render_action_block(
+                title,
+                tool_name,
+                failed=False,
+                details=[("├", code_mode_preview), *self._success_preview(output)],
+            )
+            return
 
         running_session = self._running_subagent_session(tool_name, metadata)
         if delegated or running_session is not None:
@@ -443,6 +465,11 @@ class _OpenCodeRenderer:
         normalized_tool = tool_name.casefold()
         if normalized_tool == "shell":
             return "Run command"
+        if (
+            normalized_tool == "execute"
+            and self._code_mode_source_preview(tool_name, input_value) is not None
+        ):
+            return "Run Code Mode"
         if normalized_tool == "skill":
             skill_id = self._skill_id(input_value)
             skill_metadata = self._skill_metadata(metadata)
@@ -709,7 +736,40 @@ class _OpenCodeRenderer:
         rendered = " ".join(value.split())
         if not rendered:
             return None
-        return rendered if len(rendered) <= 240 else rendered[:237] + "..."
+        return (
+            rendered
+            if len(rendered) <= _SINGLE_LINE_LIMIT
+            else rendered[: _SINGLE_LINE_LIMIT - 3] + "..."
+        )
+
+    @classmethod
+    def _code_mode_source_preview(cls, tool_name: str, input_value: Any) -> str | None:
+        if (
+            tool_name.casefold() != "execute"
+            or not isinstance(input_value, dict)
+            or set(input_value) != {"code"}
+            or not isinstance(input_value.get("code"), str)
+        ):
+            return None
+
+        source_lines = input_value["code"].splitlines()
+        source_index = next(
+            (index for index, line in enumerate(source_lines) if line.strip()),
+            None,
+        )
+        if source_index is None:
+            return "No JavaScript source provided"
+
+        source_line = source_lines[source_index]
+        normalized_line = " ".join(source_line.split())
+        omitted = len(normalized_line) > _SINGLE_LINE_LIMIT or any(
+            line.strip() for line in source_lines[source_index + 1 :]
+        )
+        if omitted:
+            marker = " ... [code omitted]"
+            prefix = normalized_line[: _SINGLE_LINE_LIMIT - len(marker)].rstrip()
+            return f"{prefix}{marker}"
+        return cls._bounded_single_line(source_line)
 
     @staticmethod
     def _input_string(input_value: Any, key: str) -> str | None:
