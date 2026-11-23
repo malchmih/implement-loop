@@ -29,7 +29,7 @@ class Options:
     config_file: Path | None
 
 
-class _ConfigurationError(ValueError):
+class ConfigurationError(ValueError):
     """A user configuration cannot be applied safely."""
 
 
@@ -42,7 +42,7 @@ def _positive_integer(value: str) -> int:
 def _absolute_xdg_directory(environment_name: str, value: str) -> Path:
     directory = Path(value)
     if not directory.is_absolute():
-        raise _ConfigurationError(f"{environment_name} must be an absolute path.")
+        raise ConfigurationError(f"{environment_name} must be an absolute path.")
     return _resolve_path(directory, environment_name)
 
 
@@ -51,7 +51,7 @@ def _resolve_path(value: str | Path, setting: str) -> Path:
         path = Path(value).expanduser()
         return path.resolve()
     except (OSError, RuntimeError, ValueError) as error:
-        raise _ConfigurationError(f"{setting} is not a usable path: {error}") from error
+        raise ConfigurationError(f"{setting} is not a usable path: {error}") from error
 
 
 def _default_config_path() -> Path:
@@ -69,7 +69,7 @@ def _read_config_file(path: Path) -> dict[str, Any] | None:
     except FileNotFoundError:
         return None
     except OSError as error:
-        raise _ConfigurationError(
+        raise ConfigurationError(
             f"Cannot inspect discovered configuration file {path}: {error}"
         ) from error
 
@@ -77,13 +77,13 @@ def _read_config_file(path: Path) -> dict[str, Any] | None:
         with path.open("rb") as config_file:
             document = tomllib.load(config_file)
     except tomllib.TOMLDecodeError as error:
-        raise _ConfigurationError(f"Invalid TOML in {path}: {error}") from error
+        raise ConfigurationError(f"Invalid TOML in {path}: {error}") from error
     except UnicodeDecodeError as error:
-        raise _ConfigurationError(
+        raise ConfigurationError(
             f"Configuration file {path} is not valid UTF-8: {error}"
         ) from error
     except OSError as error:
-        raise _ConfigurationError(
+        raise ConfigurationError(
             f"Cannot read discovered configuration file {path}: {error}"
         ) from error
     return document
@@ -93,7 +93,7 @@ def _reject_unknown_keys(table: dict[str, Any], allowed: set[str], context: str)
     unknown = sorted(set(table) - allowed)
     if unknown:
         allowed_list = ", ".join(sorted(allowed))
-        raise _ConfigurationError(
+        raise ConfigurationError(
             f"Unknown configuration key {context}.{unknown[0]}. Supported keys: {allowed_list}."
         )
 
@@ -106,9 +106,7 @@ def _config_setting_string(value: Any, context: str) -> str:
         or "\x00" in value
         or any(character.isspace() for character in value)
     ):
-        raise _ConfigurationError(
-            f"{context} must be a non-empty string without whitespace or NUL."
-        )
+        raise ConfigurationError(f"{context} must be a non-empty string without whitespace or NUL.")
     return value
 
 
@@ -129,6 +127,14 @@ def _opencode_settings(document: dict[str, Any] | None) -> HarnessSettings:
         else settings.model_variant
     )
     return replace(settings, model=model, model_variant=variant)
+
+
+def load_opencode_settings() -> tuple[HarnessSettings, Path | None]:
+    """Resolve user OpenCode settings and return the config path if present."""
+
+    path = _default_config_path()
+    document = _read_config_file(path)
+    return _opencode_settings(document), path if document is not None else None
 
 
 def _default_records_dir() -> Path:
@@ -162,11 +168,9 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
     parsed = parser.parse_args(argv)
 
     try:
-        config_file = _default_config_path()
-        document = _read_config_file(config_file)
-        opencode = _opencode_settings(document)
+        opencode, config_file = load_opencode_settings()
         records = RunRecordSettings(directory=_default_records_dir())
-    except _ConfigurationError as error:
+    except ConfigurationError as error:
         parser.error(str(error))
 
     return Options(
@@ -174,5 +178,5 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
         max_iterations=parsed.max_iterations,
         opencode=opencode,
         records=records,
-        config_file=config_file if document is not None else None,
+        config_file=config_file,
     )

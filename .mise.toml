@@ -25,3 +25,27 @@ run = "uv run --locked pytest"
 description = "Install this checkout as an editable source command"
 depends = ["setup"]
 run = "uv tool install --editable --force ."
+
+[tasks.opencode-run-native]
+description = "Inspect native OpenCode output for tool success, failure, and a final reply"
+raw = true
+run = """
+model=$(python -c '
+from implement_loop.config import ConfigurationError, load_opencode_settings
+from implement_loop.harness import select_opencode
+
+try:
+    settings, _ = load_opencode_settings()
+except ConfigurationError as error:
+    raise SystemExit(str(error)) from None
+print(select_opencode(settings).model_selector)
+')
+opencode --version
+exec opencode run --model "$model" '
+Run these two commands in separate shell tool calls, in order:
+1. `echo native-output-ok`
+2. `echo native-output-error >&2; exit 7`
+The second command is intentionally unsuccessful. Do not retry it.
+Do not read or modify any files or use any other tools.
+Finish with a short Markdown reply with a heading and one bullet per result.'
+"""
