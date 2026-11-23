@@ -686,9 +686,7 @@ def test_opencode_noninteractive_question_cancellation_is_concise_and_keeps_raw_
                             {
                                 "question": "Choose a database",
                                 "header": "Database",
-                                "options": [
-                                    {"label": "PostgreSQL", "description": "Relational"}
-                                ],
+                                "options": [{"label": "PostgreSQL", "description": "Relational"}],
                             }
                         ]
                     },
@@ -702,8 +700,7 @@ def test_opencode_noninteractive_question_cancellation_is_concise_and_keeps_raw_
     raw_output, visible, runs = _run_opencode_events(loop_fixture, events)
 
     assert (
-        "✗ Are these the right test seams? (question)\n"
-        "  └ Cancelled: this run is non-interactive."
+        "✗ Are these the right test seams? (question)\n  └ Cancelled: this run is non-interactive."
     ) in visible
     assert "Yes, use these" not in visible
     assert "No, revise them" not in visible

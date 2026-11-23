@@ -599,9 +599,7 @@ class _OpenCodeRenderer:
                 )
         self._render_action_block(title, tool_name, failed=False, details=details)
 
-    def _render_question_cancellation(
-        self, tool_name: str, input_value: Any, error: Any
-    ) -> bool:
+    def _render_question_cancellation(self, tool_name: str, input_value: Any, error: Any) -> bool:
         if not self._is_noninteractive_question_cancellation(error):
             return False
         questions = self._question_prompts(input_value)
@@ -634,8 +632,7 @@ class _OpenCodeRenderer:
         if normalized.startswith("error: "):
             normalized = normalized.removeprefix("error: ")
         return normalized.startswith(
-            "this non-interactive run cannot ask the user questions, "
-            "so the question was cancelled."
+            "this non-interactive run cannot ask the user questions, so the question was cancelled."
         )
 
     @staticmethod
