@@ -1002,7 +1002,7 @@ class _OpenCodeRenderer:
         nested = metadata.get("metadata")
         if not isinstance(nested, dict):
             return None
-        session = nested.get("sessionId")
+        session = nested.get("sessionId", nested.get("sessionID"))
         if (
             nested.get("status") != "running"
             or nested.get("truncated") is not False

@@ -1960,12 +1960,24 @@ def test_opencode_running_subagent_shows_session_without_output_preview(
 ) -> None:
     fixture = Path(__file__).parent / "fixtures/running-subagent.json"
     event = json.loads(fixture.read_text())
+    uppercase_session_id_event = deepcopy(event)
+    uppercase_state = uppercase_session_id_event["part"]["state"]
+    uppercase_state["input"]["description"] = "Inspect the second fixture"
+    uppercase_metadata = uppercase_state["metadata"]["metadata"]
+    del uppercase_metadata["sessionId"]
+    uppercase_metadata["sessionID"] = "ses_fixture_child_uppercase"
 
-    raw_output, visible, runs = _run_opencode_events(loop_fixture, [event])
+    raw_output, visible, runs = _run_opencode_events(
+        loop_fixture, [event, uppercase_session_id_event]
+    )
 
     assert (
         "✓ Inspect the fixture (subagent: explore)\n"
         "  └ Running in background · session: ses_fixture_child"
+    ) in visible
+    assert (
+        "✓ Inspect the second fixture (subagent: explore)\n"
+        "  └ Running in background · session: ses_fixture_child_uppercase"
     ) in visible
     assert "Background task launched" not in visible
     assert "Do not duplicate the work" not in visible
