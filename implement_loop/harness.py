@@ -229,7 +229,7 @@ class _OpenCodeRenderer:
                 self._render_error("OpenCode error", error)
             return
         if event_type == "background_wait":
-            pending = self._background_wait_titles(record)
+            pending = self._background_wait_summary(record)
             if pending is None:
                 self._render_fallback("OpenCode event: background_wait", self._compact(record))
             else:
@@ -239,7 +239,7 @@ class _OpenCodeRenderer:
         self._render_fallback(f"OpenCode event: {event_type}", self._compact(record))
 
     @classmethod
-    def _background_wait_titles(cls, record: dict[str, Any]) -> tuple[list[str], int] | None:
+    def _background_wait_summary(cls, record: dict[str, Any]) -> tuple[list[str], int] | None:
         if not cls._has_event_envelope(record):
             return None
         jobs = record.get("jobs")
@@ -261,19 +261,22 @@ class _OpenCodeRenderer:
         return titles, len(jobs)
 
     def _render_background_wait(self, titles: list[str], total_count: int) -> None:
-        quantity = "job" if total_count == 1 else "jobs"
+        quantity = self._background_job_label(total_count)
         lines = [self._style(f"Waiting for {total_count} background {quantity}", "1;33")]
         omitted_count = total_count - len(titles)
         for index, title in enumerate(titles):
             connector = "├" if omitted_count or index < len(titles) - 1 else "└"
             lines.append(f"  {self._style(connector, '2')} {title}")
         if omitted_count:
-            omitted_quantity = "job" if omitted_count == 1 else "jobs"
             lines.append(
                 f"  {self._style('└', '2')} ... {omitted_count} additional background "
-                f"{omitted_quantity} omitted"
+                f"{self._background_job_label(omitted_count)} omitted"
             )
         self._render_block(lines)
+
+    @staticmethod
+    def _background_job_label(count: int) -> str:
+        return "job" if count == 1 else "jobs"
 
     def _render_text(self, text: str) -> None:
         if not text:
