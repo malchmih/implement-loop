@@ -110,6 +110,12 @@ class _FileModificationContract:
     title_prefix: str | None = None
 
 
+@dataclass(frozen=True)
+class _BackgroundWaitSummary:
+    titles: tuple[str, ...]
+    total_count: int
+
+
 _FILE_MODIFICATION_CONTRACTS = {
     "patch": _FileModificationContract(("patchText",), (), (), "Apply patch"),
     "edit": _FileModificationContract(
@@ -233,13 +239,12 @@ class _OpenCodeRenderer:
             if pending is None:
                 self._render_fallback("OpenCode event: background_wait", self._compact(record))
             else:
-                titles, total_count = pending
-                self._render_background_wait(titles, total_count)
+                self._render_background_wait(pending)
             return
         self._render_fallback(f"OpenCode event: {event_type}", self._compact(record))
 
     @classmethod
-    def _background_wait_summary(cls, record: dict[str, Any]) -> tuple[list[str], int] | None:
+    def _background_wait_summary(cls, record: dict[str, Any]) -> _BackgroundWaitSummary | None:
         if not cls._has_event_envelope(record):
             return None
         jobs = record.get("jobs")
@@ -258,9 +263,11 @@ class _OpenCodeRenderer:
                 return None
             if index < _BACKGROUND_WAIT_TITLE_LIMIT:
                 titles.append(title)
-        return titles, len(jobs)
+        return _BackgroundWaitSummary(titles=tuple(titles), total_count=len(jobs))
 
-    def _render_background_wait(self, titles: list[str], total_count: int) -> None:
+    def _render_background_wait(self, summary: _BackgroundWaitSummary) -> None:
+        titles = summary.titles
+        total_count = summary.total_count
         quantity = self._background_job_label(total_count)
         lines = [self._style(f"Waiting for {total_count} background {quantity}", "1;33")]
         omitted_count = total_count - len(titles)
