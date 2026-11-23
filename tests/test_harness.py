@@ -2443,6 +2443,21 @@ def test_opencode_execute_shows_bounded_source_and_keeps_results_and_raw_event(
                 "type": "tool",
                 "tool": "execute",
                 "state": {
+                    "status": "completed",
+                    "title": "Preserve literal spacing",
+                    "input": {"code": 'const text = "a  b";'},
+                    "output": "Literal spacing retained",
+                },
+            },
+        },
+        {
+            "type": "tool_use",
+            "timestamp": 4,
+            "sessionID": "ses_code_mode",
+            "part": {
+                "type": "tool",
+                "tool": "execute",
+                "state": {
                     "status": "error",
                     "title": "Check invalid expression",
                     "input": {"code": '\nthrow new Error("invalid expression");'},
@@ -2452,7 +2467,7 @@ def test_opencode_execute_shows_bounded_source_and_keeps_results_and_raw_event(
         },
         {
             "type": "tool_use",
-            "timestamp": 4,
+            "timestamp": 5,
             "sessionID": "ses_code_mode",
             "part": {
                 "type": "tool",
@@ -2493,6 +2508,16 @@ def test_opencode_execute_shows_bounded_source_and_keeps_results_and_raw_event(
     assert long_source_preview.endswith(" ... [code omitted]")
     assert len(long_source_preview) <= 240
     assert "Completed calculation" in long_source_block
+    literal_block = next(
+        block[block.index("✓ Preserve literal spacing") :]
+        for block in blocks
+        if "Preserve literal spacing" in block
+    )
+    assert literal_block == (
+        "✓ Preserve literal spacing (execute)\n"
+        '  ├ const text = "a  b";\n'
+        "  └ Literal spacing retained"
+    )
     failed_block = next(
         block[block.index("✗ Check invalid expression") :]
         for block in blocks

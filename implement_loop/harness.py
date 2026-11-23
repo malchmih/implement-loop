@@ -742,17 +742,18 @@ class _OpenCodeRenderer:
             else rendered[: _SINGLE_LINE_LIMIT - 3] + "..."
         )
 
-    @classmethod
-    def _code_mode_source_preview(cls, tool_name: str, input_value: Any) -> str | None:
+    @staticmethod
+    def _code_mode_source_preview(tool_name: str, input_value: Any) -> str | None:
+        code = input_value.get("code") if isinstance(input_value, dict) else None
         if (
             tool_name.casefold() != "execute"
             or not isinstance(input_value, dict)
             or set(input_value) != {"code"}
-            or not isinstance(input_value.get("code"), str)
+            or not isinstance(code, str)
         ):
             return None
 
-        source_lines = input_value["code"].splitlines()
+        source_lines = code.splitlines()
         source_index = next(
             (index for index, line in enumerate(source_lines) if line.strip()),
             None,
@@ -761,15 +762,14 @@ class _OpenCodeRenderer:
             return "No JavaScript source provided"
 
         source_line = source_lines[source_index]
-        normalized_line = " ".join(source_line.split())
-        omitted = len(normalized_line) > _SINGLE_LINE_LIMIT or any(
+        omitted = len(source_line) > _SINGLE_LINE_LIMIT or any(
             line.strip() for line in source_lines[source_index + 1 :]
         )
         if omitted:
             marker = " ... [code omitted]"
-            prefix = normalized_line[: _SINGLE_LINE_LIMIT - len(marker)].rstrip()
+            prefix = source_line[: _SINGLE_LINE_LIMIT - len(marker)]
             return f"{prefix}{marker}"
-        return cls._bounded_single_line(source_line)
+        return source_line
 
     @staticmethod
     def _input_string(input_value: Any, key: str) -> str | None:
