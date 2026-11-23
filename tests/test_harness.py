@@ -633,6 +633,90 @@ def test_opencode_successful_questions_show_supplied_answers_and_keep_question_r
     assert "preserve naïve labels".encode() in log.read_bytes()
 
 
+def test_opencode_noninteractive_question_cancellation_is_concise_and_keeps_raw_event(
+    loop_fixture: LoopFixture,
+) -> None:
+    events = [
+        {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_question_cancelled",
+            "part": {
+                "type": "tool",
+                "tool": "question",
+                "state": {
+                    "status": "error",
+                    "title": "question",
+                    "input": {
+                        "questions": [
+                            {
+                                "question": "Are these the right test seams?",
+                                "header": "Test seams",
+                                "options": [
+                                    {
+                                        "label": "Yes, use these",
+                                        "description": "Keep the approved integration seam.",
+                                    },
+                                    {
+                                        "label": "No, revise them",
+                                        "description": "Choose another test seam.",
+                                    },
+                                ],
+                            }
+                        ]
+                    },
+                    "error": "This non-interactive run cannot ask the user questions, so the "
+                    "question was cancelled. Continue without an answer; make reasonable "
+                    "assumptions and state them.",
+                },
+            },
+        },
+        {
+            "type": "tool_use",
+            "timestamp": 2,
+            "sessionID": "ses_question_cancelled",
+            "part": {
+                "type": "tool",
+                "tool": "question",
+                "state": {
+                    "status": "error",
+                    "title": "question",
+                    "input": {
+                        "questions": [
+                            {
+                                "question": "Choose a database",
+                                "header": "Database",
+                                "options": [
+                                    {"label": "PostgreSQL", "description": "Relational"}
+                                ],
+                            }
+                        ]
+                    },
+                    "error": "QUESTION_VALIDATION_ERROR: the question schema is invalid",
+                    "output": "QUESTION_ERROR_OUTPUT",
+                },
+            },
+        },
+    ]
+
+    raw_output, visible, runs = _run_opencode_events(loop_fixture, events)
+
+    assert (
+        "✗ Are these the right test seams? (question)\n"
+        "  └ Cancelled: this run is non-interactive."
+    ) in visible
+    assert "Yes, use these" not in visible
+    assert "No, revise them" not in visible
+    assert "Continue without an answer" not in visible
+    assert "make reasonable assumptions" not in visible
+    assert "QUESTION_VALIDATION_ERROR: the question schema is invalid" in visible
+    assert "QUESTION_ERROR_OUTPUT" in visible
+    log = runs[0] / "attempt-1-ticket-2/agent.log"
+    assert log.read_bytes() == raw_output.encode("utf-8")
+    assert b"Continue without an answer" in log.read_bytes()
+    assert b"Yes, use these" in log.read_bytes()
+
+
 def test_opencode_partial_skill_and_question_schemas_keep_generic_results(
     loop_fixture: LoopFixture,
 ) -> None:

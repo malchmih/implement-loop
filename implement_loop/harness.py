@@ -278,6 +278,10 @@ class _OpenCodeRenderer:
         shell_command = self._shell_command(tool_name, input_value)
         output = state.get("output")
         if failed:
+            if tool_name.casefold() == "question" and self._render_question_cancellation(
+                tool_name, input_value, error
+            ):
+                return
             failure_details: list[tuple[str, str]] = []
             if delegated:
                 failure_details.append(("└", self._failure_detail(error, output)))
@@ -594,6 +598,45 @@ class _OpenCodeRenderer:
                     )
                 )
         self._render_action_block(title, tool_name, failed=False, details=details)
+
+    def _render_question_cancellation(
+        self, tool_name: str, input_value: Any, error: Any
+    ) -> bool:
+        if not self._is_noninteractive_question_cancellation(error):
+            return False
+        questions = self._question_prompts(input_value)
+        if questions is None:
+            return False
+
+        if len(questions) == 1:
+            title = self._bounded_single_line(questions[0]["question"])
+            if title is None:
+                return False
+            details = [("└", "Cancelled: this run is non-interactive.")]
+        else:
+            title = f"Ask {len(questions)} questions"
+            details = [
+                (
+                    "├",
+                    f"{question['header']}: {self._bounded_single_line(question['question'])}",
+                )
+                for question in questions
+            ]
+            details.append(("└", "Cancelled: this run is non-interactive."))
+        self._render_action_block(title, tool_name, failed=True, details=details)
+        return True
+
+    @staticmethod
+    def _is_noninteractive_question_cancellation(error: Any) -> bool:
+        if not isinstance(error, str):
+            return False
+        normalized = " ".join(error.split()).casefold()
+        if normalized.startswith("error: "):
+            normalized = normalized.removeprefix("error: ")
+        return normalized.startswith(
+            "this non-interactive run cannot ask the user questions, "
+            "so the question was cancelled."
+        )
 
     @staticmethod
     def _question_answer(question: dict[str, Any], answers: list[str]) -> str:
