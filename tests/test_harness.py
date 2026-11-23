@@ -633,6 +633,87 @@ def test_opencode_successful_questions_show_supplied_answers_and_keep_question_r
     assert "preserve naïve labels".encode() in log.read_bytes()
 
 
+def test_opencode_noninteractive_question_cancellation_is_concise_and_keeps_raw_event(
+    loop_fixture: LoopFixture,
+) -> None:
+    events = [
+        {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_question_cancelled",
+            "part": {
+                "type": "tool",
+                "tool": "question",
+                "state": {
+                    "status": "error",
+                    "title": "question",
+                    "input": {
+                        "questions": [
+                            {
+                                "question": "Are these the right test seams?",
+                                "header": "Test seams",
+                                "options": [
+                                    {
+                                        "label": "Yes, use these",
+                                        "description": "Keep the approved integration seam.",
+                                    },
+                                    {
+                                        "label": "No, revise them",
+                                        "description": "Choose another test seam.",
+                                    },
+                                ],
+                            }
+                        ]
+                    },
+                    "error": "This non-interactive run cannot ask the user questions, so the "
+                    "question was cancelled. Continue without an answer; make reasonable "
+                    "assumptions and state them.",
+                },
+            },
+        },
+        {
+            "type": "tool_use",
+            "timestamp": 2,
+            "sessionID": "ses_question_cancelled",
+            "part": {
+                "type": "tool",
+                "tool": "question",
+                "state": {
+                    "status": "error",
+                    "title": "question",
+                    "input": {
+                        "questions": [
+                            {
+                                "question": "Choose a database",
+                                "header": "Database",
+                                "options": [{"label": "PostgreSQL", "description": "Relational"}],
+                            }
+                        ]
+                    },
+                    "error": "QUESTION_VALIDATION_ERROR: the question schema is invalid",
+                    "output": "QUESTION_ERROR_OUTPUT",
+                },
+            },
+        },
+    ]
+
+    raw_output, visible, runs = _run_opencode_events(loop_fixture, events)
+
+    assert (
+        "✗ Are these the right test seams? (question)\n  └ Cancelled: this run is non-interactive."
+    ) in visible
+    assert "Yes, use these" not in visible
+    assert "No, revise them" not in visible
+    assert "Continue without an answer" not in visible
+    assert "make reasonable assumptions" not in visible
+    assert "QUESTION_VALIDATION_ERROR: the question schema is invalid" in visible
+    assert "QUESTION_ERROR_OUTPUT" in visible
+    log = runs[0] / "attempt-1-ticket-2/agent.log"
+    assert log.read_bytes() == raw_output.encode("utf-8")
+    assert b"Continue without an answer" in log.read_bytes()
+    assert b"Yes, use these" in log.read_bytes()
+
+
 def test_opencode_partial_skill_and_question_schemas_keep_generic_results(
     loop_fixture: LoopFixture,
 ) -> None:
@@ -1876,12 +1957,24 @@ def test_opencode_running_subagent_shows_session_without_output_preview(
 ) -> None:
     fixture = Path(__file__).parent / "fixtures/running-subagent.json"
     event = json.loads(fixture.read_text())
+    uppercase_session_id_event = deepcopy(event)
+    uppercase_state = uppercase_session_id_event["part"]["state"]
+    uppercase_state["input"]["description"] = "Inspect the second fixture"
+    uppercase_metadata = uppercase_state["metadata"]["metadata"]
+    del uppercase_metadata["sessionId"]
+    uppercase_metadata["sessionID"] = "ses_fixture_child_uppercase"
 
-    raw_output, visible, runs = _run_opencode_events(loop_fixture, [event])
+    raw_output, visible, runs = _run_opencode_events(
+        loop_fixture, [event, uppercase_session_id_event]
+    )
 
     assert (
         "✓ Inspect the fixture (subagent: explore)\n"
         "  └ Running in background · session: ses_fixture_child"
+    ) in visible
+    assert (
+        "✓ Inspect the second fixture (subagent: explore)\n"
+        "  └ Running in background · session: ses_fixture_child_uppercase"
     ) in visible
     assert "Background task launched" not in visible
     assert "Do not duplicate the work" not in visible
@@ -2305,6 +2398,224 @@ def _run_opencode_events(
     result, runs = loop_fixture.run_loop("--max-iterations", "1", extra_env=extra_env)
     assert result.returncode == 0, result.stderr.decode()
     return raw_output, result.stdout.decode("utf-8"), runs
+
+
+def test_opencode_execute_shows_bounded_source_and_keeps_results_and_raw_event(
+    loop_fixture: LoopFixture,
+) -> None:
+    long_source = 'const description = "' + ("x" * 300) + '";'
+    events = [
+        {
+            "type": "tool_use",
+            "timestamp": 1,
+            "sessionID": "ses_code_mode",
+            "part": {
+                "type": "tool",
+                "tool": "execute",
+                "state": {
+                    "status": "completed",
+                    "title": "Calculate greeting",
+                    "input": {"code": '\n\nconst greeting = "hello";\nconsole.log(greeting);'},
+                    "output": "\n".join(f"result-{line}" for line in range(1, 7)),
+                },
+            },
+        },
+        {
+            "type": "tool_use",
+            "timestamp": 2,
+            "sessionID": "ses_code_mode",
+            "part": {
+                "type": "tool",
+                "tool": "execute",
+                "state": {
+                    "status": "completed",
+                    "title": "execute",
+                    "input": {"code": long_source},
+                    "output": "Completed calculation",
+                },
+            },
+        },
+        {
+            "type": "tool_use",
+            "timestamp": 3,
+            "sessionID": "ses_code_mode",
+            "part": {
+                "type": "tool",
+                "tool": "execute",
+                "state": {
+                    "status": "completed",
+                    "title": "Preserve literal spacing",
+                    "input": {"code": 'const text = "a  b";'},
+                    "output": "Literal spacing retained",
+                },
+            },
+        },
+        {
+            "type": "tool_use",
+            "timestamp": 4,
+            "sessionID": "ses_code_mode",
+            "part": {
+                "type": "tool",
+                "tool": "execute",
+                "state": {
+                    "status": "error",
+                    "title": "Check invalid expression",
+                    "input": {"code": '\nthrow new Error("invalid expression");'},
+                    "error": "SyntaxError: Unexpected token",
+                },
+            },
+        },
+        {
+            "type": "tool_use",
+            "timestamp": 5,
+            "sessionID": "ses_code_mode",
+            "part": {
+                "type": "tool",
+                "tool": "execute",
+                "state": {
+                    "status": "completed",
+                    "input": {"code": "const safe = true;", "runtime": "unknown"},
+                    "output": "Generic result remains visible",
+                },
+            },
+        },
+    ]
+
+    raw_output, visible, runs = _run_opencode_events(loop_fixture, events)
+
+    blocks = visible.split("\n\n")
+    multiline_block = next(
+        block[block.index("✓ Calculate greeting") :]
+        for block in blocks
+        if "Calculate greeting" in block
+    )
+    assert multiline_block == (
+        "✓ Calculate greeting (execute)\n"
+        '  ├ const greeting = "hello"; ... [code omitted]\n'
+        "  ├ result-1\n"
+        "  │ result-2\n"
+        "  │ result-3\n"
+        "  │ result-4\n"
+        "  │ result-5\n"
+        "  └ ... 1 additional line(s) omitted"
+    )
+    long_source_block = next(
+        block[block.index("✓ Run Code Mode") :] for block in blocks if "Run Code Mode" in block
+    )
+    long_source_preview = long_source_block.splitlines()[1].removeprefix("  ├ ")
+    assert long_source_block.startswith("✓ Run Code Mode (execute)\n")
+    assert long_source_preview.startswith('const description = "')
+    assert long_source_preview.endswith(" ... [code omitted]")
+    assert len(long_source_preview) <= 240
+    assert "Completed calculation" in long_source_block
+    literal_block = next(
+        block[block.index("✓ Preserve literal spacing") :]
+        for block in blocks
+        if "Preserve literal spacing" in block
+    )
+    assert literal_block == (
+        "✓ Preserve literal spacing (execute)\n"
+        '  ├ const text = "a  b";\n'
+        "  └ Literal spacing retained"
+    )
+    failed_block = next(
+        block[block.index("✗ Check invalid expression") :]
+        for block in blocks
+        if "Check invalid expression" in block
+    )
+    assert failed_block == (
+        "✗ Check invalid expression (execute)\n"
+        '  ├ throw new Error("invalid expression");\n'
+        "  └ Error: SyntaxError: Unexpected token"
+    )
+    generic_block = next(
+        block[block.index("✓ Use tool") :]
+        for block in blocks
+        if "Generic result remains visible" in block
+    )
+    assert generic_block == (
+        "✓ Use tool (execute)\n"
+        '  │ {"code":"const safe = true;","runtime":"unknown"}\n'
+        "  └ Generic result remains visible"
+    )
+    assert "console.log(greeting)" not in visible
+    assert "result-6" not in visible
+    assert long_source not in visible
+    assert (runs[0] / "attempt-1-ticket-2/agent.log").read_bytes() == raw_output.encode("utf-8")
+
+
+def test_opencode_background_wait_shows_one_pending_title_and_preserves_raw_event(
+    loop_fixture: LoopFixture,
+) -> None:
+    event = {
+        "type": "background_wait",
+        "timestamp": 1,
+        "sessionID": "ses_background_wait",
+        "jobs": [{"id": "job_test_suite", "kind": "shell", "title": "Run the full test suite"}],
+    }
+
+    raw_output, visible, runs = _run_opencode_events(loop_fixture, [event])
+
+    assert "Waiting for 1 background job\n  └ Run the full test suite" in visible
+    assert "job_test_suite" not in visible
+    assert '"jobs"' not in visible
+    log = runs[0] / "attempt-1-ticket-2/agent.log"
+    assert log.read_bytes() == raw_output.encode("utf-8")
+
+
+def test_opencode_background_wait_bounds_multiple_pending_titles(
+    loop_fixture: LoopFixture,
+) -> None:
+    jobs = [
+        {"id": f"job_{index}", "kind": "shell", "title": f"Background task {index}"}
+        for index in range(1, 8)
+    ]
+    event = {
+        "type": "background_wait",
+        "timestamp": 1,
+        "sessionID": "ses_background_wait",
+        "jobs": jobs,
+    }
+
+    raw_output, visible, runs = _run_opencode_events(loop_fixture, [event])
+
+    assert "Waiting for 7 background jobs" in visible
+    for index in range(1, 6):
+        assert f"Background task {index}" in visible
+    assert "Background task 6" not in visible
+    assert "Background task 7" not in visible
+    assert "... 2 additional background jobs omitted" in visible
+    assert all(f"job_{index}" not in visible for index in range(1, 8))
+    assert '"jobs"' not in visible
+    log = runs[0] / "attempt-1-ticket-2/agent.log"
+    assert log.read_bytes() == raw_output.encode("utf-8")
+
+
+def test_opencode_malformed_background_wait_keeps_diagnostic_fallback(
+    loop_fixture: LoopFixture,
+) -> None:
+    events = [
+        {
+            "type": "background_wait",
+            "timestamp": 1,
+            "sessionID": "ses_background_wait",
+            "jobs": [],
+        },
+        {
+            "type": "background_wait",
+            "timestamp": 2,
+            "sessionID": "ses_background_wait",
+            "jobs": [{"id": "job_without_title", "kind": "shell"}],
+        },
+    ]
+
+    raw_output, visible, runs = _run_opencode_events(loop_fixture, events)
+
+    assert visible.count("? OpenCode event: background_wait") == 2
+    assert "job_without_title" in visible
+    assert "Waiting for" not in visible
+    log = runs[0] / "attempt-1-ticket-2/agent.log"
+    assert log.read_bytes() == raw_output.encode("utf-8")
 
 
 def test_opencode_shell_success_shows_command_and_compact_output(loop_fixture: LoopFixture) -> None:

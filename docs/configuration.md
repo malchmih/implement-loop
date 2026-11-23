@@ -72,6 +72,11 @@ preview. The call has returned, but the delegated work is still running. Other
 results and errors retain their existing rendering. The complete original output
 remains available to the parent agent and in `agent.log` when logging succeeds.
 
+Recognized `background_wait` events are shown as a waiting status and up to five
+pending job titles, without job IDs. Unrecognized or malformed wait events retain
+the diagnostic fallback. This is a transcript summary only; it does not change
+OpenCode's waiting behavior or add Loop scheduling or supervision.
+
 ## Retention
 
 At startup, the runner removes only identifiable Implement Loop run directories

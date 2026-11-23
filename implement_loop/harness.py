@@ -110,6 +110,12 @@ class _FileModificationContract:
     title_prefix: str | None = None
 
 
+@dataclass(frozen=True)
+class _BackgroundWaitSummary:
+    titles: tuple[str, ...]
+    total_count: int
+
+
 _FILE_MODIFICATION_CONTRACTS = {
     "patch": _FileModificationContract(("patchText",), (), (), "Apply patch"),
     "edit": _FileModificationContract(
@@ -117,6 +123,8 @@ _FILE_MODIFICATION_CONTRACTS = {
     ),
     "write": _FileModificationContract(("path", "content"), ("path",), (), "Write file", "Write"),
 }
+_BACKGROUND_WAIT_TITLE_LIMIT = 5
+_SINGLE_LINE_LIMIT = 240
 
 
 def _timestamp() -> str:
@@ -227,7 +235,56 @@ class _OpenCodeRenderer:
             else:
                 self._render_error("OpenCode error", error)
             return
+        if event_type == "background_wait":
+            pending = self._background_wait_summary(record)
+            if pending is None:
+                self._render_fallback("OpenCode event: background_wait", self._compact(record))
+            else:
+                self._render_background_wait(pending)
+            return
         self._render_fallback(f"OpenCode event: {event_type}", self._compact(record))
+
+    @classmethod
+    def _background_wait_summary(cls, record: dict[str, Any]) -> _BackgroundWaitSummary | None:
+        if not cls._has_event_envelope(record):
+            return None
+        jobs = record.get("jobs")
+        if not isinstance(jobs, list) or not jobs:
+            return None
+
+        titles: list[str] = []
+        for index, job in enumerate(jobs):
+            if not isinstance(job, dict) or any(
+                not isinstance(job.get(key), str) or not job[key].strip()
+                for key in ("id", "kind", "title")
+            ):
+                return None
+            title = cls._bounded_single_line(job["title"])
+            if title is None:
+                return None
+            if index < _BACKGROUND_WAIT_TITLE_LIMIT:
+                titles.append(title)
+        return _BackgroundWaitSummary(titles=tuple(titles), total_count=len(jobs))
+
+    def _render_background_wait(self, summary: _BackgroundWaitSummary) -> None:
+        titles = summary.titles
+        total_count = summary.total_count
+        quantity = self._background_job_label(total_count)
+        lines = [self._style(f"Waiting for {total_count} background {quantity}", "1;33")]
+        omitted_count = total_count - len(titles)
+        for index, title in enumerate(titles):
+            connector = "├" if omitted_count or index < len(titles) - 1 else "└"
+            lines.append(f"  {self._style(connector, '2')} {title}")
+        if omitted_count:
+            lines.append(
+                f"  {self._style('└', '2')} ... {omitted_count} additional background "
+                f"{self._background_job_label(omitted_count)} omitted"
+            )
+        self._render_block(lines)
+
+    @staticmethod
+    def _background_job_label(count: int) -> str:
+        return "job" if count == 1 else "jobs"
 
     def _render_text(self, text: str) -> None:
         if not text:
@@ -277,7 +334,23 @@ class _OpenCodeRenderer:
         )
         shell_command = self._shell_command(tool_name, input_value)
         output = state.get("output")
+        code_mode_preview = self._code_mode_source_preview(tool_name, input_value)
         if failed:
+            if tool_name.casefold() == "question" and self._render_question_cancellation(
+                tool_name, input_value, error
+            ):
+                return
+            if code_mode_preview is not None:
+                self._render_action_block(
+                    title,
+                    tool_name,
+                    failed=True,
+                    details=[
+                        ("├", code_mode_preview),
+                        ("└", self._failure_detail(error, output)),
+                    ],
+                )
+                return
             failure_details: list[tuple[str, str]] = []
             if delegated:
                 failure_details.append(("└", self._failure_detail(error, output)))
@@ -316,6 +389,15 @@ class _OpenCodeRenderer:
             if questions is not None and answers is not None and isinstance(output, str):
                 self._render_question_summary(title, tool_name, questions, answers)
                 return
+
+        if code_mode_preview is not None:
+            self._render_action_block(
+                title,
+                tool_name,
+                failed=False,
+                details=[("├", code_mode_preview), *self._success_preview(output)],
+            )
+            return
 
         running_session = self._running_subagent_session(tool_name, metadata)
         if delegated or running_session is not None:
@@ -383,6 +465,11 @@ class _OpenCodeRenderer:
         normalized_tool = tool_name.casefold()
         if normalized_tool == "shell":
             return "Run command"
+        if (
+            normalized_tool == "execute"
+            and self._code_mode_source_preview(tool_name, input_value) is not None
+        ):
+            return "Run Code Mode"
         if normalized_tool == "skill":
             skill_id = self._skill_id(input_value)
             skill_metadata = self._skill_metadata(metadata)
@@ -595,6 +682,42 @@ class _OpenCodeRenderer:
                 )
         self._render_action_block(title, tool_name, failed=False, details=details)
 
+    def _render_question_cancellation(self, tool_name: str, input_value: Any, error: Any) -> bool:
+        if not self._is_noninteractive_question_cancellation(error):
+            return False
+        questions = self._question_prompts(input_value)
+        if questions is None:
+            return False
+
+        if len(questions) == 1:
+            title = self._bounded_single_line(questions[0]["question"])
+            if title is None:
+                return False
+            details = [("└", "Cancelled: this run is non-interactive.")]
+        else:
+            title = f"Ask {len(questions)} questions"
+            details = [
+                (
+                    "├",
+                    f"{question['header']}: {self._bounded_single_line(question['question'])}",
+                )
+                for question in questions
+            ]
+            details.append(("└", "Cancelled: this run is non-interactive."))
+        self._render_action_block(title, tool_name, failed=True, details=details)
+        return True
+
+    @staticmethod
+    def _is_noninteractive_question_cancellation(error: Any) -> bool:
+        if not isinstance(error, str):
+            return False
+        normalized = " ".join(error.split()).casefold()
+        if normalized.startswith("error: "):
+            normalized = normalized.removeprefix("error: ")
+        return normalized.startswith(
+            "this non-interactive run cannot ask the user questions, so the question was cancelled."
+        )
+
     @staticmethod
     def _question_answer(question: dict[str, Any], answers: list[str]) -> str:
         if not answers:
@@ -613,7 +736,40 @@ class _OpenCodeRenderer:
         rendered = " ".join(value.split())
         if not rendered:
             return None
-        return rendered if len(rendered) <= 240 else rendered[:237] + "..."
+        return (
+            rendered
+            if len(rendered) <= _SINGLE_LINE_LIMIT
+            else rendered[: _SINGLE_LINE_LIMIT - 3] + "..."
+        )
+
+    @staticmethod
+    def _code_mode_source_preview(tool_name: str, input_value: Any) -> str | None:
+        code = input_value.get("code") if isinstance(input_value, dict) else None
+        if (
+            tool_name.casefold() != "execute"
+            or not isinstance(input_value, dict)
+            or set(input_value) != {"code"}
+            or not isinstance(code, str)
+        ):
+            return None
+
+        source_lines = code.splitlines()
+        source_index = next(
+            (index for index, line in enumerate(source_lines) if line.strip()),
+            None,
+        )
+        if source_index is None:
+            return "No JavaScript source provided"
+
+        source_line = source_lines[source_index]
+        omitted = len(source_line) > _SINGLE_LINE_LIMIT or any(
+            line.strip() for line in source_lines[source_index + 1 :]
+        )
+        if omitted:
+            marker = " ... [code omitted]"
+            prefix = source_line[: _SINGLE_LINE_LIMIT - len(marker)]
+            return f"{prefix}{marker}"
+        return source_line
 
     @staticmethod
     def _input_string(input_value: Any, key: str) -> str | None:
@@ -959,7 +1115,7 @@ class _OpenCodeRenderer:
         nested = metadata.get("metadata")
         if not isinstance(nested, dict):
             return None
-        session = nested.get("sessionId")
+        session = nested.get("sessionId", nested.get("sessionID"))
         if (
             nested.get("status") != "running"
             or nested.get("truncated") is not False
